@@ -626,6 +626,79 @@ void audio_contracts() {
     check(audio("sceAudioChRelease", {2u}) == 0x80260008u, "second release refused");
 }
 
+void sas_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &mem = f.runtime.memory();
+    const auto sas = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceSasCore", name, args);
+    };
+    const std::uint32_t core = Fixture::kOutput + 0x1000u; // 64-byte aligned
+    const std::uint32_t vag = Fixture::kOutput + 0x800u;
+    const std::uint32_t out = Fixture::kOutput;
+    const std::uint32_t heights = Fixture::kOutput + 0x2000u;
+
+    // Two 16-byte VAG blocks: one with constant nibble 1 at shift 2
+    // (1024 per sample), then a terminator. Predictor 0 keeps the math exact.
+    mem.store8(vag, 0x02u);
+    mem.store8(vag + 1u, 0x00u);
+    for (std::uint32_t i = 2u; i < 16u; ++i) mem.store8(vag + i, 0x11u);
+    mem.store8(vag + 16u, 0x00u);
+    mem.store8(vag + 17u, 0x07u);
+    for (std::uint32_t i = 18u; i < 32u; ++i) mem.store8(vag + i, 0x00u);
+
+    check(sas("__sceSasInit", {0u, 256u, 32u, 0u, 44100u}) == 0x80420005u, "bad core address rejected");
+    check(sas("__sceSasInit", {core | 1u, 256u, 32u, 0u, 44100u}) == 0x80420005u, "misaligned core rejected");
+    check(sas("__sceSasInit", {core, 60u, 32u, 0u, 44100u}) == 0x80420001u, "bad grain rejected");
+    check(sas("__sceSasInit", {core, 256u, 33u, 0u, 44100u}) == 0x80420002u, "bad voice count rejected");
+    check(sas("__sceSasInit", {core, 256u, 32u, 2u, 44100u}) == 0x80420003u, "bad output mode rejected");
+    check(sas("__sceSasInit", {core, 256u, 32u, 0u, 48000u}) == 0x80420004u, "bad sample rate rejected");
+    check(sas("__sceSasInit", {core, 256u, 32u, 0u, 44100u}) == 0u, "SAS core initialised");
+
+    check(sas("__sceSasSetVoice", {core, 32u, vag, 32u, 0u}) == 0x80420010u, "bad voice index rejected");
+    check(sas("__sceSasSetVoice", {core, 0u, vag, 0u, 0u}) == 0x80420014u, "zero voice size rejected");
+    check(sas("__sceSasSetVoice", {core, 0u, vag, 17u, 0u}) == 0x80420014u, "unaligned voice size rejected");
+    check(sas("__sceSasSetVoice", {core, 0u, vag, 32u, 2u}) == 0x80420015u, "bad loop mode rejected");
+    check(sas("__sceSasSetPitch", {core, 0u, 0u}) == 0x80420012u, "zero pitch rejected");
+    check(sas("__sceSasSetPitch", {core, 0u, 0x4001u}) == 0x80420012u, "pitch above maximum rejected");
+    check(sas("__sceSasSetVolume", {core, 0u, 0x1001u, 0u, 0u, 0u}) == 0x80420018u, "volume above maximum rejected");
+    check(sas("__sceSasSetVoice", {core, 0u, vag, 32u, 0u}) == 0u, "VAG voice set");
+    check(sas("__sceSasSetPitch", {core, 0u, 0x1000u}) == 0u, "unity pitch set");
+    check(sas("__sceSasSetVolume", {core, 0u, 0x1000u, 0x1000u, 0u, 0u}) == 0u, "unity volume set");
+    check(sas("__sceSasSetKeyOn", {core, 0u}) == 0u, "voice keyed on");
+    check(sas("__sceSasSetKeyOn", {core, 0u}) == 0x80420016u, "second key-on rejected");
+    check(sas("__sceSasGetEnvelopeHeight", {core, 0u}) == 0x3FFF8000u, "envelope starts full without ADSR");
+    check(sas("__sceSasGetAllEnvelopeHeights", {core, heights}) == 0u, "all envelope heights readable");
+    check(mem.load32(heights) == 0x3FFF8000u, "first envelope height written");
+    check(sas("__sceSasSetPause", {core, 1u, 1u}) == 0u, "voice paused");
+    check(sas("__sceSasGetPauseFlag", {core}) == 1u, "pause flag set");
+    check(sas("__sceSasSetPause", {core, 1u, 0u}) == 0u, "voice resumed");
+    check(sas("__sceSasGetPauseFlag", {core}) == 0u, "pause flag cleared");
+
+    check(sas("__sceSasCore", {core, out}) == 0u, "SAS core rendered");
+    check(mem.load16(out) == 1023u && mem.load16(out + 2u) == 1023u, "first frame matches hand-computed VAG");
+    check(mem.load16(out + 27u * 4u) == 1023u, "last decoded frame matches");
+    check(mem.load16(out + 28u * 4u) == 0u, "frames past the terminator are silent");
+    check(sas("__sceSasGetEndFlag", {core}) == 0xFFFFFFFFu, "all voices report ended");
+    check(sas("__sceSasGetEnvelopeHeight", {core, 0u}) == 0u, "envelope cleared after the voice ends");
+
+    check(sas("__sceSasGetGrain", {core}) == 256u, "grain size readable");
+    check(sas("__sceSasSetGrain", {core, 64u}) == 0u, "grain size updated");
+    check(sas("__sceSasGetGrain", {core}) == 64u, "updated grain size readable");
+    check(sas("__sceSasSetGrain", {core, 63u}) == 0x80420001u, "bad grain update rejected");
+    check(sas("__sceSasSetGrain", {core, 256u}) == 0u, "grain restored");
+    check(sas("__sceSasGetOutputmode", {core}) == 0u, "output mode readable");
+    check(sas("__sceSasSetOutputmode", {core, 1u}) == 0u, "output mode updated");
+    check(sas("__sceSasGetOutputmode", {core}) == 1u, "updated output mode readable");
+    check(sas("__sceSasSetOutputmode", {core, 2u}) == 0x80420003u, "bad output mode update rejected");
+    check(sas("__sceSasSetOutputmode", {core, 0u}) == 0u, "output mode restored");
+
+    // Mix a fresh voice into an existing stereo buffer with unity gain.
+    check(sas("__sceSasSetKeyOn", {core, 0u}) == 0u, "voice keyed on again");
+    for (std::uint32_t i = 0u; i < 64u; ++i) mem.store16(out + i * 2u, 100u);
+    check(sas("__sceSasCoreWithMix", {core, out, 0x1000u, 0x1000u}) == 0u, "mix render succeeded");
+    check(mem.load16(out) == 1123u && mem.load16(out + 2u) == 1123u, "mix adds the hand-computed voice");
+}
+
 void io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), iso, memory_stick);
     auto &mem = f.runtime.memory();
@@ -686,6 +759,7 @@ int main(int argc, char **argv) {
         fpl_contracts();
         thread_end_contracts();
         audio_contracts();
+        sas_contracts();
         lwmutex_contracts();
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);

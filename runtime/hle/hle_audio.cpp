@@ -5,6 +5,7 @@
 #include "hle/hle_audio.hpp"
 
 #include "audio/audio_sink.hpp"
+#include "audio/sas_core.hpp"
 #include "hle/kernel.hpp"
 
 #include "psprecomp/common.hpp"
@@ -175,9 +176,289 @@ void finish(AllegrexContext &ctx, std::uint32_t result) {
 
 } // namespace
 
+constexpr std::uint32_t kSasVoices = 32u;
+constexpr std::uint32_t kSasCoreBytes = 3616u;
+constexpr std::uint32_t kSasBadAddress = 0x80420005u;
+constexpr std::uint32_t kSasInvalidGrain = 0x80420001u;
+constexpr std::uint32_t kSasInvalidMaxVoices = 0x80420002u;
+constexpr std::uint32_t kSasInvalidOutputMode = 0x80420003u;
+constexpr std::uint32_t kSasInvalidSampleRate = 0x80420004u;
+constexpr std::uint32_t kSasInvalidVoice = 0x80420010u;
+constexpr std::uint32_t kSasInvalidPitch = 0x80420012u;
+constexpr std::uint32_t kSasInvalidAdsrCurve = 0x80420013u;
+constexpr std::uint32_t kSasInvalidParameter = 0x80420014u;
+constexpr std::uint32_t kSasInvalidLoop = 0x80420015u;
+constexpr std::uint32_t kSasVoicePaused = 0x80420016u;
+constexpr std::uint32_t kSasInvalidVolume = 0x80420018u;
+
+std::vector<std::int16_t> g_sas_staging;
+
+bool valid_sas_core(Runtime &rt, std::uint32_t core) {
+    return core != 0u && (core & 0x3Fu) == 0u && rt.memory().raw_pointer(core, kSasCoreBytes) != nullptr;
+}
+
+bool valid_voice(std::uint32_t voice) {
+    return voice < kSasVoices;
+}
+
+void write_pcm(Runtime &rt, std::uint32_t address, const std::int16_t *samples, std::size_t count) {
+    for (std::size_t i = 0u; i < count; ++i)
+        rt.memory().store16(address + static_cast<std::uint32_t>(i * 2u),
+            static_cast<std::uint16_t>(samples[i]));
+}
+
+void register_sas(HleRegistrar &hle) {
+    hle.add("sceSasCore", "__sceSasInit", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t core = arg(ctx, 0);
+        if (!valid_sas_core(rt, core)) {
+            finish(ctx, kSasBadAddress);
+            return;
+        }
+        const std::uint32_t voices = arg(ctx, 2);
+        if (voices == 0u || voices > kSasVoices) {
+            finish(ctx, kSasInvalidMaxVoices);
+            return;
+        }
+        const std::uint32_t grain = arg(ctx, 1);
+        if (grain < 0x40u || grain > 0x800u || (grain & 0x1Fu) != 0u) {
+            finish(ctx, kSasInvalidGrain);
+            return;
+        }
+        const std::uint32_t mode = arg(ctx, 3);
+        if (mode > 1u) {
+            finish(ctx, kSasInvalidOutputMode);
+            return;
+        }
+        if (arg(ctx, 4) != 44'100u) {
+            finish(ctx, kSasInvalidSampleRate);
+            return;
+        }
+        audio::sas_core(core).init(grain, voices, mode);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetVoice", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::uint32_t size = arg(ctx, 3);
+        if (size == 0u || (size & 0xFu) != 0u) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        const std::uint32_t loop = arg(ctx, 4);
+        if (loop > 1u) {
+            finish(ctx, kSasInvalidLoop);
+            return;
+        }
+        const std::uint32_t address = arg(ctx, 2);
+        if (address != 0u && rt.memory().raw_pointer(address, size) == nullptr) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_voice(voice, address, size, loop != 0u);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetVoicePCM", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::int32_t samples = static_cast<std::int32_t>(arg(ctx, 3));
+        const std::int32_t loop = static_cast<std::int32_t>(arg(ctx, 4));
+        if (samples <= 0) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        if (loop < -1 || loop >= samples) {
+            finish(ctx, kSasInvalidLoop);
+            return;
+        }
+        const std::uint32_t address = arg(ctx, 2);
+        if (address == 0u || rt.memory().raw_pointer(address, static_cast<std::uint32_t>(samples) * 2u) == nullptr) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_voice_pcm(
+            voice, address, static_cast<std::uint32_t>(samples), loop);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetPitch", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::uint32_t pitch = arg(ctx, 2);
+        if (pitch == 0u || pitch > 0x4000u) {
+            finish(ctx, kSasInvalidPitch);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_pitch(voice, pitch);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetVolume", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::int32_t left = static_cast<std::int32_t>(arg(ctx, 2));
+        const std::int32_t right = static_cast<std::int32_t>(arg(ctx, 3));
+        const std::int32_t send_left = static_cast<std::int32_t>(arg(ctx, 4));
+        const std::int32_t send_right = static_cast<std::int32_t>(arg(ctx, 5));
+        const auto over = [](std::int32_t value) { return std::abs(value) > 0x1000; };
+        if (over(left) || over(right) || over(send_left) || over(send_right)) {
+            finish(ctx, kSasInvalidVolume);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_volume(voice, left, right);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetSimpleADSR", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::uint32_t envelope2 = arg(ctx, 3);
+        if (((envelope2 >> 13u) & 1u) != 0u) {
+            finish(ctx, kSasInvalidAdsrCurve);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_simple_adsr(voice, arg(ctx, 2), envelope2);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetKeyOn", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        audio::SasCore &core = audio::sas_core(arg(ctx, 0));
+        if (core.voice_paused(voice) || core.voice_playing(voice)) {
+            finish(ctx, kSasVoicePaused);
+            return;
+        }
+        core.key_on(voice);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetKeyOff", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        audio::SasCore &core = audio::sas_core(arg(ctx, 0));
+        if (core.voice_paused(voice) || !core.voice_playing(voice)) {
+            finish(ctx, kSasVoicePaused);
+            return;
+        }
+        core.key_off(voice);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasCore", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t core_address = arg(ctx, 0);
+        audio::SasCore &core = audio::sas_core(core_address);
+        const std::uint32_t grain = core.grain();
+        const std::uint32_t out = arg(ctx, 1);
+        if (rt.memory().raw_pointer(out, grain * 4u) == nullptr) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        g_sas_staging.resize(static_cast<std::size_t>(grain) * 2u);
+        core.render(rt.memory(), g_sas_staging.data(), grain);
+        write_pcm(rt, out, g_sas_staging.data(), g_sas_staging.size());
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasCoreWithMix", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t core_address = arg(ctx, 0);
+        audio::SasCore &core = audio::sas_core(core_address);
+        const std::uint32_t grain = core.grain();
+        const std::uint32_t address = arg(ctx, 1);
+        if (rt.memory().raw_pointer(address, grain * 4u) == nullptr) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        const auto gain = [](std::int32_t volume) {
+            return static_cast<std::int32_t>(std::clamp(volume, 0, 0x1000));
+        };
+        const std::int32_t left_gain = gain(static_cast<std::int32_t>(arg(ctx, 2)));
+        const std::int32_t right_gain = gain(static_cast<std::int32_t>(arg(ctx, 3)));
+        g_sas_staging.resize(static_cast<std::size_t>(grain) * 2u);
+        core.render(rt.memory(), g_sas_staging.data(), grain);
+        for (std::uint32_t i = 0u; i < grain * 2u; ++i) {
+            const std::uint16_t bits = rt.memory().load16(address + i * 2u);
+            const std::int32_t existing = static_cast<std::int16_t>(bits);
+            const std::int32_t value = (g_sas_staging[i] * (i % 2u == 0u ? left_gain : right_gain)) >> 12;
+            const std::int32_t mixed = std::clamp(existing + value, -32768, 32767);
+            rt.memory().store16(address + i * 2u, static_cast<std::uint16_t>(mixed));
+        }
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasGetEndFlag", [](Runtime &, AllegrexContext &ctx) {
+        finish(ctx, audio::sas_core(arg(ctx, 0)).end_flag());
+    });
+    hle.add("sceSasCore", "__sceSasGetEnvelopeHeight", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        finish(ctx, static_cast<std::uint32_t>(audio::sas_core(arg(ctx, 0)).envelope_height(voice)));
+    });
+    hle.add("sceSasCore", "__sceSasGetAllEnvelopeHeights", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t address = arg(ctx, 1);
+        if (rt.memory().raw_pointer(address, kSasVoices * 4u) == nullptr) {
+            finish(ctx, kSasInvalidParameter);
+            return;
+        }
+        audio::SasCore &core = audio::sas_core(arg(ctx, 0));
+        for (std::uint32_t voice = 0u; voice < kSasVoices; ++voice)
+            rt.memory().store32(address + voice * 4u,
+                static_cast<std::uint32_t>(core.envelope_height(voice)));
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasGetPauseFlag", [](Runtime &, AllegrexContext &ctx) {
+        finish(ctx, audio::sas_core(arg(ctx, 0)).pause_flag());
+    });
+    hle.add("sceSasCore", "__sceSasSetPause", [](Runtime &, AllegrexContext &ctx) {
+        audio::sas_core(arg(ctx, 0)).set_pause(arg(ctx, 1), arg(ctx, 2) != 0u);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasGetGrain", [](Runtime &, AllegrexContext &ctx) {
+        finish(ctx, audio::sas_core(arg(ctx, 0)).grain());
+    });
+    hle.add("sceSasCore", "__sceSasSetGrain", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t grain = arg(ctx, 1);
+        if (grain < 0x40u || grain > 0x800u || (grain & 0x1Fu) != 0u) {
+            finish(ctx, kSasInvalidGrain);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_grain(grain);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasGetOutputmode", [](Runtime &, AllegrexContext &ctx) {
+        finish(ctx, audio::sas_core(arg(ctx, 0)).output_mode());
+    });
+    hle.add("sceSasCore", "__sceSasSetOutputmode", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t mode = arg(ctx, 1);
+        if (mode > 1u) {
+            finish(ctx, kSasInvalidOutputMode);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_output_mode(mode);
+        finish(ctx, 0u);
+    });
+}
+
 void reset_audio_state() {
     for (AudioChannel &channel : g_channels) channel = AudioChannel{};
     g_staging.clear();
+    g_sas_staging.clear();
+    audio::reset_sas_cores();
 }
 
 void register_audio(HleRegistrar &hle) {
@@ -355,6 +636,7 @@ void register_audio(HleRegistrar &hle) {
         if (right >= 0) state.right_volume = static_cast<std::uint32_t>(right);
         finish(ctx, 0u);
     });
+    register_sas(hle);
 }
 
 } // namespace gungnir::hle

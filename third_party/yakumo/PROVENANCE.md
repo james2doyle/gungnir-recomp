@@ -113,15 +113,20 @@ everything else: title-specific, out of scope.
 ## Adapted files outside this tree
 
 `runtime/hle/hle_common.*`, `kernel.*`, `hle_sysmem.cpp`,
-`hle_threadman.cpp`, `hle_system.cpp`, `hle_io.cpp`, and the display/GE/ctrl
-parts of `hle_media.*` adapt `profiles/mhp3rd/host/hle/*` and
+`hle_threadman.cpp`, `hle_system.cpp`, `hle_io.cpp`, the display/GE/ctrl
+parts of `hle_media.*`, and `runtime/audio/sas_core.*` adapt
+`profiles/mhp3rd/host/hle/*` and
 `profiles/mhp3rd/host/kernel/*` (MIT, same pinned commit). Changes: namespace `gungnir::hle`; profile-only includes
 (mods, translation, overlays, renderer, audio, input, fast loading/forward,
 frame stats, settings) removed; pacing is an explicit switch; 32 MiB
 user-memory end; the registrar gains cross-library alias resolution and
 ambiguity refusal. `hle_media.cpp` keeps only timing/callback/EDRAM semantics;
 the GE list walk is a completion seam until the T7 renderer supplies command
-decoding. `hle_module.*` records the registry/unload design informed by
+decoding. `sas_core.*` is the MIT SPU/VAG software mixer with the namespace
+changed, the MHP3rd environment hooks and per-second tracing removed, cores
+keyed in runtime state, and one behavioural fix: a non-looping source now
+plays its final decoded sample instead of dropping it (pinned by the SAS
+contract). `hle_module.*` records the registry/unload design informed by
 Yakumo's overlay slot lifecycle, but its code is authored here for this
 single-module title. These files are not
 part of the digest-verified subtree above; keep their attribution here when

@@ -352,3 +352,43 @@ output buffer yet.
 `Missing HLE import sceSasCore::__sceSasInit (NID_0x42778A9F)`. A bounded SAS
 core slice (init, voice setup, grain render into a guest buffer) is the next
 boot-depth task, tracked as T6g; full audio mixing/output remains T12.
+
+## 2026-10-30 — T6g: sceSasCore software mixer
+
+**Symptom.** After T6f the deeper boot stopped at
+`Missing HLE import sceSasCore::__sceSasInit (NID_0x42778A9F)` after 20,639
+dispatches.
+
+**Falsification.** The import is bound in the inventory; the stop is HLE
+coverage. The title imports 31 SAS entry points, so a real synth path is
+required rather than a returning stub.
+
+**Root cause.** No SAS core existed. A VAG/ADPCM synth is not something to
+hand-roll under the codec rule, and Yakumo already carries an MIT one.
+
+**Fix.** `runtime/audio/sas_core.*` adapts Yakumo's MIT
+`profiles/mhp3rd/host/audio/sas_core.*` (recorded in the vendored provenance):
+32 voices, SPU ADPCM decode, pitch resampling, simple ADSR, pause, grain and
+output mode. Namespace and per-title environment/trace hooks were removed and
+cores are keyed in runtime state. One behavioural fix: a non-looping source
+now plays its final decoded sample; upstream stopped one sample early, which
+the hand-computed grain caught. `runtime/hle/hle_audio.*` adds the handlers
+with the documented init/voice/pitch/volume/ADSR error codes and check order.
+Reverb, noise, steep-wave and ATRAC3 voices are not implemented and stay
+unbound so they stop loudly.
+
+**Evidence.** `tests/hle/kernel_tests.cpp` adds SAS contracts: init error
+order, voice/pitch/volume/ADSR validation, a constant-nibble VAG block that
+must yield 28 frames of 1023, post-terminator silence, end flag, envelope
+heights, pause flag, grain/output-mode round-trip, and `CoreWithMix`
+accumulation (100 + 1023 = 1123). Mutation check: restoring the upstream
+one-sample-early stop fails "last decoded frame matches". The bounded boot
+now reaches 22,086 dispatches with 146/215 imports bound and 64 executed,
+zero missing or silent NIDs; `__sceSasInit`, `__sceSasCore` and the first
+`sceAudioOutputPannedBlocking` (512 silent frames) all ran.
+
+**Next blocker (ATRAC3+).** The run stops at
+`Missing HLE import sceAtrac3plus::sceAtracGetAtracID (NID_0x780F88D1)`.
+Decoding ATRAC3+ requires adopting an existing decoder
+(`at3_standalone`-class) under the codec rule; that belongs to T12, not to a
+home-grown implementation.
