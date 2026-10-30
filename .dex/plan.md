@@ -14,6 +14,7 @@
 3. Decryption of `~PSP` modules runs **out-of-process** using user-supplied tools (pspdecrypt / PPSSPP devtools). We ship no decryption implementation and no keys. Same for Adreno driver `.zip`s: user-supplied, extracted to app-private storage, never bundled or committed.
 4. Enforcement is structural, not aspirational: `.gitignore` with rationale, `tools/repository_check.py` (extension + magic-byte + blob-size + ignore-rule audit) in CI, secret scanning, and fail-closed CI (`exit 77` skips) for tests that need private game input.
 5. Game-derived facts that are acceptable to publish: disc identity (size 262,766,592 B, CRC32 `183F3EDC`, redump-recorded), format field layouts, NID values, guest addresses and record sizes (RE facts). Binaries, hashes of binaries pinned as "the expected dump", and content derived from them stay local.
+6. **No clean-room reimplementations.** If work reduces to implementing a format, codec, or protocol that existing tools or libraries already implement, **stop and ask before writing anything**: use the existing tool out-of-process, or adopt an audited open-source implementation with provenance. Clean-room reimplementation is not sanctioned without explicit user sign-off (AGENTS.md hard limit #0).
 
 ## 1. Decisions locked (2026-10-30)
 
@@ -29,6 +30,7 @@
 | Input | Touch overlay (editable layout) + SDL3 gamepad with per-device profiles (Ayn/Ayaneo-class handhelds) + keyboard/mouse (desktop dev); rumble/haptics via SDL gamepad rumble + Android Vibrator fallback |
 | Textures | Hash-keyed dump→replace pipeline (PPSSPP `textures.ini` semantics) + high-res font-atlas re-rasterization for dialog text (Gungnir stores text in TPL atlases and baked into TPL images) |
 | Disc input | **Intake accepts ISO only.** `game.chd` is converted once, user-side — e.g. [CHDStudio](https://github.com/purelogiccode/CHDStudio) (GUI, recommended) or `chdman extractcd` (MAME CLI). Our pipeline never parses CHD. Converter correctness is *verified, not trusted* — the identity gate (size + CRC32) validates whatever produced the ISO. |
+| Code reuse | **Adopt, don't reimplement.** Clean-room implementations of existing formats/codecs/protocols are **not sanctioned** without explicit user sign-off (AGENTS.md #0): use existing tools out-of-process (CHDStudio/chdman) or adopt audited open-source code with provenance (Yakumo MIT subset → `third_party/yakumo/`). Applies to everything upcoming too (e.g. PGF parsing, ATRAC3, image codecs, JSON) — check the reference projects and library landscape first, always. |
 | Testing | **Red-first (TDD where relevant):** the failing test lands before the implementation, and is confirmed red for the expected reason. Regression fixes start from a failing reproduction. No task closes with untested behavior. |
 | Device validation | **Mandatory manual QA on an adb device** before any milestone touching device behavior can close — structured, recorded QA (build ID, device, steps, expected/actual, sign-off), never "CI is green" alone |
 
@@ -127,6 +129,7 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-2.1 Clean checkout + one command materializes all deps at verified commits (digest check fails on wrong revision).
 - TC-2.2 `package_notices.py` output covers every vendored file (CI gate: no unlisted file under `third_party/`).
 - TC-2.3 License gate rejects a deliberately added CC BY-NC-SA component.
+**Findings (2026-10-30):** first pin landed early with T3: `dependencies.json` + `third_party/yakumo/PROVENANCE.md` + in-tree LICENSE (MIT, pin `b61852a`) — the template the remaining entries (SDL3, CHD reader if ever needed, stb, ATRAC decoder) must follow. **License-implication of §1 Code reuse:** clean-room reimplementations are not sanctioned — where no adoptable code exists for something we need, **stop and ask** (that decision belongs to the user, not the agent).
 **Docs checkpoint:** `docs/PROVENANCE.md` (per-subtree: upstream, commit, license, disposition).
 **Refs:** azazel6 (`dependencies.json`), nakagawa (`deps.cmake` + notice generation), wizardengineer (`fetch-niddb.sh` + checksum), psprism (attribution gap as cautionary tale).
 **Gotchas:** §7A.5–A.7.
@@ -135,10 +138,11 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 **Depends on:** T1
 **Work:** `tools/intake/`: (1) **disc input = ISO only** (locked decision §1: `game.chd` is converted user-side via [CHDStudio](https://github.com/purelogiccode/CHDStudio) or `chdman extractcd`; intake refuses `.chd` with a named error pointing at `docs/INTAKE.md`; we never parse CHD — the identity gate *verifies, not trusts*, the converter); (2) identity gate: size 262,766,592 + CRC32 `183F3EDC`, **fail closed** on mismatch; (3) ISO9660 extract of `PSP_GAME/` tree (EBOOT.BIN, USRDIR `*.dar`, INSDIR, PARAM.SFO — verify disc ID ULUS-10592); (4) decrypt hook — **no decryption code in-repo**; invoke user-supplied pspdecrypt/PPSSPP "Dump decrypted EBOOT.BIN" out-of-process, accept `BOOT.BIN` plaintext or user-provided decrypted ELF, validate PRX shape (`e_type 0xFFA0`, `vaddr = file_offset − 0xC0`, reloc section `0x70000020`, types 2/5/6); (5) `build/game/manifest.json`: module list, SHA-256s, segments, reloc counts, NID import inventory. All outputs under `build/` (gitignored).
 **Test cases:**
-- TC-3.1 End-to-end on local `game.chd` produces manifest.json with expected module set.
-- TC-3.2 Wrong-CRC input (bit-flipped ISO) aborts with named error.
-- TC-3.3 Truncated/decrypted-partially ELF rejected (magic + program-header checks).
+- TC-3.1 End-to-end on local `game.iso` produces manifest.json with expected module set. *(Covered by `tests/test_intake.py` — written and observed red before implementation.)*
+- TC-3.2 Wrong-CRC input (bit-flipped ISO) aborts with named error `IDENTITY_MISMATCH`; `.chd` input aborts with named error `CHD_NOT_SUPPORTED` pointing at CHDStudio.
+- TC-3.3 Truncated/decrypted-partially ELF rejected (magic + program-header checks): `~PSP` magic → `ENCRYPTED_EXECUTABLE` (points at out-of-process decrypt), truncated/garbage → `ELF_INVALID`.
 - TC-3.4 Every intermediate artifact lands under `build/`; `repository_check` still green.
+**Findings (2026-10-30, from implementation):** ISO9660 + ELF32 + PARAM.SFO parsing is **adopted** from TeamGDB/Yakumo (MIT, `third_party/yakumo/`, pin `b61852a`) — not clean-room, per §1 Code reuse. Intake shape is therefore a C++ reader tool (`tools/intake/intake_tool.cpp`, subcommands `iso-extract`/`elf-inspect`/`sfo-info`, built by root `CMakeLists.txt`) + Python orchestrator (`tools/intake/intake.py`: identity gate + manifest via stdlib `zlib`/`hashlib`/`json` — existing implementations). Known gap: vendored `elf32.cpp` handles reloc section `0x700000A0` only; Gungnir's EBOOT uses `0x70000020` — intake counts both via its own section walk (`ElfSection` list + raw entry scan), vendored code stays unpatched (recorded in `third_party/yakumo/PROVENANCE.md`). Manifest records the actual section type found, for T5.
 **Docs checkpoint:** `docs/INTAKE.md` (user-facing: how to supply their own disc, external decrypt tools, what the gates check).
 **Refs:** gungnir-ptbr (ISO offsets, `~PSP` layout — facts only), wtf-psp-recomp (`extract.ps1` report style), Yakumo (`prepare_game.sh` SHA-pin pattern), codepdbh (`--verify-only` identity gate).
 **Gotchas:** §7B (format traps), §7A.1–A.3.
@@ -151,6 +155,7 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-4.2 Deliberately broken fixtures (bad opcode, dispatch miss, stack imbalance) fail loudly — no silent fallback.
 - TC-4.3 `git ls-files` contains zero generated units; regenerate-twice is byte-stable (fingerprint gate).
 - TC-4.4 VFPU differential fuzz: codegen-emitted VFPU vs interpreter VFPU, randomized states, bitwise compare (`vi[]` + float bits) — zero diffs on the supported op set.
+**Findings (2026-10-30):** root `CMakeLists.txt` already seeded (T3) with the `yakumo` static lib + `intake_tool` target — T4 extends it. Guest memory semantics arrive with the adopted `guest_memory.hpp`; **VFPU is the one place a clean-room impulse is likely — it is not sanctioned**: adopt an MIT VFPU (sp00nznet `vfpu.c` is MIT; sal063's is mixed-license — audit first) or stop and ask before writing one.
 **Docs checkpoint:** `docs/ARCHITECTURE.md` (pipeline + memory map + dispatch contract), `docs/TESTING.md` (oracle hierarchy).
 **Refs:** jessicanataliagta/PSPRecomp (core), sal063 (golden-trace layering, VFPU fuzz), snuri00 (interpreter+cache, the 10 bug classes), wizardengineer (fingerprint/census gates), sp00nznet (oracle discipline).
 **Gotchas:** §7C (recompiler bug classes).
