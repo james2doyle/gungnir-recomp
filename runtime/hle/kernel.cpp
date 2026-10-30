@@ -89,10 +89,39 @@ const char *wait_name(WaitType type) {
         return "vblank";
     case WaitType::ThreadEnd:
         return "thread-end";
+    case WaitType::Fpl:
+        return "fpl";
+    case WaitType::MsgPipeSend:
+        return "msgpipe-send";
+    case WaitType::MsgPipeReceive:
+        return "msgpipe-receive";
     case WaitType::Host:
         return "host";
     }
     return "?";
+}
+
+void copy_guest_to_guest(psprecomp::GuestMemory &memory, std::uint32_t destination,
+    std::uint32_t source, std::uint32_t size) {
+    // Overlap is possible when a guest sends and receives through the same
+    // buffer; copy through a temporary in that case.
+    if (destination + size <= source || source + size <= destination) {
+        for (std::uint32_t i = 0u; i < size; ++i) memory.store8(destination + i, memory.load8(source + i));
+        return;
+    }
+    std::vector<std::uint8_t> bytes(size);
+    for (std::uint32_t i = 0u; i < size; ++i) bytes[i] = memory.load8(source + i);
+    for (std::uint32_t i = 0u; i < size; ++i) memory.store8(destination + i, bytes[i]);
+}
+
+int take_fpl_block(Fpl &fpl) noexcept {
+    for (std::uint32_t index = 0u; index < fpl.used.size(); ++index) {
+        if (!fpl.used[index]) {
+            fpl.used[index] = true;
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
 }
 
 } // namespace
@@ -250,12 +279,7 @@ void Kernel::exit_current_thread(AllegrexContext &ctx, std::int32_t status, bool
         thread->exit_status = status;
         thread->status = ThreadStatus::Dormant;
         const SceUID uid = thread->uid;
-        for (auto &[other_uid, other] : threads_) {
-            (void)other_uid;
-            if (other->status == ThreadStatus::Waiting && other->wait.type == WaitType::ThreadEnd &&
-                other->wait.object == uid)
-                wake(*other, static_cast<std::uint32_t>(status));
-        }
+        wake_thread_end_waiters(uid, status);
         if (delete_thread) (void)this->delete_thread(uid);
     }
     current_uid_ = 0;
@@ -270,6 +294,7 @@ std::int32_t Kernel::terminate_thread(AllegrexContext &ctx, SceUID uid, bool del
     if (thread->status == ThreadStatus::Waiting) remove_waiter(*thread);
     thread->status = ThreadStatus::Dormant;
     thread->exit_status = static_cast<std::int32_t>(0x800201ACu);
+    wake_thread_end_waiters(uid, thread->exit_status);
     if (delete_thread) return this->delete_thread(uid);
     return 0;
 }
@@ -604,6 +629,17 @@ void Kernel::remove_waiter(Thread &thread) {
     case WaitType::Mutex:
         if (auto found = mutexes.find(thread.wait.object); found != mutexes.end()) erase(found->second.waiters);
         break;
+    case WaitType::Fpl:
+        if (auto found = fpls.find(thread.wait.object); found != fpls.end()) erase(found->second.waiters);
+        break;
+    case WaitType::MsgPipeSend:
+        if (auto found = msgpipes.find(thread.wait.object); found != msgpipes.end())
+            erase(found->second.send_waiters);
+        break;
+    case WaitType::MsgPipeReceive:
+        if (auto found = msgpipes.find(thread.wait.object); found != msgpipes.end())
+            erase(found->second.receive_waiters);
+        break;
     default:
         break;
     }
@@ -730,6 +766,121 @@ void Kernel::release_mutex_waiters(SceUID uid) {
                 mutex.workarea + 12u, static_cast<std::uint32_t>(mutex.waiters.size()));
         }
         wake(*thread, 0u);
+    }
+}
+
+void Kernel::wake_thread_end_waiters(SceUID uid, std::int32_t status) {
+    for (auto &[other_uid, other] : threads_) {
+        (void)other_uid;
+        if (other->status == ThreadStatus::Waiting && other->wait.type == WaitType::ThreadEnd &&
+            other->wait.object == uid)
+            wake(*other, static_cast<std::uint32_t>(status));
+    }
+}
+
+void Kernel::release_fpl_waiters(SceUID uid) {
+    auto found = fpls.find(uid);
+    if (found == fpls.end()) return;
+    Fpl &fpl = found->second;
+    while (!fpl.waiters.empty()) {
+        Thread *thread = find_thread(fpl.waiters.front());
+        if (thread == nullptr || thread->status != ThreadStatus::Waiting) {
+            fpl.waiters.pop_front();
+            continue;
+        }
+        const int index = take_fpl_block(fpl);
+        if (index < 0) break;
+        const std::uint32_t address = fpl.pool_address + fpl.aligned_size * static_cast<std::uint32_t>(index);
+        if (thread->wait.out_address != 0u) runtime_->memory().store32(thread->wait.out_address, address);
+        fpl.waiters.pop_front();
+        wake(*thread, 0u);
+    }
+}
+
+void Kernel::pump_msgpipe(SceUID uid) {
+    auto found = msgpipes.find(uid);
+    if (found == msgpipes.end()) return;
+    MsgPipe &pipe = found->second;
+
+    const auto valid_waiter = [this](std::deque<SceUID> &queue) -> Thread * {
+        while (!queue.empty()) {
+            Thread *thread = find_thread(queue.front());
+            if (thread != nullptr && thread->status == ThreadStatus::Waiting) return thread;
+            queue.pop_front();
+        }
+        return nullptr;
+    };
+    const auto complete = [this, &pipe](std::deque<SceUID> &queue, Thread &thread) {
+        const std::uint32_t transferred = thread.wait.total - thread.wait.value;
+        if (thread.wait.out_address != 0u) runtime_->memory().store32(thread.wait.out_address, transferred);
+        queue.pop_front();
+        wake(thread, 0u);
+    };
+
+    for (;;) {
+        bool moved = false;
+        if (pipe.buffer_size == 0u) {
+            // Zero-length pipe: senders and receivers meet directly.
+            while (!pipe.send_waiters.empty() && !pipe.receive_waiters.empty()) {
+                Thread *sender = valid_waiter(pipe.send_waiters);
+                Thread *receiver = valid_waiter(pipe.receive_waiters);
+                if (sender == nullptr || receiver == nullptr) break;
+                const std::uint32_t amount = std::min(sender->wait.value, receiver->wait.value);
+                if (amount == 0u) break;
+                copy_guest_to_guest(
+                    runtime_->memory(), receiver->wait.buffer_address, sender->wait.buffer_address, amount);
+                sender->wait.value -= amount;
+                sender->wait.buffer_address += amount;
+                receiver->wait.value -= amount;
+                receiver->wait.buffer_address += amount;
+                if (sender->wait.value == 0u || sender->wait.mode == 1u) {
+                    complete(pipe.send_waiters, *sender);
+                    moved = true;
+                }
+                if (receiver->wait.value == 0u || receiver->wait.mode == 1u) {
+                    complete(pipe.receive_waiters, *receiver);
+                    moved = true;
+                }
+            }
+        } else {
+            while (!pipe.buffer.empty() && !pipe.receive_waiters.empty()) {
+                Thread *receiver = valid_waiter(pipe.receive_waiters);
+                if (receiver == nullptr) break;
+                const std::uint32_t amount =
+                    std::min<std::uint32_t>(receiver->wait.value, static_cast<std::uint32_t>(pipe.buffer.size()));
+                if (amount == 0u) break;
+                for (std::uint32_t i = 0u; i < amount; ++i)
+                    runtime_->memory().store8(receiver->wait.buffer_address + i, pipe.buffer[i]);
+                pipe.buffer.erase(pipe.buffer.begin(), pipe.buffer.begin() + amount);
+                receiver->wait.value -= amount;
+                receiver->wait.buffer_address += amount;
+                if (receiver->wait.value == 0u || receiver->wait.mode == 1u) {
+                    complete(pipe.receive_waiters, *receiver);
+                    moved = true;
+                } else {
+                    break;
+                }
+            }
+            while (!pipe.send_waiters.empty() && pipe.buffer.size() < pipe.buffer_size) {
+                Thread *sender = valid_waiter(pipe.send_waiters);
+                if (sender == nullptr) break;
+                const std::uint32_t space =
+                    pipe.buffer_size - static_cast<std::uint32_t>(pipe.buffer.size());
+                const std::uint32_t amount = std::min(sender->wait.value, space);
+                if (amount == 0u) break;
+                for (std::uint32_t i = 0u; i < amount; ++i)
+                    pipe.buffer.push_back(runtime_->memory().load8(sender->wait.buffer_address + i));
+                sender->wait.value -= amount;
+                sender->wait.buffer_address += amount;
+                if (sender->wait.value == 0u || sender->wait.mode == 1u) {
+                    complete(pipe.send_waiters, *sender);
+                    moved = true;
+                } else {
+                    break;
+                }
+            }
+        }
+        if (!moved) break;
     }
 }
 

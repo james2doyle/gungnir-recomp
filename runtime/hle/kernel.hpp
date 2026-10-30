@@ -32,11 +32,13 @@ using SceUID = std::int32_t;
 
 namespace error {
 inline constexpr std::uint32_t kIllegalArgument = 0x800200D2u;
+inline constexpr std::uint32_t kIllegalAddr = 0x800200D3u;
 inline constexpr std::uint32_t kIllegalPerm = 0x800200D1u;
 inline constexpr std::uint32_t kUnknownModule = 0x8002012Eu;
 inline constexpr std::uint32_t kIllegalMemblockType = 0x800200D8u;
 inline constexpr std::uint32_t kUnknownUid = 0x800200CBu;
 inline constexpr std::uint32_t kNoMemory = 0x80020190u;
+inline constexpr std::uint32_t kIllegalAttr = 0x80020191u;
 inline constexpr std::uint32_t kIllegalEntry = 0x80020192u;
 inline constexpr std::uint32_t kIllegalPriority = 0x80020193u;
 inline constexpr std::uint32_t kIllegalStackSize = 0x80020194u;
@@ -67,6 +69,12 @@ inline constexpr std::uint32_t kMutexLockOverflow = 0x800201C6u;
 inline constexpr std::uint32_t kMutexUnlockUnderflow = 0x800201C7u;
 inline constexpr std::uint32_t kMutexRecursiveNotAllowed = 0x800201C8u;
 inline constexpr std::uint32_t kUnknownVplid = 0x800201BBu;
+inline constexpr std::uint32_t kUnknownFplid = 0x8002019Du;
+inline constexpr std::uint32_t kUnknownMppid = 0x8002019Eu;
+inline constexpr std::uint32_t kMppFull = 0x800201B3u;
+inline constexpr std::uint32_t kMppEmpty = 0x800201B4u;
+inline constexpr std::uint32_t kWaitCancel = 0x800201A9u;
+inline constexpr std::uint32_t kIllegalSize = 0x800201BCu;
 inline constexpr std::uint32_t kIllegalMemsize = 0x800201BCu;
 } // namespace error
 
@@ -98,6 +106,9 @@ enum class WaitType {
     Mutex,
     VBlank,
     ThreadEnd,
+    Fpl,
+    MsgPipeSend,
+    MsgPipeReceive,
     Host, // a condition only the host can check, such as network data arriving
 };
 
@@ -113,6 +124,10 @@ struct WaitState {
     std::uint32_t mode{};        // event flag wait mode
     std::uint32_t out_address{}; // event flag result pattern pointer
     std::uint32_t timeout_address{};
+    // Message-pipe transfers move guest bytes while the thread waits: the
+    // address advances and the remaining count shrinks as data crosses.
+    std::uint32_t buffer_address{};
+    std::uint32_t total{};
     std::optional<std::uint64_t> deadline_us;
     HostWaitPoll host_poll; // WaitType::Host
 };
@@ -198,6 +213,31 @@ struct Vpl {
     std::uint32_t pool_size{};
     SceUID pool_block{};
     std::map<std::uint32_t, std::uint32_t> allocations; // guest address -> size
+};
+
+// Fixed-size pool: one kernel memory block split into equal blocks.
+struct Fpl {
+    std::string name;
+    std::uint32_t attributes{};
+    std::uint32_t block_size{};
+    std::uint32_t block_count{};
+    std::uint32_t aligned_size{};
+    std::uint32_t pool_address{};
+    SceUID pool_block{};
+    std::vector<bool> used;
+    std::deque<SceUID> waiters;
+};
+
+// Message pipe: a byte stream in a fixed kernel buffer, or direct
+// sender-to-receiver copies when the buffer size is zero.
+struct MsgPipe {
+    std::string name;
+    std::uint32_t attributes{};
+    std::uint32_t buffer_size{};
+    std::vector<std::uint8_t> buffer;
+    SceUID buffer_block{};
+    std::deque<SceUID> send_waiters;
+    std::deque<SceUID> receive_waiters;
 };
 
 struct SubInterruptHandler {
@@ -301,12 +341,21 @@ public:
     std::map<SceUID, EventFlag> event_flags;
     std::map<SceUID, Mutex> mutexes;
     std::map<SceUID, Vpl> vpls;
+    std::map<SceUID, Fpl> fpls;
+    std::map<SceUID, MsgPipe> msgpipes;
     std::map<SceUID, Callback> callbacks;
     std::map<SceUID, VTimer> vtimers;
     // Re-evaluates the waiters of an object after its state changed.
     void release_semaphore_waiters(SceUID uid);
     void release_event_flag_waiters(SceUID uid);
     void release_mutex_waiters(SceUID uid);
+    void release_fpl_waiters(SceUID uid);
+    // Moves buffered bytes between a pipe and its waiting senders/receivers,
+    // waking every transfer that completed.
+    void pump_msgpipe(SceUID uid);
+    // Wakes threads waiting for `uid` to reach the dormant state, reporting
+    // the exiting thread's status as their v0.
+    void wake_thread_end_waiters(SceUID uid, std::int32_t status);
     void cancel_waiters(std::deque<SceUID> &waiters, std::uint32_t result);
     [[nodiscard]] static bool event_flag_matches(
         std::uint32_t pattern, std::uint32_t bits, std::uint32_t mode) noexcept;

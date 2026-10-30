@@ -72,6 +72,33 @@ void register_threads(HleRegistrar &hle) {
             kernel().finish(ctx, as_unsigned(thread->exit_status));
     });
 
+    const auto wait_thread_end = [](bool callbacks) {
+        return [callbacks](Runtime &, AllegrexContext &ctx) {
+            const SceUID uid = as_signed(arg(ctx, 0));
+            if (uid == 0 || uid == kernel().current_uid()) {
+                kernel().finish(ctx, error::kIllegalThid);
+                return;
+            }
+            Thread *target = kernel().find_thread(uid);
+            if (target == nullptr) {
+                kernel().finish(ctx, error::kUnknownThid);
+                return;
+            }
+            if (callbacks) (void)kernel().deliver_callbacks();
+            if (target->status == ThreadStatus::Dormant) {
+                kernel().finish(ctx, as_unsigned(target->exit_status));
+                return;
+            }
+            WaitState wait{};
+            wait.type = WaitType::ThreadEnd;
+            wait.object = uid;
+            wait.timeout_address = arg(ctx, 1);
+            kernel().block(ctx, wait, 0u);
+        };
+    };
+    hle.add("ThreadManForUser", "sceKernelWaitThreadEnd", wait_thread_end(false));
+    hle.add("ThreadManForUser", "sceKernelWaitThreadEndCB", wait_thread_end(true));
+
     // The *CB variants run the thread's notified callbacks before waiting.
     const auto sleep_cb = [](Runtime &, AllegrexContext &ctx) {
         Thread *thread = kernel().current_thread();
@@ -187,32 +214,37 @@ void register_semaphores(HleRegistrar &hle) {
         kernel().release_semaphore_waiters(uid);
         kernel().finish(ctx, 0u);
     });
-    hle.add("ThreadManForUser", "sceKernelWaitSema", [](Runtime &, AllegrexContext &ctx) {
-        const SceUID uid = as_signed(arg(ctx, 0));
-        auto found = kernel().semaphores.find(uid);
-        const auto wanted = as_signed(arg(ctx, 1));
-        if (found == kernel().semaphores.end()) {
-            kernel().finish(ctx, error::kUnknownSemid);
-            return;
-        }
-        if (wanted <= 0 || wanted > found->second.max_count) {
-            kernel().finish(ctx, error::kIllegalCount);
-            return;
-        }
-        Semaphore &sema = found->second;
-        if (sema.waiters.empty() && sema.count >= wanted) {
-            sema.count -= wanted;
-            kernel().finish(ctx, 0u);
-            return;
-        }
-        sema.waiters.push_back(kernel().current_uid());
-        WaitState wait{};
-        wait.type = WaitType::Semaphore;
-        wait.object = uid;
-        wait.value = static_cast<std::uint32_t>(wanted);
-        wait.timeout_address = arg(ctx, 2);
-        kernel().block(ctx, wait, 0u);
-    });
+    const auto wait_sema = [](bool callbacks) {
+        return [callbacks](Runtime &, AllegrexContext &ctx) {
+            if (callbacks) (void)kernel().deliver_callbacks();
+            const SceUID uid = as_signed(arg(ctx, 0));
+            auto found = kernel().semaphores.find(uid);
+            const auto wanted = as_signed(arg(ctx, 1));
+            if (found == kernel().semaphores.end()) {
+                kernel().finish(ctx, error::kUnknownSemid);
+                return;
+            }
+            if (wanted <= 0 || wanted > found->second.max_count) {
+                kernel().finish(ctx, error::kIllegalCount);
+                return;
+            }
+            Semaphore &sema = found->second;
+            if (sema.waiters.empty() && sema.count >= wanted) {
+                sema.count -= wanted;
+                kernel().finish(ctx, 0u);
+                return;
+            }
+            sema.waiters.push_back(kernel().current_uid());
+            WaitState wait{};
+            wait.type = WaitType::Semaphore;
+            wait.object = uid;
+            wait.value = static_cast<std::uint32_t>(wanted);
+            wait.timeout_address = arg(ctx, 2);
+            kernel().block(ctx, wait, 0u);
+        };
+    };
+    hle.add("ThreadManForUser", "sceKernelWaitSema", wait_sema(false));
+    hle.add("ThreadManForUser", "sceKernelWaitSemaCB", wait_sema(true));
     hle.add("ThreadManForUser", "sceKernelPollSema", [](Runtime &, AllegrexContext &ctx) {
         auto found = kernel().semaphores.find(as_signed(arg(ctx, 0)));
         const auto wanted = as_signed(arg(ctx, 1));
@@ -503,6 +535,477 @@ std::uint32_t vpl_free_size(const Vpl &vpl) {
     return vpl.pool_size - used;
 }
 
+constexpr std::uint32_t kMsgPipeAttrPrioritySend = 0x0100u;
+constexpr std::uint32_t kMsgPipeAttrPriorityReceive = 0x1000u;
+constexpr std::uint32_t kMsgPipeAttrHighMemory = 0x4000u;
+constexpr std::uint32_t kFplAttrPriority = 0x0100u;
+constexpr std::uint32_t kFplAttrHighMemory = 0x4000u;
+
+void insert_waiter(std::deque<SceUID> &waiters, SceUID uid, bool by_priority) {
+    if (!by_priority) {
+        waiters.push_back(uid);
+        return;
+    }
+    const auto priority = [](SceUID thread_uid) {
+        const Thread *thread = kernel().find_thread(thread_uid);
+        return thread != nullptr ? thread->priority : 0xFFFFFFFFu;
+    };
+    const std::uint32_t value = priority(uid);
+    auto position = waiters.begin();
+    while (position != waiters.end() && priority(*position) <= value) ++position;
+    waiters.insert(position, uid);
+}
+
+int take_fpl_block(Fpl &fpl) {
+    for (std::uint32_t index = 0u; index < fpl.used.size(); ++index) {
+        if (!fpl.used[index]) {
+            fpl.used[index] = true;
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+void msgpipe_send(Runtime &rt, AllegrexContext &ctx, bool callbacks, bool try_only) {
+    const SceUID uid = as_signed(arg(ctx, 0));
+    auto found = kernel().msgpipes.find(uid);
+    if (found == kernel().msgpipes.end()) {
+        kernel().finish(ctx, error::kUnknownMppid);
+        return;
+    }
+    const std::uint32_t source = arg(ctx, 1);
+    const std::uint32_t size = arg(ctx, 2);
+    const std::uint32_t wait_mode = arg(ctx, 3);
+    const std::uint32_t result_address = arg(ctx, 4);
+    const std::uint32_t timeout_address = try_only ? 0u : arg(ctx, 5);
+    if ((size & 0x80000000u) != 0u) {
+        kernel().finish(ctx, error::kIllegalAddr);
+        return;
+    }
+    if (wait_mode != 0u && wait_mode != 1u) {
+        kernel().finish(ctx, error::kIllegalMode);
+        return;
+    }
+    MsgPipe &pipe = found->second;
+    if (pipe.buffer_size != 0u && size > pipe.buffer_size) {
+        kernel().finish(ctx, error::kIllegalSize);
+        return;
+    }
+    if (callbacks) (void)kernel().deliver_callbacks();
+
+    std::uint32_t address = source;
+    std::uint32_t remaining = size;
+    if (pipe.buffer_size == 0u) {
+        while (remaining != 0u && !pipe.receive_waiters.empty()) {
+            Thread *receiver = kernel().find_thread(pipe.receive_waiters.front());
+            if (receiver == nullptr || receiver->status != ThreadStatus::Waiting) {
+                pipe.receive_waiters.pop_front();
+                continue;
+            }
+            const std::uint32_t amount = std::min(remaining, receiver->wait.value);
+            if (amount == 0u) break;
+            for (std::uint32_t i = 0u; i < amount; ++i)
+                rt.memory().store8(receiver->wait.buffer_address + i, rt.memory().load8(address + i));
+            remaining -= amount;
+            address += amount;
+            receiver->wait.value -= amount;
+            receiver->wait.buffer_address += amount;
+            if (receiver->wait.value == 0u || receiver->wait.mode == 1u) {
+                const std::uint32_t transferred = receiver->wait.total - receiver->wait.value;
+                if (receiver->wait.out_address != 0u)
+                    rt.memory().store32(receiver->wait.out_address, transferred);
+                pipe.receive_waiters.pop_front();
+                kernel().wake(*receiver, 0u);
+            }
+        }
+    } else {
+        if (pipe.send_waiters.empty()) {
+            const std::uint32_t space = pipe.buffer_size - static_cast<std::uint32_t>(pipe.buffer.size());
+            const std::uint32_t amount =
+                size <= space ? size : (wait_mode == 1u ? space : 0u);
+            for (std::uint32_t i = 0u; i < amount; ++i)
+                pipe.buffer.push_back(rt.memory().load8(address + i));
+            address += amount;
+            remaining -= amount;
+            if (amount != 0u) kernel().pump_msgpipe(uid);
+        }
+    }
+    if (remaining == 0u || (wait_mode == 1u && address != source)) {
+        if (result_address != 0u) rt.memory().store32(result_address, address - source);
+        kernel().finish(ctx, 0u);
+        return;
+    }
+    if (try_only) {
+        kernel().finish(ctx, error::kMppFull);
+        return;
+    }
+
+    insert_waiter(pipe.send_waiters, kernel().current_uid(),
+        (pipe.attributes & kMsgPipeAttrPrioritySend) != 0u);
+    if (result_address != 0u) rt.memory().store32(result_address, 0u);
+    WaitState wait{};
+    wait.type = WaitType::MsgPipeSend;
+    wait.object = uid;
+    wait.value = remaining;
+    wait.total = size;
+    wait.mode = wait_mode;
+    wait.buffer_address = address;
+    wait.out_address = result_address;
+    wait.timeout_address = timeout_address;
+    kernel().block(ctx, wait, 0u);
+}
+
+void msgpipe_receive(Runtime &rt, AllegrexContext &ctx, bool callbacks, bool try_only) {
+    const SceUID uid = as_signed(arg(ctx, 0));
+    auto found = kernel().msgpipes.find(uid);
+    if (found == kernel().msgpipes.end()) {
+        kernel().finish(ctx, error::kUnknownMppid);
+        return;
+    }
+    const std::uint32_t destination = arg(ctx, 1);
+    const std::uint32_t size = arg(ctx, 2);
+    const std::uint32_t wait_mode = arg(ctx, 3);
+    const std::uint32_t result_address = arg(ctx, 4);
+    const std::uint32_t timeout_address = try_only ? 0u : arg(ctx, 5);
+    if ((size & 0x80000000u) != 0u) {
+        kernel().finish(ctx, error::kIllegalAddr);
+        return;
+    }
+    if (wait_mode != 0u && wait_mode != 1u) {
+        kernel().finish(ctx, error::kIllegalMode);
+        return;
+    }
+    MsgPipe &pipe = found->second;
+    if (pipe.buffer_size != 0u && size > pipe.buffer_size) {
+        kernel().finish(ctx, error::kIllegalSize);
+        return;
+    }
+    if (callbacks) (void)kernel().deliver_callbacks();
+
+    std::uint32_t address = destination;
+    std::uint32_t remaining = size;
+    if (pipe.buffer_size == 0u) {
+        while (remaining != 0u && !pipe.send_waiters.empty()) {
+            Thread *sender = kernel().find_thread(pipe.send_waiters.front());
+            if (sender == nullptr || sender->status != ThreadStatus::Waiting) {
+                pipe.send_waiters.pop_front();
+                continue;
+            }
+            const std::uint32_t amount = std::min(remaining, sender->wait.value);
+            if (amount == 0u) break;
+            for (std::uint32_t i = 0u; i < amount; ++i)
+                rt.memory().store8(address + i, rt.memory().load8(sender->wait.buffer_address + i));
+            remaining -= amount;
+            address += amount;
+            sender->wait.value -= amount;
+            sender->wait.buffer_address += amount;
+            if (sender->wait.value == 0u || sender->wait.mode == 1u) {
+                const std::uint32_t transferred = sender->wait.total - sender->wait.value;
+                if (sender->wait.out_address != 0u)
+                    rt.memory().store32(sender->wait.out_address, transferred);
+                pipe.send_waiters.pop_front();
+                kernel().wake(*sender, 0u);
+            }
+        }
+    } else {
+        for (;;) {
+            const std::uint32_t consumed_from = address;
+            while (remaining != 0u && !pipe.buffer.empty()) {
+                const std::uint32_t amount = std::min<std::uint32_t>(
+                    remaining, static_cast<std::uint32_t>(pipe.buffer.size()));
+                for (std::uint32_t i = 0u; i < amount; ++i)
+                    rt.memory().store8(address + i, pipe.buffer[i]);
+                pipe.buffer.erase(pipe.buffer.begin(), pipe.buffer.begin() + amount);
+                remaining -= amount;
+                address += amount;
+            }
+            if (address == consumed_from) break;
+            // Receiving frees space; let queued senders refill the pipe.
+            kernel().pump_msgpipe(uid);
+            if (remaining == 0u) break;
+        }
+    }
+    if (remaining == 0u || (wait_mode == 1u && address != destination)) {
+        if (result_address != 0u) rt.memory().store32(result_address, address - destination);
+        kernel().finish(ctx, 0u);
+        return;
+    }
+    if (try_only) {
+        kernel().finish(ctx, error::kMppEmpty);
+        return;
+    }
+
+    insert_waiter(pipe.receive_waiters, kernel().current_uid(),
+        (pipe.attributes & kMsgPipeAttrPriorityReceive) != 0u);
+    if (result_address != 0u) rt.memory().store32(result_address, 0u);
+    WaitState wait{};
+    wait.type = WaitType::MsgPipeReceive;
+    wait.object = uid;
+    wait.value = remaining;
+    wait.total = size;
+    wait.mode = wait_mode;
+    wait.buffer_address = address;
+    wait.out_address = result_address;
+    wait.timeout_address = timeout_address;
+    kernel().block(ctx, wait, 0u);
+}
+
+void register_msgpipe(HleRegistrar &hle) {
+    hle.add("ThreadManForUser", "sceKernelCreateMsgPipe", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t partition = arg(ctx, 1);
+        if (partition < 1u || partition > 6u) {
+            kernel().finish(ctx, error::kIllegalArgument);
+            return;
+        }
+        const std::uint32_t attributes = arg(ctx, 2);
+        if ((attributes & ~0x5100u) >= 0x100u) {
+            kernel().finish(ctx, error::kIllegalAttr);
+            return;
+        }
+        const std::string name = read_cstring(rt.memory(), arg(ctx, 0), 32u);
+        const std::uint32_t size = arg(ctx, 3);
+        MsgPipe pipe{};
+        pipe.name = name;
+        pipe.attributes = attributes;
+        pipe.buffer_size = size;
+        if (size != 0u) {
+            const std::int32_t block = kernel().allocate_block("MsgPipe/" + name,
+                (attributes & kMsgPipeAttrHighMemory) != 0u ? 1u : 0u, size, 0u);
+            if (block < 0) {
+                kernel().finish(ctx, error::kNoMemory);
+                return;
+            }
+            pipe.buffer_block = block;
+        }
+        const SceUID uid = kernel().allocate_uid();
+        kernel().msgpipes[uid] = std::move(pipe);
+        kernel().finish(ctx, as_unsigned(uid));
+    });
+    hle.add("ThreadManForUser", "sceKernelDeleteMsgPipe", [](Runtime &, AllegrexContext &ctx) {
+        auto found = kernel().msgpipes.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().msgpipes.end()) {
+            kernel().finish(ctx, error::kUnknownMppid);
+            return;
+        }
+        kernel().cancel_waiters(found->second.send_waiters, error::kWaitDelete);
+        kernel().cancel_waiters(found->second.receive_waiters, error::kWaitDelete);
+        if (found->second.buffer_block != 0) (void)kernel().free_block(found->second.buffer_block);
+        kernel().msgpipes.erase(found);
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("ThreadManForUser", "sceKernelSendMsgPipe",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_send(rt, ctx, false, false); });
+    hle.add("ThreadManForUser", "sceKernelSendMsgPipeCB",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_send(rt, ctx, true, false); });
+    hle.add("ThreadManForUser", "sceKernelTrySendMsgPipe",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_send(rt, ctx, false, true); });
+    hle.add("ThreadManForUser", "sceKernelReceiveMsgPipe",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_receive(rt, ctx, false, false); });
+    hle.add("ThreadManForUser", "sceKernelReceiveMsgPipeCB",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_receive(rt, ctx, true, false); });
+    hle.add("ThreadManForUser", "sceKernelTryReceiveMsgPipe",
+        [](Runtime &rt, AllegrexContext &ctx) { msgpipe_receive(rt, ctx, false, true); });
+    hle.add("ThreadManForUser", "sceKernelCancelMsgPipe", [](Runtime &rt, AllegrexContext &ctx) {
+        auto found = kernel().msgpipes.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().msgpipes.end()) {
+            kernel().finish(ctx, error::kUnknownMppid);
+            return;
+        }
+        MsgPipe &pipe = found->second;
+        const std::uint32_t send_count = static_cast<std::uint32_t>(pipe.send_waiters.size());
+        const std::uint32_t receive_count = static_cast<std::uint32_t>(pipe.receive_waiters.size());
+        if (arg(ctx, 1) != 0u) rt.memory().store32(arg(ctx, 1), send_count);
+        if (arg(ctx, 2) != 0u) rt.memory().store32(arg(ctx, 2), receive_count);
+        kernel().cancel_waiters(pipe.send_waiters, error::kWaitCancel);
+        kernel().cancel_waiters(pipe.receive_waiters, error::kWaitCancel);
+        pipe.buffer.clear();
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("ThreadManForUser", "sceKernelReferMsgPipeStatus", [](Runtime &rt, AllegrexContext &ctx) {
+        auto found = kernel().msgpipes.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().msgpipes.end()) {
+            kernel().finish(ctx, error::kUnknownMppid);
+            return;
+        }
+        auto &memory = rt.memory();
+        const std::uint32_t out = arg(ctx, 1);
+        if (memory.load32(out) == 0u) {
+            kernel().finish(ctx, 0u);
+            return;
+        }
+        const MsgPipe &pipe = found->second;
+        memory.store32(out, 56u);
+        write_cstring(memory, out + 4u, pipe.name, 32u);
+        memory.store32(out + 36u, pipe.attributes);
+        memory.store32(out + 40u, pipe.buffer_size);
+        memory.store32(out + 44u, pipe.buffer_size - static_cast<std::uint32_t>(pipe.buffer.size()));
+        memory.store32(out + 48u, static_cast<std::uint32_t>(pipe.send_waiters.size()));
+        memory.store32(out + 52u, static_cast<std::uint32_t>(pipe.receive_waiters.size()));
+        kernel().finish(ctx, 0u);
+    });
+}
+
+void register_fpl(HleRegistrar &hle) {
+    hle.add("ThreadManForUser", "sceKernelCreateFpl", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t partition = arg(ctx, 1);
+        if (partition < 1u || partition > 6u) {
+            kernel().finish(ctx, error::kIllegalArgument);
+            return;
+        }
+        const std::uint32_t attributes = arg(ctx, 2);
+        if ((attributes & ~0x4100u) >= 0x100u) {
+            kernel().finish(ctx, error::kIllegalAttr);
+            return;
+        }
+        const std::uint32_t block_size = arg(ctx, 3);
+        const std::uint32_t block_count = arg(ctx, 4);
+        if (block_size == 0u || block_count == 0u ||
+            static_cast<std::uint64_t>(block_size) >
+                0x100000000ull / static_cast<std::uint64_t>(block_count) - 4ull) {
+            kernel().finish(ctx, error::kIllegalMemsize);
+            return;
+        }
+        std::uint32_t alignment = 4u;
+        const std::uint32_t options = arg(ctx, 5);
+        if (options != 0u && rt.memory().load32(options) >= 4u) {
+            alignment = rt.memory().load32(options + 4u);
+            if ((alignment & (alignment - 1u)) != 0u) {
+                kernel().finish(ctx, error::kIllegalArgument);
+                return;
+            }
+        }
+        if (alignment < 4u) alignment = 4u;
+        const std::uint64_t aligned_size =
+            (static_cast<std::uint64_t>(block_size) + alignment - 1u) & ~static_cast<std::uint64_t>(alignment - 1u);
+        if (aligned_size * block_count > 0xFFFFFFFFull) {
+            kernel().finish(ctx, error::kIllegalMemsize);
+            return;
+        }
+        const std::string name = read_cstring(rt.memory(), arg(ctx, 0), 32u);
+        const std::int32_t block = kernel().allocate_block("FPL/" + name,
+            (attributes & kFplAttrHighMemory) != 0u ? 1u : 0u,
+            static_cast<std::uint32_t>(aligned_size * block_count), 0u);
+        if (block < 0) {
+            kernel().finish(ctx, error::kNoMemory);
+            return;
+        }
+        const MemoryBlock *pool = kernel().find_block(block);
+        Fpl fpl{};
+        fpl.name = name;
+        fpl.attributes = attributes;
+        fpl.block_size = block_size;
+        fpl.block_count = block_count;
+        fpl.aligned_size = static_cast<std::uint32_t>(aligned_size);
+        fpl.pool_address = pool->address;
+        fpl.pool_block = block;
+        fpl.used.assign(block_count, false);
+        const SceUID uid = kernel().allocate_uid();
+        kernel().fpls[uid] = std::move(fpl);
+        kernel().finish(ctx, as_unsigned(uid));
+    });
+    hle.add("ThreadManForUser", "sceKernelDeleteFpl", [](Runtime &, AllegrexContext &ctx) {
+        auto found = kernel().fpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().fpls.end()) {
+            kernel().finish(ctx, error::kUnknownFplid);
+            return;
+        }
+        kernel().cancel_waiters(found->second.waiters, error::kWaitDelete);
+        (void)kernel().free_block(found->second.pool_block);
+        kernel().fpls.erase(found);
+        kernel().finish(ctx, 0u);
+    });
+    const auto allocate = [](bool callbacks, bool try_only) {
+        return [callbacks, try_only](Runtime &rt, AllegrexContext &ctx) {
+            auto found = kernel().fpls.find(as_signed(arg(ctx, 0)));
+            if (found == kernel().fpls.end()) {
+                kernel().finish(ctx, error::kUnknownFplid);
+                return;
+            }
+            Fpl &fpl = found->second;
+            int index = take_fpl_block(fpl);
+            if (index < 0 && callbacks) {
+                (void)kernel().deliver_callbacks();
+                index = take_fpl_block(fpl);
+            }
+            if (index >= 0) {
+                rt.memory().store32(arg(ctx, 1), fpl.pool_address + fpl.aligned_size * static_cast<std::uint32_t>(index));
+                kernel().finish(ctx, 0u);
+                return;
+            }
+            if (try_only) {
+                kernel().finish(ctx, error::kNoMemory);
+                return;
+            }
+            insert_waiter(fpl.waiters, kernel().current_uid(), (fpl.attributes & kFplAttrPriority) != 0u);
+            WaitState wait{};
+            wait.type = WaitType::Fpl;
+            wait.object = as_signed(arg(ctx, 0));
+            wait.out_address = arg(ctx, 1);
+            wait.timeout_address = arg(ctx, 2);
+            kernel().block(ctx, wait, 0u);
+        };
+    };
+    hle.add("ThreadManForUser", "sceKernelAllocateFpl", allocate(false, false));
+    hle.add("ThreadManForUser", "sceKernelAllocateFplCB", allocate(true, false));
+    hle.add("ThreadManForUser", "sceKernelTryAllocateFpl", allocate(false, true));
+    hle.add("ThreadManForUser", "sceKernelFreeFpl", [](Runtime &, AllegrexContext &ctx) {
+        auto found = kernel().fpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().fpls.end()) {
+            kernel().finish(ctx, error::kUnknownFplid);
+            return;
+        }
+        Fpl &fpl = found->second;
+        const std::uint32_t address = arg(ctx, 1);
+        const std::uint32_t offset = address >= fpl.pool_address ? address - fpl.pool_address : 0xFFFFFFFFu;
+        const std::uint32_t index = fpl.aligned_size != 0u ? offset / fpl.aligned_size : 0xFFFFFFFFu;
+        if (offset == 0xFFFFFFFFu || index >= fpl.block_count ||
+            offset % fpl.aligned_size != 0u || !fpl.used[index]) {
+            kernel().finish(ctx, error::kIllegalMemblock);
+            return;
+        }
+        fpl.used[index] = false;
+        kernel().release_fpl_waiters(found->first);
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("ThreadManForUser", "sceKernelCancelFpl", [](Runtime &rt, AllegrexContext &ctx) {
+        auto found = kernel().fpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().fpls.end()) {
+            kernel().finish(ctx, error::kUnknownFplid);
+            return;
+        }
+        if (arg(ctx, 1) != 0u)
+            rt.memory().store32(arg(ctx, 1), static_cast<std::uint32_t>(found->second.waiters.size()));
+        kernel().cancel_waiters(found->second.waiters, error::kWaitCancel);
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("ThreadManForUser", "sceKernelReferFplStatus", [](Runtime &rt, AllegrexContext &ctx) {
+        auto found = kernel().fpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().fpls.end()) {
+            kernel().finish(ctx, error::kUnknownFplid);
+            return;
+        }
+        auto &memory = rt.memory();
+        const std::uint32_t out = arg(ctx, 1);
+        if (memory.load32(out) == 0u) {
+            kernel().finish(ctx, 0u);
+            return;
+        }
+        const Fpl &fpl = found->second;
+        std::uint32_t free_blocks = 0u;
+        for (const bool used : fpl.used) {
+            if (!used) ++free_blocks;
+        }
+        memory.store32(out, 56u);
+        write_cstring(memory, out + 4u, fpl.name, 32u);
+        memory.store32(out + 36u, fpl.attributes);
+        memory.store32(out + 40u, fpl.block_size);
+        memory.store32(out + 44u, fpl.block_count);
+        memory.store32(out + 48u, free_blocks);
+        memory.store32(out + 52u, static_cast<std::uint32_t>(fpl.waiters.size()));
+        kernel().finish(ctx, 0u);
+    });
+}
+
 void register_vpl(HleRegistrar &hle) {
     hle.add("ThreadManForUser", "sceKernelCreateVpl", [](Runtime &rt, AllegrexContext &ctx) {
         const std::string name = read_cstring(rt.memory(), arg(ctx, 0), 32u);
@@ -757,6 +1260,8 @@ void register_threadman(HleRegistrar &hle) {
     register_mutexes(hle);
     register_callbacks_and_timers(hle);
     register_vpl(hle);
+    register_fpl(hle);
+    register_msgpipe(hle);
     register_lwmutex(hle);
     register_kernel_library(hle);
 }

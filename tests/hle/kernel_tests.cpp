@@ -173,6 +173,9 @@ void sync_contracts() {
     const auto sema = f.thread("sceKernelCreateSema", {0u, 0u, 1u, 1u});
     check(static_cast<std::int32_t>(sema) > 0, "semaphore created");
     check(f.thread("sceKernelWaitSema", {sema, 1u}) == 0u, "available semaphore acquired");
+    const auto cb_sema = f.thread("sceKernelCreateSema", {0u, 0u, 1u, 1u});
+    check(f.thread("sceKernelWaitSemaCB", {cb_sema, 1u}) == 0u, "CB semaphore wait acquires");
+    check(f.thread("sceKernelDeleteSema", {cb_sema}) == 0u, "CB semaphore deleted");
     check(static_cast<std::uint32_t>(f.thread("sceKernelPollSema", {sema, 1u})) ==
               gungnir::hle::error::kSemaZero,
           "empty semaphore poll reports zero");
@@ -291,6 +294,204 @@ void alarm_contracts() {
     check(k.current_uid() != 0, "loader resumed after the timer");
 }
 
+void msgpipe_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &k = f.k;
+    auto &mem = f.runtime.memory();
+    const auto loader = k.current_uid();
+    f.write_string(Fixture::kText, "pipe");
+    f.write_string(Fixture::kOutput, "hello");
+
+    check(static_cast<std::uint32_t>(f.thread("sceKernelCreateMsgPipe",
+              {Fixture::kText, 0u, 0u, 16u, 0u})) == gungnir::hle::error::kIllegalArgument,
+          "pipe rejects partition 0");
+    const auto pipe = f.thread("sceKernelCreateMsgPipe", {Fixture::kText, 1u, 0u, 16u, 0u});
+    check(static_cast<std::int32_t>(pipe) > 0, "message pipe created");
+
+    const std::uint32_t recv = Fixture::kOutput + 0x100u;
+    const std::uint32_t result = Fixture::kOutput + 0x200u;
+    const std::uint32_t status = Fixture::kOutput + 0x300u;
+
+    check(static_cast<std::uint32_t>(f.thread("sceKernelTryReceiveMsgPipe",
+              {pipe, recv, 8u, 0u, result})) == gungnir::hle::error::kMppEmpty,
+          "empty pipe try receive reports MPP_EMPTY");
+    check(f.thread("sceKernelTrySendMsgPipe", {pipe, Fixture::kOutput, 5u, 0u, result}) == 0u,
+          "try send succeeds");
+    check(mem.load32(result) == 5u, "try send reports five bytes");
+    mem.store32(status, 56u);
+    check(f.thread("sceKernelReferMsgPipeStatus", {pipe, status}) == 0u, "pipe status readable");
+    check(mem.load32(status) == 56u, "pipe status size");
+    check(mem.load32(status + 40u) == 16u && mem.load32(status + 44u) == 11u,
+          "pipe reports buffer and free size");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelTrySendMsgPipe",
+              {pipe, Fixture::kOutput, 17u, 0u, result})) == gungnir::hle::error::kIllegalSize,
+          "send larger than the pipe is rejected");
+    check(f.thread("sceKernelReceiveMsgPipe", {pipe, recv, 5u, 0u, result}) == 0u,
+          "blocking receive gets buffered data");
+    check(mem.load32(result) == 5u && mem.load8(recv) == 'h' && mem.load8(recv + 4u) == 'o',
+          "received bytes match");
+
+    // Fill the pipe, then a lower-priority sender blocks until receives make room.
+    f.write_string(Fixture::kOutput, "0123456789abcdef");
+    check(f.thread("sceKernelSendMsgPipe", {pipe, Fixture::kOutput, 16u, 0u, result, 0u}) == 0u,
+          "pipe fills");
+    const auto sender = k.create_thread("sender", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(sender > 0 && k.start_thread(f.ctx, sender, 0u, 0u) == 0, "sender started");
+    k.delay_current(f.ctx, 10u, 0u);
+    check(k.current_uid() == sender, "sender gets the CPU");
+    const std::uint32_t pending = Fixture::kOutput + 0x400u;
+    const std::uint32_t pending_result = Fixture::kOutput + 0x500u;
+    f.write_string(pending, "ABCDEFGH");
+    check(f.thread("sceKernelSendMsgPipe", {pipe, pending, 8u, 0u, pending_result, 0u}) == 0u,
+          "blocked send accepted");
+    check(k.current_uid() == loader, "blocked send returns to the loader");
+    check(k.find_thread(sender)->status == gungnir::hle::ThreadStatus::Waiting,
+          "sender waits for space");
+    check(f.thread("sceKernelReceiveMsgPipe", {pipe, recv, 4u, 0u, result}) == 0u &&
+              mem.load32(result) == 4u,
+          "partial receive succeeds");
+    check(k.find_thread(sender)->status == gungnir::hle::ThreadStatus::Waiting,
+          "sender still waits without full room");
+    check(f.thread("sceKernelReceiveMsgPipe", {pipe, recv, 4u, 0u, result}) == 0u,
+          "second partial receive");
+    check(k.find_thread(sender)->status == gungnir::hle::ThreadStatus::Ready ||
+              k.find_thread(sender)->status == gungnir::hle::ThreadStatus::Running,
+          "freeing eight bytes wakes the sender");
+    check(mem.load32(pending_result) == 8u, "woken sender reports its byte count");
+    check(f.thread("sceKernelReceiveMsgPipe", {pipe, recv, 8u, 0u, result}) == 0u &&
+              mem.load32(result) == 8u && mem.load8(recv) == '8' && mem.load8(recv + 7u) == 'f',
+          "buffered head received in order");
+    check(f.thread("sceKernelReceiveMsgPipe", {pipe, recv, 8u, 0u, result}) == 0u &&
+              mem.load32(result) == 8u && mem.load8(recv) == 'A' && mem.load8(recv + 7u) == 'H',
+          "blocked sender payload received in order");
+    check(f.thread("sceKernelDeleteMsgPipe", {pipe}) == 0u, "pipe deleted");
+    check(k.terminate_thread(f.ctx, sender, false) == 0, "blocked sender terminated");
+
+    // A timed send returns WAIT_TIMEOUT and writes zero remaining time.
+    const auto timed_pipe = f.thread("sceKernelCreateMsgPipe", {Fixture::kText, 1u, 0u, 16u, 0u});
+    check(static_cast<std::int32_t>(timed_pipe) > 0, "timed pipe created");
+    check(f.thread("sceKernelSendMsgPipe", {timed_pipe, Fixture::kOutput, 16u, 0u, result, 0u}) == 0u,
+          "timed pipe fills");
+    const auto timed_sender = k.create_thread("timed", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(timed_sender > 0 && k.start_thread(f.ctx, timed_sender, 0u, 0u) == 0, "timed sender started");
+    k.delay_current(f.ctx, 10u, 0u);
+    const std::uint32_t timeout_address = Fixture::kOutput + 0x600u;
+    mem.store32(timeout_address, 1000u);
+    check(f.thread("sceKernelSendMsgPipe",
+              {timed_pipe, pending, 8u, 0u, result, timeout_address}) == 0u,
+          "timed send blocks");
+    check(k.current_uid() == loader, "timed send returns to the loader");
+    k.delay_current(f.ctx, 5000u, 0u);
+    check(k.current_uid() == timed_sender, "timed sender wakes at its deadline");
+    check(f.ctx.gpr[2] == gungnir::hle::error::kWaitTimeout, "timed send reports timeout");
+    check(mem.load32(timeout_address) == 0u, "timed send clears the remaining time");
+    check(f.thread("sceKernelDeleteMsgPipe", {timed_pipe}) == 0u, "timed pipe deleted");
+    k.exit_current_thread(f.ctx, 0, false);
+    check(k.current_uid() == loader, "loader resumes after the timeout");
+}
+
+void fpl_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &k = f.k;
+    auto &mem = f.runtime.memory();
+    const auto loader = k.current_uid();
+    f.write_string(Fixture::kText, "pool");
+
+    check(static_cast<std::uint32_t>(f.thread("sceKernelCreateFpl",
+              {Fixture::kText, 0u, 0u, 32u, 4u, 0u})) == gungnir::hle::error::kIllegalArgument,
+          "pool rejects partition 0");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelCreateFpl",
+              {Fixture::kText, 1u, 0u, 0u, 4u, 0u})) == gungnir::hle::error::kIllegalMemsize,
+          "zero block size rejected");
+    const auto fpl = f.thread("sceKernelCreateFpl", {Fixture::kText, 1u, 0u, 32u, 4u, 0u});
+    check(static_cast<std::int32_t>(fpl) > 0, "fixed pool created");
+
+    const std::uint32_t block_out = Fixture::kOutput;
+    const std::uint32_t status = Fixture::kOutput + 0x100u;
+    check(f.thread("sceKernelTryAllocateFpl", {fpl, block_out}) == 0u, "first block allocated");
+    const std::uint32_t first = mem.load32(block_out);
+    check(f.thread("sceKernelTryAllocateFpl", {fpl, block_out}) == 0u, "second block allocated");
+    const std::uint32_t second = mem.load32(block_out);
+    check(second == first + 32u, "blocks are evenly spaced");
+    check(f.thread("sceKernelTryAllocateFpl", {fpl, block_out}) == 0u &&
+              f.thread("sceKernelTryAllocateFpl", {fpl, block_out}) == 0u,
+          "remaining blocks allocated");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelTryAllocateFpl", {fpl, block_out})) ==
+              gungnir::hle::error::kNoMemory,
+          "empty pool reports no memory");
+    mem.store32(status, 56u);
+    check(f.thread("sceKernelReferFplStatus", {fpl, status}) == 0u, "pool status readable");
+    check(mem.load32(status) == 56u && mem.load32(status + 40u) == 32u &&
+              mem.load32(status + 44u) == 4u && mem.load32(status + 48u) == 0u &&
+              mem.load32(status + 52u) == 0u,
+          "pool status reports size, blocks and waiters");
+    check(f.thread("sceKernelFreeFpl", {fpl, first}) == 0u, "block freed");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelFreeFpl", {fpl, first})) ==
+              gungnir::hle::error::kIllegalMemblock,
+          "double free rejected");
+    check(f.thread("sceKernelReferFplStatus", {fpl, status}) == 0u &&
+              mem.load32(status + 48u) == 1u,
+          "free block counted");
+
+    // Refill the pool so the next allocation must wait.
+    check(f.thread("sceKernelTryAllocateFpl", {fpl, block_out}) == 0u, "free block reallocated");
+
+    // Blocked allocation wakes when a block is freed.
+    const auto waiter = k.create_thread("pool-waiter", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(waiter > 0 && k.start_thread(f.ctx, waiter, 0u, 0u) == 0, "pool waiter started");
+    k.delay_current(f.ctx, 10u, 0u);
+    check(k.current_uid() == waiter, "pool waiter gets the CPU");
+    const std::uint32_t waiter_out = Fixture::kOutput + 0x200u;
+    check(f.thread("sceKernelAllocateFpl", {fpl, waiter_out, 0u}) == 0u, "blocking allocate waits");
+    check(k.current_uid() == loader, "blocking allocate returns to the loader");
+    check(k.find_thread(waiter)->status == gungnir::hle::ThreadStatus::Waiting,
+          "pool waiter blocks");
+    check(f.thread("sceKernelFreeFpl", {fpl, second}) == 0u, "second block freed");
+    check(k.find_thread(waiter)->status == gungnir::hle::ThreadStatus::Ready ||
+              k.find_thread(waiter)->status == gungnir::hle::ThreadStatus::Running,
+          "freeing a block wakes the waiter");
+    check(mem.load32(waiter_out) != 0u, "woken waiter receives a block pointer");
+    check(k.terminate_thread(f.ctx, waiter, false) == 0, "woken pool waiter terminated");
+
+    // Cancel wakes remaining waiters with WAIT_CANCEL and reports the count.
+    const auto cancel_waiter = k.create_thread("pool-cancel", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(cancel_waiter > 0 && k.start_thread(f.ctx, cancel_waiter, 0u, 0u) == 0, "cancel waiter started");
+    k.delay_current(f.ctx, 10u, 0u);
+    check(k.current_uid() == cancel_waiter, "cancel waiter gets the CPU");
+    const std::uint32_t cancel_out = Fixture::kOutput + 0x300u;
+    check(f.thread("sceKernelAllocateFpl", {fpl, cancel_out, 0u}) == 0u, "second waiter blocks");
+    check(k.current_uid() == loader, "second block returns to the loader");
+    const std::uint32_t count = Fixture::kOutput + 0x400u;
+    check(f.thread("sceKernelCancelFpl", {fpl, count}) == 0u, "pool cancel succeeds");
+    check(mem.load32(count) == 1u, "cancel reports one waiter");
+    check(k.find_thread(cancel_waiter)->context.gpr[2] == gungnir::hle::error::kWaitCancel,
+          "cancelled waiter reports WAIT_CANCEL");
+    check(f.thread("sceKernelDeleteFpl", {fpl}) == 0u, "pool deleted");
+}
+
+void thread_end_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &k = f.k;
+    const auto loader = k.current_uid();
+    const std::int32_t worker_uid = k.create_thread("worker", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(worker_uid > 0 && k.start_thread(f.ctx, worker_uid, 0u, 0u) == 0, "worker started");
+    const std::uint32_t worker = static_cast<std::uint32_t>(worker_uid);
+    check(k.current_uid() == loader, "lower-priority worker does not preempt");
+    check(f.thread("sceKernelWaitThreadEnd", {worker, 0u}) == 0u, "thread-end wait blocks");
+    check(k.current_uid() == worker, "worker runs while the loader waits");
+    (void)f.thread("sceKernelExitThread", {7u});
+    check(k.current_uid() == loader, "worker exit returns to the loader");
+    check(f.ctx.gpr[2] == 7u, "thread-end wait returns the exit status");
+    check(f.thread("sceKernelWaitThreadEnd", {worker, 0u}) == 7u,
+          "already-dormant thread returns its status immediately");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelWaitThreadEnd", {0u, 0u})) ==
+              gungnir::hle::error::kIllegalThid,
+          "self/zero thread id rejected");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelWaitThreadEnd", {0x777u, 0u})) ==
+              gungnir::hle::error::kUnknownThid,
+          "unknown thread id rejected");
+}
+
 void blocking_sync_contracts() {
     Fixture f(test_nids_path(), {}, {});
     auto &k = f.k;
@@ -372,6 +573,9 @@ int main(int argc, char **argv) {
         blocking_sync_contracts();
         alarm_contracts();
         vpl_contracts();
+        msgpipe_contracts();
+        fpl_contracts();
+        thread_end_contracts();
         lwmutex_contracts();
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);

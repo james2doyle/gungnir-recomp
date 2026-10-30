@@ -44,6 +44,7 @@ cross-library alias path, and a bound handler invocation.
 | Kernel (cooperative threads, semas, eventflags, mutexes, VTimers, memory partitions) | VERIFIED (T6b) | adapted MIT Yakumo kernel; deterministic unpaced clock for tests |
 | ThreadMan / SysMem / IoFileMgr | VERIFIED (T6b) | TC-6.1 unit fixtures: memory, create/start/exit/delay, sema/eventflag blocking, VTimer interrupt, ISO disc read + memory-stick write/read |
 | VPL / lightweight mutex (T6c boot discoveries) | VERIFIED | create/delete/try-allocate/free/refer pools; work-area LW mutexes shared by ThreadMan and Kernel_Library aliases |
+| MsgPipe / FPL / thread-end (T6e boot discoveries) | VERIFIED | byte-stream pipes with blocking/try send and receive, timeouts, CB variants, cancel and status; fixed pools with blocking/try/CB allocate, free, cancel and status; `sceKernelWaitThreadEnd`/`CB`; `sceKernelWaitSemaCB` |
 | LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
@@ -61,8 +62,8 @@ dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
 |---|---:|
 | Module / entry | `9th`, `0x08972544` |
 | Load base / image end | `0x08804000` / `0x08B37DCC` |
-| Bound imports at this boot depth | 108 / 215 |
-| Executed imports | 38 (all bound) |
+| Bound imports at this boot depth | 118 / 215 |
+| Executed imports | 58 (all bound) |
 | Missing / silent NIDs | 0 |
 | First real flip | `0x04088000`, width 512, format 3 |
 
@@ -71,12 +72,15 @@ module init; the gate reports only a buffer with a non-zero width. Two
 bounded runs with the same inputs produce identical dispatch, virtual-time,
 import and stop fields (TC-6.4).
 
-Deeper execution (after four vblanks) now passes the former VFPU gap: the T5a
-fix lowers `vcrs`, `vdet`, `vbfy1/2`, `vi2uc/c/us/s` and
-`vt4444/5551/5650`, and the regenerated corpus contains no unlowered VFPU
-words. The next blocker is an HLE gap, not codegen:
-`Missing HLE import ThreadManForUser::sceKernelCreateMsgPipe
-(NID_0x7C0DC2A0)` at 387 dispatches. Details are in `BRINGUP.md`.
+Deeper execution (after four vblanks) passes the former VFPU gap (T5a) and the
+ThreadMan object gap (T6e). The corpus contains no unlowered VFPU words, and
+every import executed at this depth is bound. The run now reaches 20,612
+dispatches, 118/215 imports bound, 58 executed (including
+`sceKernelCreateMsgPipe`, `sceKernelCreateFpl`,
+`sceKernelTryAllocateFpl`, `sceKernelTryReceiveMsgPipe` and
+`sceKernelWaitSemaCB`), with zero missing or silent NIDs. The next blocker is
+the audio library: `Missing HLE import sceAudio::sceAudioChReserve
+(NID_0x5EC81C55)`. Details are in `BRINGUP.md`.
 
 ## Module registry (T6d, VERIFIED)
 

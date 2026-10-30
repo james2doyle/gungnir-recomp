@@ -101,7 +101,7 @@
         "GE fixtures pass on Vulkan (T7)"
       ],
       "evidence": {
-        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 108/215 imports bound at boot depth, 38 executed all bound, zero missing/silent NIDs, first presentable frame buffer 0x04088000 512x272 format 3; VFPU gap fixed, deeper run now stops at sceKernelCreateMsgPipe after 387 dispatches",
+        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 118/215 imports bound at boot depth, 58 executed all bound, zero missing/silent NIDs, first presentable frame buffer 0x04088000 512x272 format 3; VFPU and ThreadMan object gaps fixed, deeper run now stops at sceAudioChReserve after 20,612 dispatches",
         "tests": "63 tests green; tests/test_boot.py (TC-6.2 first flip, TC-6.4 identical bounded reports), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp",
         "gates": [
           "tools/repository_check.py PASS (101 files, 17 ignore probes)",
@@ -127,8 +127,8 @@
       ],
       "open": [
         "T7 Vulkan GE renderer + GE fixtures (required to close M3)",
-        "deeper boot past the HLE gap at sceKernelCreateMsgPipe (NID_0x7C0DC2A0)",
-        "remaining ThreadMan objects exposed by continuing the boot (FPL, message pipes, wait-thread-end)"
+        "deeper boot past the audio gap at sceAudioChReserve (NID_0x5EC81C55), tracked as T6f",
+        "remaining HLE objects exposed by continuing the boot (audio output channels, then further libraries)"
       ]
     },
     "M4": {

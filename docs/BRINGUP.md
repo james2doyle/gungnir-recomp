@@ -262,3 +262,54 @@ hand-computed memory results and passes both tiers.
 `Missing HLE import ThreadManForUser::sceKernelCreateMsgPipe
 (NID_0x7C0DC2A0)`; message pipes, FPLs and the remaining ThreadMan wait
 objects are the next boot-depth work.
+
+## 2026-10-30 — T6e: ThreadMan message pipes, fixed pools and thread-end waits
+
+**Symptom.** After the T5a VFPU fix the deeper boot stopped at
+`Missing HLE import ThreadManForUser::sceKernelCreateMsgPipe
+(NID_0x7C0DC2A0)` after 387 dispatches.
+
+**Falsification.** The import inventory already maps the call and the encoder
+is fine; the stop is HLE coverage, not codegen. The imported object family is
+consistent: message pipes (create/delete/send/receive/try/CB/cancel/refer),
+fixed pools (create/delete/allocate/try/CB/free/cancel/refer) and
+`sceKernelWaitThreadEnd`/`CB`. The ABI contract came from the pinned PSPSDK
+headers (BSD-3-Clause, already used for the NID registry); PPSSPP behaviour
+was consulted only as a diff oracle, with no code copied.
+
+**Root cause.** The kernel had no message-pipe or fixed-pool models, so the
+first object creation stopped the import dispatcher. `sceKernelWaitThreadEnd`
+was also missing even though the scheduler already had a `ThreadEnd` wait type
+and exit woke those waiters.
+
+**Fix.** `runtime/hle/kernel.*` now models a pipe as a byte stream with an
+optional zero-size direct-transfer mode, FIFO/priority waiter order, timeout
+deadlines and cancel wakeups, and a pool as equal aligned blocks carved from
+one kernel memory block. Both handlers follow the hardware completion rules:
+a full-mode transfer only copies when the whole request fits, an
+ASAP-mode transfer may return short with the transferred byte count, receive
+consumes what is available before blocking, and `CB` variants deliver pending
+callbacks before waiting. Thread-end waits return the target's exit status and
+now wake correctly from `exit` and `terminate`; the first version read the
+waiter's own exit status and reported zero (caught by the contract).
+
+The boot runner test harness cached object files against the `.cpp` mtime
+only, so a header change produced a stale object linked against the new
+library (observed as a crash in `kernel()`). It now invalidates on any runtime
+or framework header change.
+
+**Evidence.** `tests/hle/kernel_tests.cpp` adds message-pipe, fixed-pool and
+thread-end contracts: creation/argument errors, status layouts, partial
+transfers, blocked wakeups, timeouts with remaining-time clearing, cancel
+counts, and unknown-id errors. Mutation check: removing the receiver's
+sender-pump makes "freeing eight bytes wakes the sender" fail; restored code
+passes. The bounded boot now advances 387 → 752 (WaitSemaCB) → 20,612
+dispatches with 118/215 imports bound and 58 executed, all bound, zero
+missing or silent NIDs. The executed set includes `CreateMsgPipe`,
+`TryReceiveMsgPipe`, `CreateFpl`, `TryAllocateFpl` and `WaitSemaCB`, so the
+new paths are exercised by the game, not only by unit fixtures.
+
+**Next blocker (audio, not ThreadMan).** The run stops at
+`Missing HLE import sceAudio::sceAudioChReserve (NID_0x5EC81C55)`; output
+channel reservation/output is the next boot-depth task (T6f). Full SAS/ATRAC
+synthesis remains T12.

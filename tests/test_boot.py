@@ -66,13 +66,26 @@ class TestBoundedBoot(unittest.TestCase):
         if bld.returncode != 0:
             raise RuntimeError(f"gungnir_hle build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
 
+        # Object files must also be rebuilt when a runtime or framework
+        # header changes: the generated units include them, and a stale object
+        # linked against a newer library is an ABI mismatch, not a cache hit.
+        header_roots = [REPO / "runtime", REPO / "third_party" / "yakumo" / "include",
+                        REPO / "third_party" / "yakumo" / "src", GENERATED]
+        headers = [path for root in header_roots for path in root.rglob("*.hpp")]
+        headers += [path for root in header_roots for path in root.rglob("*.h")]
+        newest_header = max((path.stat().st_mtime for path in headers), default=0.0)
+
+        def up_to_date(obj, source):
+            return obj.exists() and obj.stat().st_mtime >= source.stat().st_mtime \
+                and obj.stat().st_mtime >= newest_header
+
         sources = sorted(GENERATED.glob("generated_unit_*.cpp"))
         if not sources:
             raise unittest.SkipTest("generated corpus is empty")
 
         def compile_unit(src):
             obj = cls.obj_dir / (src.stem + ".o")
-            if obj.exists() and obj.stat().st_mtime >= src.stat().st_mtime:
+            if up_to_date(obj, src):
                 return None
             proc = subprocess.run([*cls.compiler, "-std=c++20", "-O0", "-g0",
                                    *cls.include, "-c", str(src), "-o", str(obj)],
@@ -87,7 +100,7 @@ class TestBoundedBoot(unittest.TestCase):
 
         registry = GENERATED / "generated_registry.cpp"
         registry_obj = cls.obj_dir / "generated_registry.o"
-        if not registry_obj.exists() or registry_obj.stat().st_mtime < registry.stat().st_mtime:
+        if not up_to_date(registry_obj, registry):
             proc = subprocess.run([*cls.compiler, "-std=c++20", "-O0", "-g0",
                                    *cls.include, "-c", str(registry), "-o", str(registry_obj)],
                                   capture_output=True, text=True)
@@ -95,7 +108,7 @@ class TestBoundedBoot(unittest.TestCase):
                 raise RuntimeError(f"registry compile failed:\n{proc.stderr[-4000:]}")
 
         runner_obj = cls.obj_dir / "boot_runner.o"
-        if not runner_obj.exists() or runner_obj.stat().st_mtime < BOOT_SOURCE.stat().st_mtime:
+        if not up_to_date(runner_obj, BOOT_SOURCE):
             proc = subprocess.run([*cls.compiler, "-std=c++20", "-O2", "-g0",
                                    *cls.include, "-c", str(BOOT_SOURCE), "-o", str(runner_obj)],
                                   capture_output=True, text=True)
