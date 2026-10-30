@@ -43,10 +43,33 @@ cross-library alias path, and a bound handler invocation.
 | Registrar + NID registry | VERIFIED (T6a) | `runtime/hle/hle_common.*` |
 | Kernel (cooperative threads, semas, eventflags, mutexes, VTimers, memory partitions) | VERIFIED (T6b) | adapted MIT Yakumo kernel; deterministic unpaced clock for tests |
 | ThreadMan / SysMem / IoFileMgr | VERIFIED (T6b) | TC-6.1 unit fixtures: memory, create/start/exit/delay, sema/eventflag blocking, VTimer interrupt, ISO disc read + memory-stick write/read |
-| LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock | 
-| Display / GE / Ctrl | PLANNED (T6c) | first `sceDisplaySetFrameBuf` is TC-6.2 |
-| sceRtc | PARTIAL | local clock implemented; Gungnir imports `sceRtcGetCurrentTick`, still pending T6c |
+| VPL / lightweight mutex (T6c boot discoveries) | VERIFIED | create/delete/try-allocate/free/refer pools; work-area LW mutexes shared by ThreadMan and Kernel_Library aliases |
+| LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
+| Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
+| sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
+| sceRtc | VERIFIED | `sceRtcGetCurrentTick` plus local wall clock, both advancing with the virtual PSP clock |
 | ModuleMgr PRX overlay tiers | PLANNED (T6d) | translate-on-load, unregister-on-unload (TC-6.3) |
+
+## Bounded boot evidence (T6c, VERIFIED)
+
+`tests/hle/boot_runner.cpp` loads the decrypted main module at `0x08804000`,
+registers the AOT corpus and the boot HLE, and runs from the entry with
+dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
+
+| Figure | Value |
+|---|---:|
+| Module / entry | `9th`, `0x08972544` |
+| Load base / image end | `0x08804000` / `0x08B37DCC` |
+| Bound imports at this boot depth | 108 / 215 |
+| Executed imports | 38 (all bound) |
+| Missing / silent NIDs | 0 |
+| First real flip | `0x04088000`, width 512, format 3 |
+
+The first `sceDisplaySetFrameBuf` call is a zero-width display-off call from
+module init; the gate reports only a buffer with a non-zero width. Deeper
+execution (after four vblanks) currently stops on an AOT codegen gap for
+VFPU4 matrix operations at `0x0899BD90`; that is tracked separately from T6c
+and is not an HLE coverage failure. Details are in `BRINGUP.md`.
 
 ## T6c references rechecked (2026-10-30)
 

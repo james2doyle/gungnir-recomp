@@ -723,6 +723,12 @@ void Kernel::release_mutex_waiters(SceUID uid) {
         if (thread == nullptr || thread->status != ThreadStatus::Waiting) continue;
         mutex.owner = thread->uid;
         mutex.lock_count = static_cast<std::int32_t>(thread->wait.value);
+        if (mutex.workarea != 0u) {
+            runtime_->memory().store32(mutex.workarea, static_cast<std::uint32_t>(mutex.lock_count));
+            runtime_->memory().store32(mutex.workarea + 4u, static_cast<std::uint32_t>(mutex.owner));
+            runtime_->memory().store32(
+                mutex.workarea + 12u, static_cast<std::uint32_t>(mutex.waiters.size()));
+        }
         wake(*thread, 0u);
     }
 }
@@ -868,8 +874,14 @@ void Kernel::on_vblank() {
     ++vblank_count_;
     for (auto &[uid, thread] : threads_) {
         (void)uid;
-        if (thread->status == ThreadStatus::Waiting && thread->wait.type == WaitType::VBlank)
-            wake(*thread, thread->context.gpr[2]);
+        if (thread->status != ThreadStatus::Waiting || thread->wait.type != WaitType::VBlank) continue;
+        // Multi-vblank waits park the count in `value`; `wake` restores the
+        // result the handler saved in the thread context.
+        if (thread->wait.value > 1u) {
+            --thread->wait.value;
+            continue;
+        }
+        wake(*thread, thread->context.gpr[2]);
     }
     const auto handlers = sub_interrupts.find(kVBlankInterrupt);
     if (handlers == sub_interrupts.end()) return;

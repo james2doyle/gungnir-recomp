@@ -74,7 +74,10 @@ public:
         unsigned index = 0;
         for (const std::uint32_t value : args) ctx.set_gpr(4u + index++, value);
         ctx.set_gpr(31, kReturnAddress);
-        runtime.invoke_import(library, nids_by_name.at({library, name}), ctx);
+        const auto found = nids_by_name.find({library, name});
+        if (found == nids_by_name.end())
+            throw std::runtime_error("no NID for " + library + "::" + name);
+        runtime.invoke_import(library, found->second, ctx);
         return ctx.gpr[2];
     }
 
@@ -194,6 +197,69 @@ void sync_contracts() {
     check(f.thread("sceKernelDeleteEventFlag", {flag}) == 0u, "event flag deleted");
 }
 
+void vpl_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &mem = f.runtime.memory();
+    f.write_string(Fixture::kText, "vpl");
+    const auto vpl = f.thread("sceKernelCreateVpl", {Fixture::kText, 1u, 0u, 0x1000u, 0u});
+    check(static_cast<std::int32_t>(vpl) > 0, "variable pool created");
+    check(f.thread("sceKernelTryAllocateVpl", {vpl, 0x100u, Fixture::kOutput}) == 0u,
+          "variable allocation succeeds");
+    const std::uint32_t first = mem.load32(Fixture::kOutput);
+    check(f.thread("sceKernelTryAllocateVpl", {vpl, 0x100u, Fixture::kOutput + 4u}) == 0u,
+          "second variable allocation succeeds");
+    const std::uint32_t second = mem.load32(Fixture::kOutput + 4u);
+    check(first != second, "allocations do not overlap");
+    check((first & 0x3Fu) == 0u && (second & 0x3Fu) == 0u, "allocations are 64-byte aligned");
+
+    check(f.thread("sceKernelReferVplStatus", {vpl, Fixture::kOutput + 0x40u}) == 0u,
+          "variable pool status reads");
+    check(mem.load32(Fixture::kOutput + 0x40u) == 52u, "status struct size");
+    check(mem.load32(Fixture::kOutput + 0x40u + 40u) >= 0x1000u, "pool size reported");
+    check(mem.load32(Fixture::kOutput + 0x40u + 44u) <= 0x1000u - 0x200u, "free size reported");
+
+    check(f.thread("sceKernelFreeVpl", {vpl, first}) == 0u, "variable allocation freed");
+    check(f.thread("sceKernelTryAllocateVpl", {vpl, 0x100u, Fixture::kOutput + 8u}) == 0u,
+          "freed space is reusable");
+    check(mem.load32(Fixture::kOutput + 8u) == first, "first-fit reuses the freed gap");
+    check(static_cast<std::uint32_t>(f.thread("sceKernelTryAllocateVpl",
+              {vpl, 0x2000u, Fixture::kOutput + 12u})) == gungnir::hle::error::kIllegalMemsize,
+          "oversized allocation rejects");
+    check(f.thread("sceKernelDeleteVpl", {vpl}) == 0u, "variable pool deleted");
+}
+
+void lwmutex_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &mem = f.runtime.memory();
+    const std::uint32_t work = Fixture::kOutput;
+    f.write_string(Fixture::kText, "lwmutex");
+    check(f.thread("sceKernelCreateLwMutex", {work, Fixture::kText, 0u, 0u, 0u}) == 0u,
+          "lightweight mutex creates through its work area");
+    const std::uint32_t uid = mem.load32(work + 16u);
+    check(static_cast<std::int32_t>(uid) > 0, "work area records the object id");
+    check(mem.load32(work) == 0u, "work area starts unlocked");
+
+    check(f.call("Kernel_Library", "sceKernelLockLwMutex", {work, 1u, 0u}) == 0u,
+          "lock through the kernel alias library");
+    check(mem.load32(work) == 1u, "work area lock level");
+    check(mem.load32(work + 4u) == static_cast<std::uint32_t>(f.k.current_uid()),
+          "work area owner is the caller");
+    check(f.call("Kernel_Library", "sceKernelUnlockLwMutex", {work, 1u}) == 0u, "unlock succeeds");
+    check(mem.load32(work) == 0u && mem.load32(work + 4u) == 0u, "work area is unlocked");
+
+    check(f.thread("sceKernelCreateLwMutex", {work, Fixture::kText, 0x200u, 1u, 0u}) == 0u,
+          "recursive lightweight mutex creates locked");
+    check(mem.load32(work) == 1u && mem.load32(work + 4u) != 0u, "initial lock recorded");
+    check(f.call("Kernel_Library", "sceKernelLockLwMutex", {work, 2u, 0u}) == 0u,
+          "recursive lock succeeds");
+    check(mem.load32(work) == 3u, "recursive lock level accumulates");
+    check(f.call("Kernel_Library", "sceKernelUnlockLwMutex", {work, 3u}) == 0u,
+          "recursive unlock succeeds");
+    check(mem.load32(work) == 0u, "recursive mutex fully unlocked");
+    check(f.thread("sceKernelDeleteLwMutex", {work}) == 0u, "lightweight mutex deleted");
+    check(mem.load32(work + 16u) == 0xFFFFFFFFu, "deleted work area is cleared");
+}
+
 int g_timer_fired = 0;
 
 void timer_handler(Runtime &, AllegrexContext &ctx) {
@@ -305,6 +371,8 @@ int main(int argc, char **argv) {
         sync_contracts();
         blocking_sync_contracts();
         alarm_contracts();
+        vpl_contracts();
+        lwmutex_contracts();
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);
             io_contracts(iso, memory_stick);

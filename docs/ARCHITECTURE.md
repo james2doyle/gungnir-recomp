@@ -16,7 +16,8 @@ runtime/hle/           adapted MIT kernel + HLE: cooperative scheduler,
                        ThreadMan/SysMem/IO, guest exit stubs, registrar
 tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
                        (our authorship; .mips text sources, ELF built into build/)
-tests/hle/             kernel/HLE contracts (memory, threads, sync, timers, IO)
+tests/hle/             kernel/HLE contracts (memory, threads, sync, timers,
+                       IO, display/GE/ctrl) and the bounded boot runner
 ```
 
 Nothing under `third_party/` is hand-edited without a recorded patch in its
@@ -70,8 +71,10 @@ scope for user-mode guest code. Out-of-window accesses throw a named
   dispatch level; blocking saves the caller context and switches to the next
   ready thread through the runtime identity hook.
 - Interactive boots pace virtual time to 59.94 Hz (`16,683 µs`); unit
-  fixtures disable pacing for deterministic traces. The boot runner is the
-  next T6c deliverable.
+  fixtures and the bounded boot runner disable pacing for deterministic
+  traces. `tests/hle/boot_runner.cpp` runs the real module from its entry
+  with dispatch and wall-clock limits and stops at the first presentable
+  frame buffer.
 
 ## Fixture pipeline (T4 proof)
 

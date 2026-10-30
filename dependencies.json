@@ -9,7 +9,7 @@
       "license": "MIT",
       "license_file": "third_party/yakumo/LICENSE",
       "path": "third_party/yakumo",
-      "digest": "224a5be0e424ae1e921c72cdc3d56d9af15a3a8e0c6b2461b2a9df7bc4f4b9ca",
+      "digest": "80bb17b37492dee1ce34769fbcd006bc4ad3a356cc78a03be1c337271c2a552a",
       "provenance": "third_party/yakumo/PROVENANCE.md",
       "note": "ELF32/PRX loader, ISO9660 reader, PARAM.SFO, guest memory, framework core, CLI tooling; kernel/HLE adapted outside the digest tree (see provenance)"
     },

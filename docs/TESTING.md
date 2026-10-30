@@ -92,7 +92,14 @@ skips when the private disc is absent; it never passes silently.
   unbound import stops with `Missing HLE import … (NID_0x…)`, never a silent
   zero. `tests/hle/kernel_tests.cpp` covers memory partitions, thread
   lifecycle/preemption/delay, semaphores, event flags, blocking waits, VTimer
-  interrupts, and ISO disc + memory-stick IO.
+  interrupts, VPLs, lightweight mutexes, and ISO disc + memory-stick IO.
+  `tests/hle/media_tests.cpp` covers display mode/flip/vblank/multi-wait/
+  frame-rate, controller sampling and vblank-blocking reads, GE callback and
+  list completion, EDRAM, and the RTC tick.
+- `tests/test_boot.py` (TC-6.2): builds the real-module boot runner against
+  the T5 corpus and requires module init to reach a non-zero-width
+  `sceDisplaySetFrameBuf`, with every executed import bound and no missing or
+  silent NID.
 
 ## Commands
 

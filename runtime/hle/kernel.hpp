@@ -63,6 +63,8 @@ inline constexpr std::uint32_t kMutexUnlocked = 0x800201C5u;
 inline constexpr std::uint32_t kMutexLockOverflow = 0x800201C6u;
 inline constexpr std::uint32_t kMutexUnlockUnderflow = 0x800201C7u;
 inline constexpr std::uint32_t kMutexRecursiveNotAllowed = 0x800201C8u;
+inline constexpr std::uint32_t kUnknownVplid = 0x800201BBu;
+inline constexpr std::uint32_t kIllegalMemsize = 0x800201BCu;
 } // namespace error
 
 // Guest addresses reserved by the host. 0x08800000..0x08804000 lies in user
@@ -153,6 +155,10 @@ struct Mutex {
     SceUID owner{};
     std::int32_t lock_count{};
     std::deque<SceUID> waiters;
+    // Guests using the lightweight form keep the state in their own work
+    // area; when set, the kernel mirrors lock level and owner there as the
+    // mutex changes hands.
+    std::uint32_t workarea{};
 };
 
 struct Callback {
@@ -179,6 +185,16 @@ struct MemoryBlock {
     std::string name;
     std::uint32_t address{};
     std::uint32_t size{};
+};
+
+// Variable-size pool: one kernel memory block divided into guest allocations.
+struct Vpl {
+    std::string name;
+    std::uint32_t attributes{};
+    std::uint32_t pool_address{};
+    std::uint32_t pool_size{};
+    SceUID pool_block{};
+    std::map<std::uint32_t, std::uint32_t> allocations; // guest address -> size
 };
 
 struct SubInterruptHandler {
@@ -281,6 +297,7 @@ public:
     std::map<SceUID, Semaphore> semaphores;
     std::map<SceUID, EventFlag> event_flags;
     std::map<SceUID, Mutex> mutexes;
+    std::map<SceUID, Vpl> vpls;
     std::map<SceUID, Callback> callbacks;
     std::map<SceUID, VTimer> vtimers;
     // Re-evaluates the waiters of an object after its state changed.

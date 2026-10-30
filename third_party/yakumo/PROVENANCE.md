@@ -97,12 +97,15 @@ everything else: title-specific, out of scope.
 ## Adapted files outside this tree
 
 `runtime/hle/hle_common.*`, `kernel.*`, `hle_sysmem.cpp`,
-`hle_threadman.cpp`, `hle_system.cpp`, and `hle_io.cpp` adapt
-`profiles/mhp3rd/host/hle/*` and `profiles/mhp3rd/host/kernel/*` (MIT, same
-pinned commit). Changes: namespace `gungnir::hle`; profile-only includes
-(mods, translation, overlays, fast loading/forward, frame stats, settings)
-removed; pacing is an explicit switch; 32 MiB user-memory end; the registrar
-gains cross-library alias resolution and ambiguity refusal. These files are not
+`hle_threadman.cpp`, `hle_system.cpp`, `hle_io.cpp`, and the display/GE/ctrl
+parts of `hle_media.*` adapt `profiles/mhp3rd/host/hle/*` and
+`profiles/mhp3rd/host/kernel/*` (MIT, same pinned commit). Changes: namespace `gungnir::hle`; profile-only includes
+(mods, translation, overlays, renderer, audio, input, fast loading/forward,
+frame stats, settings) removed; pacing is an explicit switch; 32 MiB
+user-memory end; the registrar gains cross-library alias resolution and
+ambiguity refusal. `hle_media.cpp` keeps only timing/callback/EDRAM semantics;
+the GE list walk is a completion seam until the T7 renderer supplies command
+decoding. These files are not
 part of the digest-verified subtree above; keep their attribution here when
 they change.
 

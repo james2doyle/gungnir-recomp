@@ -129,3 +129,73 @@ which bind only what the CSV resolves and still exercise every intended path.
 inventory against bound `(library, NID)` pairs before/at the end of the
 bounded run, so an unwittingly skipped handler is counted rather than assumed
 optional.
+
+## 2026-10-30 — T6c: boot stops on missing VPL and lightweight mutex handlers
+
+**Symptom.** After module entry, the bounded boot stopped at
+`Missing HLE import ThreadManForUser::sceKernelCreateVpl (NID_0x56C039B5)`;
+the next run stopped at `sceKernelCreateLwMutex (NID_0x19CFF145)`.
+
+**Falsification.** Both NIDs resolve through `configs/nids.csv`, and Gungnir
+imports the whole family (create/delete/try-allocate/free/refer VPLs;
+create/delete/lock/unlock LW mutexes through both ThreadMan and
+Kernel_Library aliases). The registrations, not the registry, were
+incomplete.
+
+**Root cause.** The adapted MHP3rd boot set never needed these objects, so
+they were absent even though the interface names were known.
+
+**Fix.** Added VPLs to `Kernel` (one partition block per pool, first-fit
+64-byte-aligned guest allocations, free by address, status report) and LW
+mutexes over the existing mutex scheduler with the guest work area mirrored
+on every ownership change. `Kernel_Library` aliases register the same
+handlers. The VPL blocking form reports no memory instead of parking the
+caller; boot traffic uses the try form.
+
+**Regression.** `tests/hle/kernel_tests.cpp` (`vpl_contracts`,
+`lwmutex_contracts`) and the T6c boot suite.
+
+**Follow-up.** The non-blocking `sceKernelAllocateVpl` shortcut must gain a
+proper wait type if a later boot path depends on blocking allocation.
+
+## 2026-10-30 — T6c: first display call is a display-off call
+
+**Symptom.** Stopping on the first `sceDisplaySetFrameBuf` produced
+`framebuffer=0x00000000 width=0 format=1`, before any vblank, which would
+make a poor M3 evidence point.
+
+**Falsification.** The guest calls `sceDisplaySetFrameBuf` during init with a
+zero-width buffer to turn the display off; it sets the real 512x272 buffer
+later in the same boot path.
+
+**Root cause.** Treating every call as a presentable flip. The hardware call
+also serves as display enable/disable.
+
+**Fix.** The media state counts every call but only invokes the host flip
+observer when `buffer_width != 0`. The boot gate now waits for
+`0x04088000`, width 512, format 3.
+
+**Regression.** `tests/hle/media_tests.cpp::display_contracts` and
+`tests/test_boot.py::test_boot_reaches_first_frame_buffer`.
+
+## 2026-10-30 — T6c next blocker: unlowered VFPU4 matrix operations
+
+**Symptom.** Continuing past the first flip (four vblanks, 233 outer
+dispatches) stops with
+`Unsupported Allegrex instruction 0xD0428080 at 0x0899BD90: vfpu4 not lowered yet`.
+
+**Falsification.** The instruction is valid Allegrex VFPU4 (group 2, function
+2, a matrix operation), not data decoded as code. The generated corpus emits
+an explicit `unsupported` for 33 such words across a handful of units
+(`0xD03C8080`, `0xD0428080`, `0xD0420181`, `0xD05B8xxx`, `0x6701xxxx`).
+
+**Root cause.** AOT codegen covers the VFPU forms exercised by the T4 fuzz
+and fixture suite but not the VFPU4 matrix-init/sort encodings this title
+uses. This is plan gotcha C.3 (missing encoding = hard runtime stop), not an
+HLE gap.
+
+**Fix.** None in T6c; the first-flip criterion is met before this address.
+Tracked as a T5 follow-up and required before T6d/M3 can claim a deeper boot.
+
+**Regression.** `tests/test_boot.py` pins the current first-flip boundary;
+extending the boot run will expose the VFPU fix.

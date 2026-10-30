@@ -4,7 +4,9 @@
 
 #include "psprecomp/common.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <optional>
 
 namespace gungnir::hle {
 namespace {
@@ -474,6 +476,277 @@ void register_kernel_library(HleRegistrar &hle) {
     });
 }
 
+constexpr std::uint32_t kVplAlignment = 0x40u;
+constexpr std::uint32_t kVplInfoSize = 52u;
+
+std::optional<std::uint32_t> vpl_candidate(Vpl &vpl, std::uint32_t size) {
+    if (size == 0u || size > vpl.pool_size) return std::nullopt;
+    const auto try_gap = [size](std::uint32_t start, std::uint32_t end) -> std::optional<std::uint32_t> {
+        const std::uint32_t aligned = (start + kVplAlignment - 1u) & ~(kVplAlignment - 1u);
+        if (static_cast<std::uint64_t>(aligned) + size <= end) return aligned;
+        return std::nullopt;
+    };
+    std::uint32_t start = vpl.pool_address;
+    for (const auto &[address, allocated] : vpl.allocations) {
+        if (const auto candidate = try_gap(start, address)) return candidate;
+        start = std::max(start, address + allocated);
+    }
+    return try_gap(start, vpl.pool_address + vpl.pool_size);
+}
+
+std::uint32_t vpl_free_size(const Vpl &vpl) {
+    std::uint32_t used = 0u;
+    for (const auto &[address, size] : vpl.allocations) {
+        (void)address;
+        used += size;
+    }
+    return vpl.pool_size - used;
+}
+
+void register_vpl(HleRegistrar &hle) {
+    hle.add("ThreadManForUser", "sceKernelCreateVpl", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::string name = read_cstring(rt.memory(), arg(ctx, 0), 32u);
+        const std::uint32_t attributes = arg(ctx, 2);
+        std::uint32_t size = arg(ctx, 3);
+        if (size == 0u || size >= 0x80000000u) {
+            kernel().finish(ctx, error::kIllegalMemsize);
+            return;
+        }
+        if (size <= 0x30u) size = 0x1000u;
+        size = (size + 7u) & ~7u;
+        const std::int32_t block = kernel().allocate_block("VPL/" + name,
+            (attributes & 0x00010000u) != 0u ? 1u : 0u, size, 0u);
+        if (block < 0) {
+            kernel().finish(ctx, error::kNoMemory);
+            return;
+        }
+        const MemoryBlock *pool = kernel().find_block(block);
+        Vpl vpl{};
+        vpl.name = name;
+        vpl.attributes = attributes;
+        vpl.pool_address = pool->address;
+        vpl.pool_size = pool->size;
+        vpl.pool_block = block;
+        const SceUID uid = kernel().allocate_uid();
+        kernel().vpls[uid] = std::move(vpl);
+        kernel().finish(ctx, as_unsigned(uid));
+    });
+    hle.add("ThreadManForUser", "sceKernelDeleteVpl", [](Runtime &, AllegrexContext &ctx) {
+        const auto found = kernel().vpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().vpls.end()) {
+            kernel().finish(ctx, error::kUnknownVplid);
+            return;
+        }
+        (void)kernel().free_block(found->second.pool_block);
+        kernel().vpls.erase(found);
+        kernel().finish(ctx, 0u);
+    });
+    const auto try_allocate = [](Runtime &rt, AllegrexContext &ctx) {
+        const auto found = kernel().vpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().vpls.end()) {
+            kernel().finish(ctx, error::kUnknownVplid);
+            return;
+        }
+        const std::uint32_t size = arg(ctx, 1);
+        if (size == 0u || size > found->second.pool_size) {
+            kernel().finish(ctx, error::kIllegalMemsize);
+            return;
+        }
+        const auto address = vpl_candidate(found->second, size);
+        if (!address) {
+            kernel().finish(ctx, error::kNoMemory);
+            return;
+        }
+        found->second.allocations[*address] = size;
+        rt.memory().store32(arg(ctx, 2), *address);
+        kernel().finish(ctx, 0u);
+    };
+    hle.add("ThreadManForUser", "sceKernelTryAllocateVpl", try_allocate);
+    hle.add("ThreadManForUser", "sceKernelAllocateVpl", [try_allocate](Runtime &rt, AllegrexContext &ctx) {
+        // No blocking path yet: a full pool reports no memory instead of
+        // parking the caller. Boot traffic uses the try form.
+        try_allocate(rt, ctx);
+    });
+    hle.add("ThreadManForUser", "sceKernelFreeVpl", [](Runtime &, AllegrexContext &ctx) {
+        const auto found = kernel().vpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().vpls.end()) {
+            kernel().finish(ctx, error::kUnknownVplid);
+            return;
+        }
+        const auto allocation = found->second.allocations.find(arg(ctx, 1));
+        if (allocation == found->second.allocations.end()) {
+            kernel().finish(ctx, error::kIllegalMemblock);
+            return;
+        }
+        found->second.allocations.erase(allocation);
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("ThreadManForUser", "sceKernelReferVplStatus", [](Runtime &rt, AllegrexContext &ctx) {
+        const auto found = kernel().vpls.find(as_signed(arg(ctx, 0)));
+        if (found == kernel().vpls.end()) {
+            kernel().finish(ctx, error::kUnknownVplid);
+            return;
+        }
+        auto &memory = rt.memory();
+        const std::uint32_t out = arg(ctx, 1);
+        memory.store32(out, kVplInfoSize);
+        write_cstring(memory, out + 4u, found->second.name, 32u);
+        memory.store32(out + 36u, found->second.attributes);
+        memory.store32(out + 40u, found->second.pool_size);
+        memory.store32(out + 44u, vpl_free_size(found->second));
+        memory.store32(out + 48u, 0u);
+        kernel().finish(ctx, 0u);
+    });
+}
+
+constexpr std::uint32_t kLwMutexWorkSize = 32u;
+
+void mirror_lwmutex(psprecomp::GuestMemory &memory, std::uint32_t workarea, const Mutex &mutex) {
+    if (workarea == 0u) return;
+    memory.store32(workarea, static_cast<std::uint32_t>(mutex.lock_count));
+    memory.store32(workarea + 4u, static_cast<std::uint32_t>(mutex.owner));
+    memory.store32(workarea + 12u, static_cast<std::uint32_t>(mutex.waiters.size()));
+}
+
+std::int32_t lwmutex_uid(psprecomp::GuestMemory &memory, std::uint32_t workarea) {
+    return static_cast<std::int32_t>(memory.load32(workarea + 16u));
+}
+
+void register_lwmutex(HleRegistrar &hle) {
+    const auto create = [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t workarea = arg(ctx, 0);
+        const std::string name = read_cstring(rt.memory(), arg(ctx, 1), 32u);
+        const std::uint32_t attributes = arg(ctx, 2);
+        const auto initial = static_cast<std::int32_t>(arg(ctx, 3));
+        if (workarea == 0u || (workarea & 3u) != 0u) {
+            kernel().finish(ctx, error::kIllegalArgument);
+            return;
+        }
+        if (attributes >= 0x400u) {
+            kernel().finish(ctx, error::kIllegalArgument);
+            return;
+        }
+        if (initial < 0 || (initial > 1 && (attributes & kMutexAttrRecursive) == 0u)) {
+            kernel().finish(ctx, error::kIllegalCount);
+            return;
+        }
+        auto &memory = rt.memory();
+        for (std::uint32_t offset = 0; offset < kLwMutexWorkSize; offset += 4u) memory.store32(workarea + offset, 0u);
+        const SceUID uid = kernel().allocate_uid();
+        Mutex mutex{};
+        mutex.name = name;
+        mutex.attributes = attributes;
+        mutex.owner = initial > 0 ? kernel().current_uid() : 0;
+        mutex.lock_count = initial;
+        mutex.workarea = workarea;
+        kernel().mutexes[uid] = mutex;
+        mirror_lwmutex(memory, workarea, mutex);
+        memory.store32(workarea + 8u, attributes);
+        memory.store32(workarea + 16u, static_cast<std::uint32_t>(uid));
+        kernel().finish(ctx, 0u);
+    };
+    hle.add("ThreadManForUser", "sceKernelCreateLwMutex", create);
+
+    hle.add("ThreadManForUser", "sceKernelDeleteLwMutex", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t workarea = arg(ctx, 0);
+        if (workarea == 0u) {
+            kernel().finish(ctx, error::kIllegalArgument);
+            return;
+        }
+        const auto found = kernel().mutexes.find(lwmutex_uid(rt.memory(), workarea));
+        if (found == kernel().mutexes.end()) {
+            kernel().finish(ctx, error::kMutexNotFound);
+            return;
+        }
+        kernel().cancel_waiters(found->second.waiters, error::kWaitDelete);
+        kernel().mutexes.erase(found);
+        auto &memory = rt.memory();
+        memory.store32(workarea, 0u);
+        memory.store32(workarea + 4u, 0xFFFFFFFFu);
+        memory.store32(workarea + 16u, 0xFFFFFFFFu);
+        kernel().finish(ctx, 0u);
+    });
+
+    const auto try_lock = [](Runtime &rt, AllegrexContext &ctx, bool blocking) {
+        const std::uint32_t workarea = arg(ctx, 0);
+        const auto count = static_cast<std::int32_t>(arg(ctx, 1));
+        const auto found = kernel().mutexes.find(lwmutex_uid(rt.memory(), workarea));
+        if (found == kernel().mutexes.end()) {
+            kernel().finish(ctx, error::kMutexNotFound);
+            return;
+        }
+        Mutex &mutex = found->second;
+        if (count <= 0) {
+            kernel().finish(ctx, error::kIllegalCount);
+            return;
+        }
+        if (mutex.owner == kernel().current_uid()) {
+            if ((mutex.attributes & kMutexAttrRecursive) == 0u) {
+                kernel().finish(ctx, error::kMutexLocked);
+                return;
+            }
+            mutex.lock_count += count;
+            mirror_lwmutex(rt.memory(), workarea, mutex);
+            kernel().finish(ctx, 0u);
+            return;
+        }
+        if (mutex.lock_count == 0) {
+            mutex.owner = kernel().current_uid();
+            mutex.lock_count = count;
+            mirror_lwmutex(rt.memory(), workarea, mutex);
+            kernel().finish(ctx, 0u);
+            return;
+        }
+        if (!blocking) {
+            kernel().finish(ctx, error::kMutexLocked);
+            return;
+        }
+        WaitState wait{};
+        wait.type = WaitType::Mutex;
+        wait.object = found->first;
+        wait.value = static_cast<std::uint32_t>(count);
+        wait.timeout_address = arg(ctx, 2);
+        kernel().block(ctx, wait, 0u);
+    };
+    hle.add("ThreadManForUser", "sceKernelLockLwMutex", [try_lock](Runtime &rt, AllegrexContext &ctx) {
+        try_lock(rt, ctx, true);
+    });
+    hle.add("Kernel_Library", "sceKernelLockLwMutex", [try_lock](Runtime &rt, AllegrexContext &ctx) {
+        try_lock(rt, ctx, true);
+    });
+    hle.add("Kernel_Library", "sceKernelTryLockLwMutex", [try_lock](Runtime &rt, AllegrexContext &ctx) {
+        try_lock(rt, ctx, false);
+    });
+
+    const auto unlock = [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t workarea = arg(ctx, 0);
+        const auto count = static_cast<std::int32_t>(arg(ctx, 1));
+        const auto found = kernel().mutexes.find(lwmutex_uid(rt.memory(), workarea));
+        if (found == kernel().mutexes.end()) {
+            kernel().finish(ctx, error::kMutexNotFound);
+            return;
+        }
+        Mutex &mutex = found->second;
+        if (count <= 0) {
+            kernel().finish(ctx, error::kIllegalCount);
+        } else if (mutex.lock_count == 0 || mutex.owner != kernel().current_uid()) {
+            kernel().finish(ctx, error::kMutexUnlocked);
+        } else if (count > mutex.lock_count) {
+            kernel().finish(ctx, error::kMutexUnlockUnderflow);
+        } else {
+            mutex.lock_count -= count;
+            if (mutex.lock_count == 0) {
+                mutex.owner = 0;
+                kernel().release_mutex_waiters(found->first);
+            }
+            mirror_lwmutex(rt.memory(), workarea, mutex);
+            kernel().finish(ctx, 0u);
+        }
+    };
+    hle.add("ThreadManForUser", "sceKernelUnlockLwMutex", unlock);
+    hle.add("Kernel_Library", "sceKernelUnlockLwMutex", unlock);
+}
+
 } // namespace
 
 void register_threadman(HleRegistrar &hle) {
@@ -483,6 +756,8 @@ void register_threadman(HleRegistrar &hle) {
     register_event_flags(hle);
     register_mutexes(hle);
     register_callbacks_and_timers(hle);
+    register_vpl(hle);
+    register_lwmutex(hle);
     register_kernel_library(hle);
 }
 

@@ -147,6 +147,10 @@ void register_platform(HleRegistrar &hle) {
     hle.add("scePower", "scePowerSetClockFrequency630", success);
     hle.add("scePower", "scePowerCheckWlanCoexistenceClock", success);
 
+    hle.add("sceRtc", "sceRtcGetCurrentTick", [](Runtime &rt, AllegrexContext &ctx) {
+        store64(rt.memory(), arg(ctx, 0), guest_unix_us());
+        kernel().finish(ctx, 0u);
+    });
     hle.add("sceRtc", "sceRtcGetCurrentClockLocalTime", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint64_t now = guest_unix_us();
         const auto seconds = static_cast<std::time_t>(now / 1'000'000u);

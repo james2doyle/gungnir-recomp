@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""T6c acceptance — bounded real-module boot to the first display flip.
+
+TC-6.2: the recompiled main module runs from its entry through module init to
+the first real `sceDisplaySetFrameBuf`, with the adapted kernel/HLE boot set,
+under explicit dispatch and wall-clock bounds. Every import that executes is
+bound; an unknown import would have stopped the run with its NID, so the
+report must name none.
+
+Private input: needs the decrypted main module (build/game/manifest.json) and
+the T5 generated corpus (build/profile-test/generated). The suite is skipped
+when either is absent.
+"""
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+BUILD = REPO / "build"
+WORK = BUILD / "profile-test"
+GENERATED = WORK / "generated"
+MANIFEST = BUILD / "game" / "manifest.json"
+GAME_ISO = REPO / "game.iso"
+NIDS = REPO / "configs" / "nids.csv"
+BOOT_SOURCE = REPO / "tests" / "hle" / "boot_runner.cpp"
+
+
+def game_elf():
+    if not MANIFEST.exists():
+        return None
+    manifest = json.loads(MANIFEST.read_text())
+    module = next((m for m in manifest["modules"] if m.get("module_name") == "9th"), None)
+    return MANIFEST.parent / module["path"] if module else None
+
+
+def have_inputs():
+    elf = game_elf()
+    return bool(elf and elf.is_file() and GAME_ISO.exists()
+                and (GENERATED / "generated_registry.cpp").exists())
+
+
+@unittest.skipUnless(have_inputs(), "needs private game input and the T5 generated corpus")
+class TestBoundedBoot(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.obj_dir = WORK / "obj"
+        cls.obj_dir.mkdir(parents=True, exist_ok=True)
+        ccache = shutil.which("ccache")
+        cls.compiler = [ccache, "g++"] if ccache else ["g++"]
+        cls.include = ["-I", str(REPO / "runtime"),
+                       "-I", str(REPO / "third_party" / "yakumo" / "include"),
+                       "-I", str(REPO / "third_party" / "yakumo" / "src"),
+                       "-I", str(GENERATED)]
+        cfg = subprocess.run(["cmake", "-S", str(REPO), "-B", str(BUILD),
+                              "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"],
+                             capture_output=True, text=True)
+        if cfg.returncode != 0:
+            raise RuntimeError(f"cmake configure failed:\n{cfg.stderr}")
+        bld = subprocess.run(["cmake", "--build", str(BUILD), "--target", "gungnir_hle"],
+                             capture_output=True, text=True)
+        if bld.returncode != 0:
+            raise RuntimeError(f"gungnir_hle build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
+
+        sources = sorted(GENERATED.glob("generated_unit_*.cpp"))
+        if not sources:
+            raise unittest.SkipTest("generated corpus is empty")
+
+        def compile_unit(src):
+            obj = cls.obj_dir / (src.stem + ".o")
+            if obj.exists() and obj.stat().st_mtime >= src.stat().st_mtime:
+                return None
+            proc = subprocess.run([*cls.compiler, "-std=c++20", "-O0", "-g0",
+                                   *cls.include, "-c", str(src), "-o", str(obj)],
+                                  capture_output=True, text=True)
+            return (src.name, proc.returncode, proc.stderr[-2000:])
+
+        with ThreadPoolExecutor(max_workers=min(16, os.cpu_count() or 4)) as pool:
+            results = [r for r in pool.map(compile_unit, sources) if r is not None]
+        failures = [(name, err) for name, rc, err in results if rc != 0]
+        if failures:
+            raise RuntimeError(f"generated TU compile failures: {failures[:3]}")
+
+        registry = GENERATED / "generated_registry.cpp"
+        registry_obj = cls.obj_dir / "generated_registry.o"
+        if not registry_obj.exists() or registry_obj.stat().st_mtime < registry.stat().st_mtime:
+            proc = subprocess.run([*cls.compiler, "-std=c++20", "-O0", "-g0",
+                                   *cls.include, "-c", str(registry), "-o", str(registry_obj)],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(f"registry compile failed:\n{proc.stderr[-4000:]}")
+
+        runner_obj = cls.obj_dir / "boot_runner.o"
+        if not runner_obj.exists() or runner_obj.stat().st_mtime < BOOT_SOURCE.stat().st_mtime:
+            proc = subprocess.run([*cls.compiler, "-std=c++20", "-O2", "-g0",
+                                   *cls.include, "-c", str(BOOT_SOURCE), "-o", str(runner_obj)],
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(f"boot runner compile failed:\n{proc.stderr[-4000:]}")
+
+        binary = WORK / "boot_runner"
+        objects = sorted(cls.obj_dir.glob("generated_unit_*.o")) + [
+            registry_obj, runner_obj, BUILD / "libgungnir_hle.a", BUILD / "libyakumo.a"]
+        proc = subprocess.run([*cls.compiler, "-o", str(binary), *map(str, objects)],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"boot runner link failed:\n{proc.stderr[-4000:]}")
+        cls.binary = binary
+        cls.elf = game_elf()
+
+    def run_boot(self, *extra):
+        with tempfile.TemporaryDirectory(prefix="gungnir-boot-") as work:
+            report_path = Path(work) / "boot.json"
+            memory_stick = Path(work) / "ms"
+            memory_stick.mkdir()
+            proc = subprocess.run(
+                [str(self.binary), "--elf", str(self.elf), "--nids", str(NIDS),
+                 "--disc", str(GAME_ISO), "--ms", str(memory_stick),
+                 "--load-base", "0x08804000", "--max-dispatches", "5000000",
+                 "--wall-seconds", "30", "--trace-out", str(report_path), *extra],
+                capture_output=True, text=True, timeout=180)
+            report = json.loads(report_path.read_text()) if report_path.exists() else None
+            return proc, report
+
+    def test_boot_reaches_first_frame_buffer(self):
+        proc, report = self.run_boot()
+        self.assertIsNotNone(report, proc.stderr[-4000:])
+        self.assertEqual(proc.returncode, 0,
+                         f"boot did not reach the first flip:\n{proc.stderr[-4000:]}")
+        self.assertTrue(report["reached_first_frame_buf"], report["stop_reason"])
+        self.assertTrue(report["stop_reason"].startswith("first sceDisplaySetFrameBuf"),
+                        report["stop_reason"])
+        self.assertGreater(report["display_width"], 0)
+        self.assertTrue(report["first_frame_buf"].startswith("0x04"),
+                        "frame buffer should be in the VRAM window")
+
+    def test_no_unbound_import_executed_and_no_silent_nid(self):
+        proc, report = self.run_boot()
+        self.assertIsNotNone(report, proc.stderr[-4000:])
+        self.assertNotIn("Missing HLE import", report["stop_reason"])
+        unbound = set(report["imports_unbound"])
+        executed = set(report["imports_executed"])
+        self.assertEqual(executed & unbound, set(),
+                         "an import executed without an HLE binding")
+        self.assertGreater(report["imports_bound"], 100)
+        self.assertGreater(len(executed), 20, "boot should exercise the HLE boot set")
+        self.assertGreater(report["dispatches"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
