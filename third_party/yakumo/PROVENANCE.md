@@ -6,7 +6,7 @@
 | Commit | `b61852aef10870400320b96d92a14136ac17b051` |
 | License | MIT (repo root `LICENSE`, copied here verbatim) |
 | Imported | 2026-10-30 (framework core + tooling added with T4) |
-| Disposition | **byte-identical except six recorded local patches** (see “Local patches”) |
+| Disposition | **byte-identical except seven recorded local patches** (see “Local patches”) |
 
 ## Files
 
@@ -93,6 +93,15 @@ everything else: title-specific, out of scope.
    (`addiu $sp,$sp,-N`), catching adjacent functions with no direct call or
    relocated pointer. T5 evidence: 3,221 candidate starts, 5 not already
    discovered by other sources.
+
+## Adapted files outside this tree
+
+`runtime/hle/hle_common.hpp/.cpp` adapts
+`profiles/mhp3rd/host/hle/hle_common.*` (MIT, same pinned commit). Changes:
+namespace `gungnir::hle`; profile-only includes (mods, media, renderer) removed;
+the registrar gains cross-library alias resolution and ambiguity refusal.
+These files are not part of the digest-verified subtree above; keep their
+attribution here when they change.
 
 ## Emitted-output notes
 

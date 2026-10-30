@@ -1208,8 +1208,8 @@ void Runtime::invoke_import_cached(
         const auto function_it = library_it != hle_.end() ? library_it->second.find(nid) : HleLibrary::const_iterator{};
         if (library_it == hle_.end() || function_it == library_it->second.end()) {
             const std::string library_name(library);
-            const auto name = nids_.resolve(library_name, nid).value_or(hex32(nid));
-            stop("Missing HLE import " + library_name + "::" + name);
+            const auto name = nids_.resolve(library_name, nid).value_or(std::string("unknown"));
+            stop("Missing HLE import " + library_name + "::" + name + " (NID_" + hex32(nid) + ")");
             return;
         }
         if (slot >= import_bindings_.size()) import_bindings_.resize(static_cast<std::size_t>(slot) + 1u, nullptr);
@@ -1231,8 +1231,8 @@ void Runtime::invoke_import(std::string_view library, std::uint32_t nid, Allegre
     const auto function_it = library_it != hle_.end() ? library_it->second.find(nid) : HleLibrary::const_iterator{};
     if (library_it == hle_.end() || function_it == library_it->second.end()) {
         const std::string library_name(library);
-        const auto name = nids_.resolve(library_name, nid).value_or(hex32(nid));
-        stop("Missing HLE import " + library_name + "::" + name);
+        const auto name = nids_.resolve(library_name, nid).value_or(std::string("unknown"));
+        stop("Missing HLE import " + library_name + "::" + name + " (NID_" + hex32(nid) + ")");
         return;
     }
     function_it->second(*this, ctx);

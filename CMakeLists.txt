@@ -23,6 +23,17 @@ target_include_directories(yakumo PUBLIC
     third_party/yakumo/include
     third_party/yakumo/src)
 
+# --- HLE runtime (T6) -------------------------------------------------------
+add_library(gungnir_hle STATIC
+    runtime/hle/hle_common.cpp)
+target_include_directories(gungnir_hle PUBLIC runtime)
+target_link_libraries(gungnir_hle PUBLIC yakumo)
+
+add_executable(hle_import_tests tests/hle/hle_import_tests.cpp)
+target_link_libraries(hle_import_tests PRIVATE gungnir_hle)
+set_target_properties(hle_import_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/hle)
+
 # --- Analysis / codegen tooling (T4, T5) -----------------------------------
 add_executable(yakumo_analyzer third_party/yakumo/tools/analyzer_main.cpp)
 target_link_libraries(yakumo_analyzer PRIVATE yakumo)

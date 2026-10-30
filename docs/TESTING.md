@@ -84,6 +84,14 @@ skips when the private disc is absent; it never passes silently.
   outer dispatch as translated or interpreter fallback; the negative control
   drops the entry unit and requires a nonzero, listed fallback count.
 
+## HLE gates (T6)
+
+- `tests/test_nids.py`: every Gungnir main-module import resolves to a name;
+  CSV digest is pinned; PSPSDK provenance/license are recorded.
+- `tests/test_hle.py`: cross-library symbol alias binds and invokes; an
+  unbound import stops with `Missing HLE import … (NID_0x…)`, never a silent
+  zero.
+
 ## Commands
 
 ```sh
@@ -91,6 +99,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 python3 -m unittest tests.test_core_fixtures -v     # TC-4.1..TC-4.4
 python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
+python3 -m unittest tests.test_nids tests.test_hle -v  # T6a registry/HLE
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 

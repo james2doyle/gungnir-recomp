@@ -9,9 +9,21 @@
       "license": "MIT",
       "license_file": "third_party/yakumo/LICENSE",
       "path": "third_party/yakumo",
-      "digest": "5d3e4f9637b42321913fd8302a01391deb6bc05e77df562acd3eef6cc7de7d74",
+      "digest": "727c6fb9c67429aabaf04ffbf14e69de3d7e7efec488201399c34737be61db48",
       "provenance": "third_party/yakumo/PROVENANCE.md",
       "note": "ELF32/PRX loader, ISO9660 reader, PARAM.SFO, guest memory, UTF-8 path helpers (framework subset, byte-identical files)"
+    },
+    {
+      "name": "pspsdk-nids",
+      "type": "vendored",
+      "upstream": "https://github.com/pspdev/pspsdk",
+      "commit": "c3da4314d783ac26323e5cdaf8163ac369c2089d",
+      "license": "BSD-3-Clause",
+      "license_file": "third_party/pspsdk-nids/LICENSE",
+      "path": "third_party/pspsdk-nids",
+      "digest": "95595b028452c34dedf31cc5bad2dbe6c25c834832fd2e5965e97ae10fc61e33",
+      "provenance": "third_party/pspsdk-nids/PROVENANCE.md",
+      "note": "NID-name facts for configs/nids.csv (generated; see provenance)"
     }
   ]
 }
