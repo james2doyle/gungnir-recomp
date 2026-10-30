@@ -10,8 +10,9 @@ reimplementation of PSP system software with a Vulkan renderer.
 (including no generated/translated game code), no keys, no firmware, and no
 driver binaries — by design and by enforcement (see below). You supply your
 own legally obtained UMD ISO (`.chd` dumps are converted first — see
-Building); the pipeline verifies its identity, generates recompiled code
-locally into a gitignored `build/` tree, and the result runs on your device.
+[`docs/INTAKE.md`](docs/INTAKE.md)); the pipeline verifies its identity,
+generates recompiled code locally into a gitignored `build/` tree, and the
+result runs on your device.
 
 > Not affiliated with or endorsed by Sting Co., Ltd. or Atlus U.S.A., Inc.
 > PSP/PlayStation are trademarks of Sony Interactive Entertainment Inc.
@@ -24,7 +25,7 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 
 | Milestone | Meaning | State |
 |---|---|---|
-| M0 | Repo live, IP policy enforced | in progress |
+| M0 | Repo live, IP policy enforced | **closed** (T1+T2+T3; ledger: `data/milestones.json`) |
 | M1 | Recomp pipeline proven on synthetic fixtures (Linux) | planned |
 | M2 | Gungnir analyzed, AOT generated locally | planned |
 | M3 | Bounded boot on Linux desktop | planned |
@@ -47,8 +48,8 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 ## Repository layout
 
 ```
-tools/       intake (chd→iso→elf), analysis, codegen glue, format tools,
-             repository_check.py (the IP gate)
+tools/       intake (iso → verified game tree), analysis, codegen glue,
+             format tools, repository_check.py (the IP gate)
 runtime/     guest memory, dispatch + interpreter fallback, HLE kernel,
              GE/Vulkan renderer, post-processing, input, audio, savedata
 profiles/gungnir/   per-game config (facts vs. choices); local/ is gitignored
@@ -65,16 +66,14 @@ See `docs/BUILDING.md` (landing with milestone M4). Prerequisites:
 `cmake`, `ninja`, a C++20 compiler, Python 3.11+, Android SDK/NDK (arm64),
 and your own disc image.
 
-**Have a `.chd`?** The pipeline's input is a plain UMD **ISO** — convert
-once with [CHDStudio](https://github.com/purelogiccode/CHDStudio) (GUI) or
-`chdman extractcd` (MAME CLI), then keep `game.iso`. Intake refuses `.chd`
-with a named error and never parses CHD itself: the identity gate
-(262,766,592 bytes, CRC32 `183F3EDC`) *verifies* whatever produced the ISO,
-so any correct converter works. `game.chd`/`game.iso` are gitignored and
+**Have a `.chd`?** The pipeline's input is a UMD **ISO** — converters, the
+identity gate, and the full intake flow live in
+[`docs/INTAKE.md`](docs/INTAKE.md). `game.chd`/`game.iso` are gitignored and
 never committed.
 
 ## License
 
 Project-original code: [GPL-3.0-or-later](LICENSE). Third-party components
-are pinned and attributed (`dependencies.json`, `THIRD_PARTY_LICENSES/`,
-`docs/SOURCE_PROVENANCE.md`).
+are pinned, digest-verified and attributed (`dependencies.json`, the
+generated `THIRD_PARTY_NOTICES.txt`, `docs/SOURCE_PROVENANCE.md`); vendored
+code carries its license in-tree (`third_party/*/LICENSE`).

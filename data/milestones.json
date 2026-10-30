@@ -1,0 +1,50 @@
+{
+  "comment": "Milestone ratchet ledger (hst-decomp discipline, plan §6). Every milestone entry: criterion, measure, evidence pointers, and a recorded state. A drop in any figure must be visible here, never quietly lowered. Counts only — no game content, hashes, or screenshots (AGENTS.md #2).",
+  "milestones": {
+    "M0": {
+      "name": "Repo live, policy enforced",
+      "recorded": "2026-10-30",
+      "state": "closed",
+      "criteria": [
+        "repository_check green on clean tree (extension/magic/size/secret/ignore-probe audit)",
+        "dependencies pinned + digest-verified (one command materializes/verifies)",
+        "license machine runs: notice generation, coverage gate, CC BY-NC-SA rejection"
+      ],
+      "evidence": {
+        "tests": "25 tests green across tests/test_repository_check.py, tests/test_intake.py, tests/test_license_machine.py",
+        "gates": [
+          "tools/repository_check.py PASS (35 files, 17 ignore probes)",
+          "tools/deps.py verify OK (yakumo-framework-subset @ b61852af, MIT)",
+          "tools/package_notices.py check-coverage OK, check-licenses OK"
+        ],
+        "tasks": ["T1", "T3", "T2"],
+        "commits": [
+          "2cabf8a (T1 scaffold + IP guardrails)",
+          "1d5644f (T3 intake pipeline)",
+          "c492f17 (T2 red tests + INTAKE doc ISO-only restatement)"
+        ]
+      },
+      "documents": ["docs/LEGAL.md", "docs/SOURCE_PROVENANCE.md", "docs/PROVENANCE.md", "AGENTS.md", "docs/INTAKE.md"]
+    },
+    "M1": {
+      "name": "Pipeline dry-run on synthetic fixtures (Linux)",
+      "state": "planned"
+    },
+    "M2": {
+      "name": "Gungnir analyzed, AOT generated locally",
+      "state": "planned"
+    },
+    "M3": {
+      "name": "Bounded boot on Linux desktop",
+      "state": "planned"
+    },
+    "M4": {
+      "name": "Title screen on adb device + menu input",
+      "state": "planned"
+    },
+    "M5": {
+      "name": "Hardening (audio, saves, texture upscaling, drivers, perf)",
+      "state": "planned"
+    }
+  }
+}

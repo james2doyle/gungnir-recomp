@@ -2,7 +2,9 @@
 
 Intake turns your own `game.iso` into a verified local module tree under
 `build/game/`-style output. **Disc input is ISO only** — a `.chd` is never
-parsed and is refused outright (see §1). It never decrypts in-repo, and
+parsed and is refused outright (convert it once yourself first —
+[CHDStudio](https://github.com/purelogiccode/CHDStudio) or
+`chdman extractcd`; see §1). It never decrypts in-repo, and
 never writes outside the output directory. Every gate fails closed with a
 **named error** — no silent skips.
 
