@@ -1,0 +1,76 @@
+# ARCHITECTURE — runtime core (T4 state)
+
+The runtime is the MIT PSPRecomp framework core (vendored at
+`third_party/yakumo/`, pinned + digest-verified; two recorded local patches)
+plus project glue built around it from T5 onward.
+
+## Layers
+
+```
+tools/intake/          disc -> verified local tree (T3, our glue + vendored readers)
+third_party/yakumo/    framework core: decoder, interpreter, guest memory,
+                       ELF/PRX loader, program analysis, bounded dispatcher,
+                       NID registry, SHA-256, deflate; CLI analyzer/codegen
+tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
+                       (our authorship; .mips text sources, ELF built into build/)
+```
+
+Nothing under `third_party/` is hand-edited without a recorded patch in its
+`PROVENANCE.md`. Generated guest code is build output, always under
+`build/`, never tracked (enforced by TC-4.3).
+
+## Guest memory map (as implemented)
+
+| Region | Guest window | Size | Notes |
+|---|---|---|---|
+| Scratchpad | `0x00010000` | 16 KiB | local patch: `Region::Scratchpad`; AOT fast path declines it, slow path resolves |
+| VRAM | `0x04000000` | 2 MiB × 4 mirrors | mirror collapse to 2 MiB physical |
+| Main RAM | canonical `0x08000000` (user alias `0x08800000`) | 32 MiB (64 MiB option) | inline AOT fast path covers RAM only |
+| Cache aliases | `0x8…`/`0xA…` | — | canonicalized (`& 0x1FFFFFFF`) before resolution |
+
+EDRAM and other system windows are out of scope for user-mode guest code;
+out-of-window accesses throw a named `Guest memory access outside PSP RAM`
+error, never a silent zero.
+
+## Dispatch contract
+
+- Guest functions are registered per address with `Runtime::register_function`;
+  generated units are produced by `yakumo_codegen` from an ELF plus a
+  functions CSV (`name,address,size`), and registered en masse by the emitted
+  `psprecomp::register_generated_functions(Runtime&)`.
+- A dispatch miss is resolved by the (permanent) interpreter tier; slices are
+  bounded by the interpreter budget so scheduling/heartbeat still happen.
+  `PSPRECOMP_NO_INTERPRETER=1` restores the strict stop — used by tests to
+  prove dispatch misses are loud.
+- Missing/unsupported hooks (`set_runtime_missing_function_hook`,
+  `set_runtime_unsupported_hook`) are the overlay-swap seam for T6
+  (`sceKernelLoadModule` tiers); `unregister_functions(start,end)` drops a
+  translated range before reuse.
+- Installing dispatch/chain observer hooks disables direct unit chaining so
+  every unit boundary becomes observable — the fixture harness relies on this
+  for deterministic traces.
+
+## Fixture pipeline (T4 proof)
+
+```
+tests/core/fixtures/<name>.mips   (our text format: header + hex words)
+  -> assemble.py                  -> build/tests/core/<name>/{elf,csv,json}
+  -> yakumo_codegen               -> <name>_gen.cpp (build output)
+  -> compiled into core_harness_<name>
+core_harness --mode interp|aot   -> trace (dispatch digests + final state)
+tests/test_core_fixtures.py      -> byte equality, hand-computed checks,
+                                     loud-failure cases, determinism (TC-4.1..4.4)
+```
+
+## Known gaps (counted, not silent)
+
+1. **No FNV block cache** in the adopted interpreter tier: dynamic code is
+   interpreted correctly but without a decoded-block cache. Recorded gap;
+   scope: land with the first workload that actually executes guest code via
+   the interpreter (T5/T6 dispatch-coverage data decides priority; before M3
+   benchmarking at the latest).
+2. **No scratchpad mirror at `0x00010001` byte aliases** beyond the window
+   itself: the Allegrex maps the 16 KiB window directly; sub-word accesses are
+   handled by the generic slow path.
+3. ADDI shares ADDIU semantics (no overflow trap) — documented divergence in
+   `third_party/yakumo/PROVENANCE.md`.

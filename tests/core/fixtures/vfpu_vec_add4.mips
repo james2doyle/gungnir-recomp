@@ -1,0 +1,17 @@
+# name: vfpu_vec_add4
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.4: 4-lane VFPU vector pipeline over seeded registers:
+#   S000..S003 = S004..S007 + S008..S011
+#   S012..S015 = S000..S003 - S004..S007
+#   S016..S019 = S000..S003 * S004..S007
+#   S020..S023 = S016..S019 / S024..S027
+0x60088480  # vadd.4  S000, S004, S008
+0x6084808C  # vsub.4  S012, S000, S004
+0x64048090  # vmul.4  S016, S000, S004
+0x63989094  # vdiv.4  S020, S016, S024
+0x03E00008  # jr ra
+0x00000000  # nop

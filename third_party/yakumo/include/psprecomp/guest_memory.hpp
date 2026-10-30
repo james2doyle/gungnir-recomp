@@ -22,6 +22,10 @@ namespace psprecomp {
 
 class GuestMemory {
 public:
+    // Local patch (third_party/yakumo/PROVENANCE.md): the Allegrex 16 KiB
+    // scratchpad lives at 0x00010000 and must not fault (plan gotcha C.4).
+    static constexpr std::uint32_t kScratchpadBase = 0x00010000u;
+    static constexpr std::uint32_t kScratchpadSize = 16u * 1024u;
     static constexpr std::uint32_t kVramPhysicalBase = 0x04000000u;
     static constexpr std::uint32_t kVramSize = 2u * 1024u * 1024u;
     static constexpr std::uint32_t kVramMirrorCount = 4u;
@@ -242,7 +246,7 @@ public:
     [[nodiscard]] const std::vector<std::uint8_t> &vram_bytes() const noexcept;
 
 private:
-    enum class Region { Vram, Ram };
+    enum class Region { Vram, Ram, Scratchpad };
     struct ResolvedAddress {
         Region region;
         std::size_t offset;
@@ -298,6 +302,7 @@ private:
     void aot_store32_slow(std::uint32_t address, std::uint32_t value);
 
     std::vector<std::uint8_t> vram_;
+    std::vector<std::uint8_t> scratchpad_;
     std::vector<std::uint8_t> bytes_;
     // Cached view of bytes_ for the inline fast paths.  Neither region is ever
     // resized after construction, so these stay valid for the object's life.

@@ -1,0 +1,13 @@
+# name: vfpu_vec_add3
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.4: 3-lane forms (length prefix path) — add/sub/mul/div once each.
+0x60080480  # vadd.3  S000, S004, S008
+0x6084008C  # vsub.3  S012, S000, S004
+0x64040090  # vmul.3  S016, S000, S004
+0x63989014  # vdiv.3  S020, S016, S024
+0x03E00008  # jr ra
+0x00000000  # nop

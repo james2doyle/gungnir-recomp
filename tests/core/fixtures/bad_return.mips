@@ -1,0 +1,13 @@
+# name: bad_return
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.2: a corrupted return path — $ra overwritten with an unmapped address —
+# is the stack-corruption analogue at this tier: both engines must stop
+# loudly, never silently continue.
+0x3C082000  # lui   t0, 0x2000        (unmapped)
+0x0100F821  # addu  ra, t0, zero
+0x03E00008  # jr    ra
+0x00000000  # nop

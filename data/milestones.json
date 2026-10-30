@@ -1,5 +1,5 @@
 {
-  "comment": "Milestone ratchet ledger (hst-decomp discipline, plan §6). Every milestone entry: criterion, measure, evidence pointers, and a recorded state. A drop in any figure must be visible here, never quietly lowered. Counts only — no game content, hashes, or screenshots (AGENTS.md #2).",
+  "comment": "Milestone ratchet ledger (hst-decomp discipline, plan \u00a76). Every milestone entry: criterion, measure, evidence pointers, and a recorded state. A drop in any figure must be visible here, never quietly lowered. Counts only \u2014 no game content, hashes, or screenshots (AGENTS.md #2).",
   "milestones": {
     "M0": {
       "name": "Repo live, policy enforced",
@@ -17,18 +17,49 @@
           "tools/deps.py verify OK (yakumo-framework-subset @ b61852af, MIT)",
           "tools/package_notices.py check-coverage OK, check-licenses OK"
         ],
-        "tasks": ["T1", "T3", "T2"],
+        "tasks": [
+          "T1",
+          "T3",
+          "T2"
+        ],
         "commits": [
           "2cabf8a (T1 scaffold + IP guardrails)",
           "1d5644f (T3 intake pipeline)",
           "c492f17 (T2 red tests + INTAKE doc ISO-only restatement)"
         ]
       },
-      "documents": ["docs/LEGAL.md", "docs/SOURCE_PROVENANCE.md", "docs/PROVENANCE.md", "AGENTS.md", "docs/INTAKE.md"]
+      "documents": [
+        "docs/LEGAL.md",
+        "docs/SOURCE_PROVENANCE.md",
+        "docs/PROVENANCE.md",
+        "AGENTS.md",
+        "docs/INTAKE.md"
+      ]
     },
     "M1": {
       "name": "Pipeline dry-run on synthetic fixtures (Linux)",
-      "state": "planned"
+      "recorded": "2026-10-30",
+      "state": "closed",
+      "criteria": [
+        "synthetic Allegrex fixtures trace-equal interpreter vs AOT on Linux x86_64",
+        "VFPU differential fuzz clean across seeded states",
+        "generated units never tracked; regeneration byte-stable"
+      ],
+      "evidence": {
+        "tests": "tests/test_core_fixtures.py \u2014 8 test groups: 4 positive fixtures byte-equal + hand-computed finals, 3 loud-failure cases (both tiers), VFPU fuzz 3 fixtures x 16 seeds, codegen determinism, git-tracking check",
+        "fixtures": "tests/core/fixtures/*.mips (arith_mem_basic, loop_sum, addi_opcode, scratchpad_basic, vfpu_vec_add4, vfpu_vec_add3, vfpu_dot_scale; negatives bad_opcode, bad_return)",
+        "tools": "build/tools/{yakumo_analyzer,yakumo_codegen,yakumo_dump_function}",
+        "tasks": [
+          "T4"
+        ]
+      },
+      "documents": [
+        "docs/ARCHITECTURE.md",
+        "docs/TESTING.md"
+      ],
+      "gaps": [
+        "interpreter block cache (FNV) not in adopted core \u2014 deferred to first interpreted guest workload (T5/T6 coverage data; before M3 benchmarks at latest)"
+      ]
     },
     "M2": {
       "name": "Gungnir analyzed, AOT generated locally",

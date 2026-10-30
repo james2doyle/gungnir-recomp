@@ -1,0 +1,14 @@
+# name: addi_opcode
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.1/C.3: Allegrex ADDI (opcode 0x08) must decode and execute like ADDIU
+# (no overflow trap is modelled — recorded divergence). Regression for the
+# decoder gap found while bringing up the fixture harness.
+0x24080005  # addiu t0, zero, 5
+0x21080007  # addi  t0, t0, 7      -> t0 = 12
+0x2109FFFF  # addi  t1, t0, -1     -> t1 = 11
+0x03E00008  # jr ra
+0x00000000  # nop

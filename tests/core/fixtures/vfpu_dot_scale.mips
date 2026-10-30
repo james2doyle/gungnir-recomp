@@ -1,0 +1,12 @@
+# name: vfpu_dot_scale
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.4: horizontal reductions — vdot.4 and vscl.4 over seeded registers.
+0x60088480  # vadd.4  S000, S004, S008
+0x6484808C  # vdot.4  S012, S000, S004
+0x65148C90  # vscl.4  S016, S012, S020
+0x03E00008  # jr ra
+0x00000000  # nop

@@ -1,0 +1,15 @@
+# name: scratchpad_basic
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x00010000:0x00010020
+#
+# TC-4.1/C.4: Allegrex 16 KiB scratchpad at 0x00010000 must map (store+load
+# round-trip). Hand-computed: r10 = 0x2A, r11 = 0x2B, scratchpad+16 = 2A.
+0x3C080001  # lui   t0, 0x0001        (0x00010000)
+0x2409002A  # addiu t1, zero, 0x2A
+0xAD090010  # sw    t1, 16(t0)
+0x8D0A0010  # lw    t2, 16(t0)
+0x254B0001  # addiu t3, t2, 1
+0x03E00008  # jr    ra
+0x00000000  # nop

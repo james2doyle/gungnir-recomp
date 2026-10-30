@@ -26,7 +26,7 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 | Milestone | Meaning | State |
 |---|---|---|
 | M0 | Repo live, IP policy enforced | **closed** (T1+T2+T3; ledger: `data/milestones.json`) |
-| M1 | Recomp pipeline proven on synthetic fixtures (Linux) | planned |
+| M1 | Recomp pipeline proven on synthetic fixtures (Linux) | **closed** (T4; `data/milestones.json`) |
 | M2 | Gungnir analyzed, AOT generated locally | planned |
 | M3 | Bounded boot on Linux desktop | planned |
 | M4 | **Title screen on adb device** | planned |

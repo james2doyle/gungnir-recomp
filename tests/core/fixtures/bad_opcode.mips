@@ -1,0 +1,10 @@
+# name: bad_opcode
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# TC-4.2: an invalid encoding must stop loudly in both tiers, never glide on.
+0x4C000000  # opcode 0x13 (COP3): not an Allegrex encoding
+0x03E00008  # jr ra (never reached)
+0x00000000

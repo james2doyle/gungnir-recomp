@@ -1,0 +1,17 @@
+# name: loop_sum
+# sentinel: 0x0880F000
+# sp: 0x0880C000
+# mem: 0x08805000 = 0000000000000000
+# digest: 0x08805000:0x08805010
+#
+# Hand-computed expectation: t0 = 1+2+3+4+5 = 15, t1 = 6, t2 = 0
+# (slti t2,t1,6 becomes false after t1 reaches 6), final pc = sentinel.
+0x24080000  # addiu t0, zero, 0
+0x24090001  # addiu t1, zero, 1
+0x01094020  # add   t0, t0, t1        <- loop target (index 2)
+0x25290001  # addiu t1, t1, 1
+0x292A0006  # slti  t2, t1, 6
+0x1540FFFC  # bne   t2, zero, -4 words
+0x00000000  # nop   (delay slot)
+0x03E00008  # jr    ra
+0x00000000  # nop
