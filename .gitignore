@@ -1,0 +1,89 @@
+# =====================================================================
+# .gitignore — IP guardrails (charter: docs/LEGAL.md; plan: .dex/plan.md T1)
+# Rule of thumb: if it came out of a UMD, a PSP, a GPU driver package, or a
+# build of game-derived code, it is ignored. Each block says WHY.
+# tools/repository_check.py enforces this mechanically; CI runs it.
+# Synthetic test fixtures are committed as TEXT sources (.S/.hex) and
+# assembled at test time — no binary fixtures, so nothing here has to be
+# carved open with allowlists.
+# =====================================================================
+
+# --- Game disc images & dumps (proprietary; user-supplied, local only) ---
+# Includes the local game.chd sitting in this workdir.
+*.[iI][sS][oO]
+*.[cC][hH][dD]
+*.[cC][sS][oO]
+*.[zZ][sS][oO]
+*.[pP][bB][pP]
+
+# --- Console executables & modules (encrypted OR decrypted; both derive
+#     from the game) ---
+*.[eE][lL][fF]
+*.[pP][rR][xX]
+*.[bB][iI][nN]
+*.[pP][mM][fF]
+*.[sS][fF][oO]
+
+# --- Game media/assets: audio, fonts, textures, archives ---
+# .pgf is also Sony firmware font data (copyrighted) — never commit.
+*.[aA][tT]3
+*.[vV][aA][gG]
+*.[gG][iI][mM]
+*.[pP][gG][fF]
+*.[dD][aA][rR]
+*.[tT][pP][lL]
+
+# --- Extracted game trees / virtual memory stick / save data ---
+[pP][sS][pP]_[gG][aA][mM][eE]/
+[iI][nN][sS][dD][iI][rR]/
+game/
+memstick/
+savestates/
+
+# --- Keys & credentials (PSP key files, keystores, private keys) ---
+keys/
+*psp*key*
+pgd_keys.txt
+*keystore*
+*.[jJ][kK][sS]
+*.[pP][eE][mM]
+.env
+
+# --- Third-party binary blobs: driver packages, build outputs ---
+# Binaries enter via pinned source builds (cmake/Deps.cmake), never as blobs.
+drivers/
+*.[zZ][iI][pP]
+*.[jJ][aA][rR]
+*.[sS][oO]
+*.[dD][lL][lL]
+*.[dD][yY][lL][iI][bB]
+*.[eE][xX][eE]
+*.[aA][pP][kK]
+*.[aA][aA][bB]
+
+# --- Generated recompilation output (a derivative of the copyrighted
+#     executable): AOT C/C++ units, analysis reports, manifests ---
+generated/
+build/
+out/
+analysis/
+*_recomp*.c
+*_recomp*.cpp
+*_recomp*.h
+*_recomp*.hpp
+*_imports.toml
+
+# --- Machine-local per-dump data (dump hashes, address pins) ---
+# EBOOT sha256 pins etc. advertise a specific rip; they stay local (plan §7A.4).
+profiles/*/local/
+
+# --- Logs & traces (may embed game-derived addresses or text) ---
+logs/
+*.trace
+
+# --- Android machine-local config (absolute toolchain paths) ---
+local.properties
+
+# --- Tooling noise ---
+__pycache__/
+*.pyc
