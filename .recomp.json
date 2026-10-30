@@ -1,0 +1,37 @@
+{
+  "game": "Gungnir: Inferno of the Demon Lance and the War of Heroes",
+  "wikidata": null,
+  "system": "PSP",
+  "type": "recomp",
+  "original": {
+    "region": "USA",
+    "serial": "ULUS-10592"
+  },
+  "project": {
+    "name": "gungnir-recomp",
+    "description": "Static recompilation of Gungnir (PSP) to native C++ for Android. Bring-your-own-game: no game data, generated code, keys, or firmware in the repository."
+  },
+  "status": "in-development",
+  "targets": [
+    "android-arm64-v8a",
+    "android-x86_64",
+    "linux-x86_64"
+  ],
+  "toolchain": [
+    "original tooling (Allegrex->C++ AOT)",
+    "CMake/Ninja",
+    "Android NDK (clang)",
+    "Vulkan 1.1"
+  ],
+  "approach": "static-recompilation-with-hle",
+  "maintainers": [],
+  "links": [],
+  "help": [],
+  "tags": [
+    "psp",
+    "android",
+    "vulkan",
+    "static-recompilation"
+  ],
+  "notes": "Generated recompilation output is a local build artifact and is never committed. Disc identity (redump): 262,766,592 bytes, CRC32 183F3EDC."
+}
