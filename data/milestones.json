@@ -94,7 +94,41 @@
     },
     "M3": {
       "name": "Bounded boot on Linux desktop",
-      "state": "planned"
+      "state": "in_progress",
+      "recorded": "2026-10-30",
+      "criteria": [
+        "bounded boot passes module init + first frame on Linux (TC-6.2)",
+        "GE fixtures pass on Vulkan (T7)"
+      ],
+      "evidence": {
+        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 108/215 imports bound at boot depth, 38 executed imports all bound, zero missing/silent NIDs, first presentable frame buffer 0x04088000 512x272 format 3",
+        "tests": "62 tests green; tests/test_boot.py (TC-6.2), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp",
+        "gates": [
+          "tools/repository_check.py PASS (101 files, 17 ignore probes)",
+          "tools/deps.py verify OK (yakumo-framework-subset @ b61852af, pspsdk-nids @ c3da4314)"
+        ],
+        "tasks": [
+          "T6a",
+          "T6b",
+          "T6c",
+          "T6d"
+        ],
+        "commits": [
+          "f3a112b (T6a)",
+          "7de649d (T6b)",
+          "769a87a (T6c)"
+        ]
+      },
+      "documents": [
+        "docs/HLE.md",
+        "docs/BRINGUP.md",
+        "docs/ARCHITECTURE.md",
+        "docs/TESTING.md"
+      ],
+      "open": [
+        "T7 Vulkan GE renderer + GE fixtures (required to close M3)",
+        "deeper boot past the VFPU4 codegen gap, tracked as T5a"
+      ]
     },
     "M4": {
       "name": "Title screen on adb device + menu input",

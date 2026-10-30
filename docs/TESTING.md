@@ -95,7 +95,9 @@ skips when the private disc is absent; it never passes silently.
   interrupts, VPLs, lightweight mutexes, and ISO disc + memory-stick IO.
   `tests/hle/media_tests.cpp` covers display mode/flip/vblank/multi-wait/
   frame-rate, controller sampling and vblank-blocking reads, GE callback and
-  list completion, EDRAM, and the RTC tick.
+  list completion, EDRAM, and the RTC tick. `tests/hle/module_tests.cpp`
+  covers module lookup, stop/unload errors, and a corpus install → unload →
+  different-corpus reload cycle with a stable function count.
 - `tests/test_boot.py` (TC-6.2): builds the real-module boot runner against
   the T5 corpus and requires module init to reach a non-zero-width
   `sceDisplaySetFrameBuf`, with every executed import bound and no missing or

@@ -48,6 +48,7 @@ cross-library alias path, and a bound handler invocation.
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
 | sceRtc | VERIFIED | `sceRtcGetCurrentTick` plus local wall clock, both advancing with the virtual PSP clock |
+| ModuleMgr (title-scoped) | VERIFIED (T6d) | module registry, GetModuleId/ByAddress, Stop/Unload, self stop-unload; no loader or overlay corpora in this title |
 | ModuleMgr PRX overlay tiers | PLANNED (T6d) | translate-on-load, unregister-on-unload (TC-6.3) |
 
 ## Bounded boot evidence (T6c, VERIFIED)
@@ -70,6 +71,33 @@ module init; the gate reports only a buffer with a non-zero width. Deeper
 execution (after four vblanks) currently stops on an AOT codegen gap for
 VFPU4 matrix operations at `0x0899BD90`; that is tracked separately from T6c
 and is not an HLE coverage failure. Details are in `BRINGUP.md`.
+
+## Module registry (T6d, VERIFIED)
+
+Gungnir imports five ModuleMgrForUser calls and none of them loads a module:
+GetModuleId, GetModuleIdByAddress, StopModule, UnloadModule and
+StopUnloadSelfModuleWithStatus. The disc ships no PRX files (only the
+executable, BOOT.BIN, the excluded updater and DAR archives), so this title is
+single-module and there are no overlay corpora to build.
+
+`runtime/hle/hle_module.*` therefore keeps a registry of modules (id, name,
+base, size, gp, started) rather than inventing a loader:
+
+- `register_main_module` records the boot image before guest code runs.
+- `add_module` is the translate-on-load seam: AOT translation happens offline
+  in T5, so the module supplies a corpus installer that registers its
+  functions in the module window. Unload calls
+  `Runtime::unregister_functions(base, base + size)` before the address space
+  can be reused.
+- `tests/hle/module_tests.cpp` installs corpus A at a slot, stops it, unloads
+  it, then loads corpus B in the same slot: the old function is gone, the new
+  one is present, and the function count returns to baseline. Main-module
+  unload is refused with `ILLEGAL_PERM`; unknown ids report `UNKNOWN_MODULE`.
+
+Counted gap: `sceKernelLoadModule`/`StartModule`, module_start/module_stop
+guest exports and per-thread module ids are not implemented. The title does
+not import them; if a future title executes a load import it stops loudly with
+its NID. Revisit when a real PRX/overlay source appears.
 
 ## T6c references rechecked (2026-10-30)
 

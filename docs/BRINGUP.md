@@ -199,3 +199,33 @@ Tracked as a T5 follow-up and required before T6d/M3 can claim a deeper boot.
 
 **Regression.** `tests/test_boot.py` pins the current first-flip boundary;
 extending the boot run will expose the VFPU fix.
+
+## 2026-10-30 — T6d: the plan's PRX overlay tier has no client in this title
+
+**Symptom.** T6d's scope called for ModuleMgr PRX load/start/stop/unload and
+translate-on-load overlay tiers, but Gungnir imports only five ModuleMgr
+calls — GetModuleId, GetModuleIdByAddress, StopModule, UnloadModule and
+StopUnloadSelfModuleWithStatus — and none of them loads anything. The disc
+contains no PRX files: only EBOOT.BIN, BOOT.BIN, the excluded updater and DAR
+archives.
+
+**Falsification.** The import inventory (`build/game/manifest.json`) and a
+recursive ISO listing both agree; the generated call sites only reference the
+unload/stop stubs. A loader would be dead code with no corpus to load.
+
+**Root cause.** The plan generalized from other PSP profiles. This title is a
+single-module executable whose module calls are teardown paths.
+
+**Decision.** Implement the title-scoped registry (recorded user sign-off):
+module lookup, stop/unload, self stop-unload, and a corpus-install seam that
+unregisters a module's whole address window before reuse. Record
+load/start, module_start/module_stop exports and per-thread module ids as a
+counted gap; an executed load import still stops loudly with its NID.
+
+**Regression.** `tests/hle/module_tests.cpp`: corpus A installs at a slot,
+stops, unloads, then corpus B installs at the same base; old registrations are
+gone, the new one is present, and the function count returns to baseline.
+Main-module unload returns ILLEGAL_PERM; unknown ids return UNKNOWN_MODULE.
+
+**Follow-up.** Revisit the loader only when a title or overlay source actually
+requires it; DATA.DAR remains T12 asset work.

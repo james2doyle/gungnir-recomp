@@ -32,6 +32,8 @@ using SceUID = std::int32_t;
 
 namespace error {
 inline constexpr std::uint32_t kIllegalArgument = 0x800200D2u;
+inline constexpr std::uint32_t kIllegalPerm = 0x800200D1u;
+inline constexpr std::uint32_t kUnknownModule = 0x8002012Eu;
 inline constexpr std::uint32_t kIllegalMemblockType = 0x800200D8u;
 inline constexpr std::uint32_t kUnknownUid = 0x800200CBu;
 inline constexpr std::uint32_t kNoMemory = 0x80020190u;
@@ -57,6 +59,7 @@ inline constexpr std::uint32_t kWaitDelete = 0x800201B5u;
 inline constexpr std::uint32_t kIllegalMemblock = 0x800201B6u;
 inline constexpr std::uint32_t kIllegalCount = 0x800201BDu;
 inline constexpr std::uint32_t kUnknownVtid = 0x800201BEu;
+inline constexpr std::uint32_t kAlreadyStopped = 0x80020135u;
 inline constexpr std::uint32_t kMutexNotFound = 0x800201C3u;
 inline constexpr std::uint32_t kMutexLocked = 0x800201C4u;
 inline constexpr std::uint32_t kMutexUnlocked = 0x800201C5u;

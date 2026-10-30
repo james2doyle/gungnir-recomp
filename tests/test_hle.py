@@ -18,6 +18,7 @@ BUILD = REPO / "build"
 BINARY = BUILD / "tests" / "hle" / "hle_import_tests"
 KERNEL_BINARY = BUILD / "tests" / "hle" / "hle_kernel_tests"
 MEDIA_BINARY = BUILD / "tests" / "hle" / "hle_media_tests"
+MODULE_BINARY = BUILD / "tests" / "hle" / "hle_module_tests"
 NIDS = REPO / "configs" / "nids.csv"
 GAME_ISO = REPO / "game.iso"
 
@@ -29,7 +30,8 @@ def setUpModule():
     if cfg.returncode != 0:
         raise RuntimeError(f"cmake configure failed:\n{cfg.stderr}")
     bld = subprocess.run(["cmake", "--build", str(BUILD),
-                          "--target", "hle_import_tests", "hle_kernel_tests", "hle_media_tests"],
+                          "--target", "hle_import_tests", "hle_kernel_tests", "hle_media_tests",
+                          "hle_module_tests"],
                          capture_output=True, text=True)
     if bld.returncode != 0:
         raise RuntimeError(f"HLE tests build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
@@ -69,6 +71,15 @@ class TestMediaHle(unittest.TestCase):
         self.assertEqual(proc.returncode, 0,
                          f"media HLE contracts failed:\n{proc.stdout}{proc.stderr}")
         self.assertIn("hle_media_tests: OK", proc.stdout)
+
+
+class TestModuleHle(unittest.TestCase):
+    def test_registry_stop_unload_and_reload(self):
+        proc = subprocess.run([str(MODULE_BINARY), "--nids", str(NIDS)],
+                              capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0,
+                         f"module HLE contracts failed:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("hle_module_tests: OK", proc.stdout)
 
 
 class TestKernelHle(unittest.TestCase):

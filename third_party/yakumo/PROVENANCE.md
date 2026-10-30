@@ -105,7 +105,9 @@ frame stats, settings) removed; pacing is an explicit switch; 32 MiB
 user-memory end; the registrar gains cross-library alias resolution and
 ambiguity refusal. `hle_media.cpp` keeps only timing/callback/EDRAM semantics;
 the GE list walk is a completion seam until the T7 renderer supplies command
-decoding. These files are not
+decoding. `hle_module.*` records the registry/unload design informed by
+Yakumo's overlay slot lifecycle, but its code is authored here for this
+single-module title. These files are not
 part of the digest-verified subtree above; keep their attribution here when
 they change.
 

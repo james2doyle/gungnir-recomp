@@ -31,9 +31,15 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_threadman.cpp
     runtime/hle/hle_system.cpp
     runtime/hle/hle_io.cpp
-    runtime/hle/hle_media.cpp)
+    runtime/hle/hle_media.cpp
+    runtime/hle/hle_module.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
 target_link_libraries(gungnir_hle PUBLIC yakumo)
+
+add_executable(hle_module_tests tests/hle/module_tests.cpp)
+target_link_libraries(hle_module_tests PRIVATE gungnir_hle)
+set_target_properties(hle_module_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/hle)
 
 add_executable(hle_media_tests tests/hle/media_tests.cpp)
 target_link_libraries(hle_media_tests PRIVATE gungnir_hle)

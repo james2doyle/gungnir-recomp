@@ -65,6 +65,10 @@ scope for user-mode guest code. Out-of-window accesses throw a named
   stops with `Missing HLE import <library>::<name-or-unknown> (NID_0x…)`.
   Registration itself is optional per title; executed imports are the
   fail-closed gate.
+- `runtime/hle/hle_module.*` owns the module registry and ModuleMgr stop/
+  unload semantics. A module's corpus is registered on install and its whole
+  address window is unregistered before reuse; this title imports no loader,
+  so the registry starts with the main module only.
 - `Kernel::install` owns the loader thread, guest exit/interrupt stubs, the
   cooperative scheduler (priority, delay, sema/eventflag/mutex/waiter),
   VTimer/vblank delivery, and partition memory. HLE calls run at outer

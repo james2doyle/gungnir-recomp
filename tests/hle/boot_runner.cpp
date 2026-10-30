@@ -11,6 +11,7 @@
 
 #include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
+#include "hle/hle_module.hpp"
 #include "hle/kernel.hpp"
 
 #include "psprecomp/allegrex_context.hpp"
@@ -145,6 +146,8 @@ int main(int argc, char **argv) {
         gungnir::hle::kernel().install(runtime, module->gp, end);
         gungnir::hle::kernel().set_pacing_enabled(false);
         gungnir::hle::reset_media_state();
+        gungnir::hle::reset_modules();
+        gungnir::hle::register_main_module(module->name, load_base, end - load_base, module->gp);
 
         HleRegistrar hle(runtime);
         gungnir::hle::register_sysmem(hle);

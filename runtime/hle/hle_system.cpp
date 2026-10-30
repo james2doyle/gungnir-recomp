@@ -2,6 +2,7 @@
 // InterruptManager, scePower, sceRtc, sceImpose, sceOpenPSID and the parameter
 // part of sceUtility. sceWlanDrv is with the ad hoc calls in hle_adhoc.cpp.
 #include "hle/hle_common.hpp"
+#include "hle/hle_module.hpp"
 
 
 #include "psprecomp/common.hpp"
@@ -80,39 +81,7 @@ void register_process(HleRegistrar &hle) {
     hle.add("StdioForUser", "sceKernelStdout", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 1u); });
     hle.add("StdioForUser", "sceKernelStderr", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 2u); });
 
-    // The main executable is the only module; overlays are loaded by game code.
-    constexpr std::uint32_t kMainModuleId = 0x01000001u;
-    hle.add("ModuleMgrForUser", "sceKernelGetModuleId",
-        [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, kMainModuleId); });
-    hle.add("ModuleMgrForUser", "sceKernelGetModuleIdByAddress",
-        [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, kMainModuleId); });
-    // Games load Sony's stock modules (font, codecs) as encrypted PRX blobs from
-    // the disc. Their exports are served by this profile's HLE, so the load is
-    // acknowledged with a module id and the image itself is never touched.
-    hle.add("ModuleMgrForUser", "sceKernelLoadModuleByID", [](Runtime &, AllegrexContext &ctx) {
-        std::array<std::uint8_t, 0x100> header{};
-        const std::size_t count = read_open_file(arg(ctx, 0), 0u, header.data(), header.size());
-        std::string name = "unknown";
-        for (std::size_t i = 0; i + 0x2Au < count; ++i) {
-            if (std::memcmp(header.data() + i, "~PSP", 4u) != 0) continue;
-            const char *text = reinterpret_cast<const char *>(header.data() + i + 0x0Au);
-            name.assign(text, strnlen(text, 28u));
-            break;
-        }
-        const auto uid = static_cast<std::uint32_t>(kernel().allocate_uid());
-        log_once("module:" + name, "[module] loaded stock module " + name + " (HLE)");
-        kernel().finish(ctx, uid);
-    });
-    for (const char *name : {"sceKernelStartModule", "sceKernelStopModule", "sceKernelUnloadModule"}) {
-        hle.add("ModuleMgrForUser", name, [name](Runtime &, AllegrexContext &ctx) {
-            log_once(std::string("module-op:") + name, std::string("[module] ") + name);
-            // sceKernelStartModule returns the module id it was given.
-            kernel().finish(ctx, arg(ctx, 0));
-        });
-    }
-    hle.add("ModuleMgrForUser", "sceKernelStopUnloadSelfModuleWithStatus", [](Runtime &, AllegrexContext &ctx) {
-        kernel().exit_current_thread(ctx, static_cast<std::int32_t>(arg(ctx, 1)), true);
-    });
+    // ModuleMgr lives in hle_module.cpp; this title imports no loader.
 }
 
 void register_interrupts(HleRegistrar &hle) {
@@ -211,6 +180,7 @@ void register_platform(HleRegistrar &hle) {
 void register_system(HleRegistrar &hle) {
     register_utils(hle);
     register_process(hle);
+    register_modulemgr(hle);
     register_interrupts(hle);
     register_platform(hle);
 }
