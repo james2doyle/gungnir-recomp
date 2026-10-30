@@ -95,6 +95,8 @@ const char *wait_name(WaitType type) {
         return "msgpipe-send";
     case WaitType::MsgPipeReceive:
         return "msgpipe-receive";
+    case WaitType::Audio:
+        return "audio";
     case WaitType::Host:
         return "host";
     }
@@ -571,6 +573,19 @@ void Kernel::process_timers() {
             }
             continue;
         }
+        if (thread->wait.type == WaitType::Audio) {
+            // Audio waits have no timeout: the deadline is when the buffer
+            // drains, and the poll retries the output at that moment.
+            if (thread->wait.deadline_us && *thread->wait.deadline_us <= now_us_) {
+                const std::uint32_t result =
+                    thread->wait.host_poll ? thread->wait.host_poll(true).value_or(0u) : 0u;
+                thread->wait.host_poll = nullptr;
+                thread->wait.cancel_hook = nullptr;
+                thread->context.set_gpr(2, result);
+                make_ready(*thread);
+            }
+            continue;
+        }
         if (thread->wait.deadline_us && *thread->wait.deadline_us <= now_us_) finish_wait_timeout(*thread);
     }
     for (auto &[uid, timer] : vtimers) {
@@ -639,6 +654,9 @@ void Kernel::remove_waiter(Thread &thread) {
     case WaitType::MsgPipeReceive:
         if (auto found = msgpipes.find(thread.wait.object); found != msgpipes.end())
             erase(found->second.receive_waiters);
+        break;
+    case WaitType::Audio:
+        if (thread.wait.cancel_hook) thread.wait.cancel_hook();
         break;
     default:
         break;

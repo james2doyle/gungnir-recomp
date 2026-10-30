@@ -9,6 +9,8 @@
 // guest fault stopped the run, 2 usage/input error, 3 bounded out before the
 // first flip.
 
+#include "audio/audio_sink.hpp"
+#include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
 #include "hle/hle_module.hpp"
@@ -53,6 +55,23 @@ std::uint64_t g_outer_dispatches = 0u;
 void count_dispatch(Runtime &, AllegrexContext &, std::uint32_t, std::int32_t) {
     ++g_outer_dispatches;
 }
+
+class CountingSink final : public gungnir::audio::AudioSink {
+public:
+    bool submit(const gungnir::audio::AudioBuffer &buffer) override {
+        ++buffers;
+        frames += buffer.frames;
+        for (std::size_t i = 0u; i < static_cast<std::size_t>(buffer.frames) * buffer.channels; ++i) {
+            const int value = std::abs(static_cast<int>(buffer.samples[i]));
+            if (value > peak) peak = value;
+        }
+        return true;
+    }
+
+    std::uint64_t buffers{};
+    std::uint64_t frames{};
+    int peak{};
+};
 
 void heartbeat(std::uint64_t, std::uint32_t) {
     if (g_wall_seconds <= 0.0 || g_runtime == nullptr) return;
@@ -155,6 +174,10 @@ int main(int argc, char **argv) {
         gungnir::hle::register_system(hle);
         gungnir::hle::register_io(hle, disc_path, ms_path);
         gungnir::hle::register_media(hle);
+        CountingSink audio_sink;
+        gungnir::audio::set_audio_sink(&audio_sink);
+        gungnir::hle::reset_audio_state();
+        gungnir::hle::register_audio(hle);
 
         const auto imports = elf.scan_imports(runtime.memory(), *module);
         std::vector<const PspImport *> unbound;
@@ -210,6 +233,9 @@ int main(int argc, char **argv) {
                << "  \"first_frame_buf\": \"" << hex32(display.framebuffer) << "\",\n"
                << "  \"display_width\": " << display.buffer_width << ",\n"
                << "  \"display_format\": " << display.pixel_format << ",\n"
+               << "  \"audio_buffers\": " << audio_sink.buffers << ",\n"
+               << "  \"audio_frames\": " << audio_sink.frames << ",\n"
+               << "  \"audio_peak\": " << audio_sink.peak << ",\n"
                << "  \"hle_bound\": " << hle.count() << ",\n"
                << "  \"imports_total\": " << imports.size() << ",\n"
                << "  \"imports_bound\": " << imports.size() - unbound.size() << ",\n"

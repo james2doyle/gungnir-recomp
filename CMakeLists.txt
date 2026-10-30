@@ -25,8 +25,10 @@ target_include_directories(yakumo PUBLIC
 
 # --- HLE runtime (T6) -------------------------------------------------------
 add_library(gungnir_hle STATIC
+    runtime/audio/audio_sink.cpp
     runtime/hle/hle_common.cpp
     runtime/hle/kernel.cpp
+    runtime/hle/hle_audio.cpp
     runtime/hle/hle_sysmem.cpp
     runtime/hle/hle_threadman.cpp
     runtime/hle/hle_system.cpp

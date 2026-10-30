@@ -3,6 +3,8 @@
 // Usage: hle_kernel_tests --nids CSV [--iso FILE] [--ms DIR]
 // Exit 0 on success, 1 on a failed contract, 2 on usage.
 
+#include "audio/audio_sink.hpp"
+#include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
 #include "hle/kernel.hpp"
 
@@ -18,6 +20,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -51,8 +54,10 @@ public:
         for (const auto &symbol : runtime.nids().all())
             nids_by_name[{symbol.library, symbol.name}] = symbol.nid;
         HleRegistrar hle(runtime);
+        gungnir::hle::reset_audio_state();
         gungnir::hle::register_sysmem(hle);
         gungnir::hle::register_threadman(hle);
+        gungnir::hle::register_audio(hle);
         gungnir::hle::register_system(hle);
         if (!iso.empty()) gungnir::hle::register_io(hle, iso, memory_stick);
         kernel().start_loader_thread(ctx, 0x08820000u, 0u);
@@ -517,6 +522,110 @@ void blocking_sync_contracts() {
     check(f.thread("sceKernelDeleteSema", {sema}) == 0u, "sema deleted");
 }
 
+class RecordingSink final : public gungnir::audio::AudioSink {
+public:
+    struct Recorded {
+        std::vector<std::int16_t> samples;
+        std::uint32_t frames{};
+        std::uint32_t channels{};
+        std::uint32_t left_volume{};
+        std::uint32_t right_volume{};
+        std::uint32_t channel{};
+        std::uint64_t start_us{};
+    };
+
+    bool submit(const gungnir::audio::AudioBuffer &buffer) override {
+        Recorded recorded{};
+        recorded.samples.assign(buffer.samples, buffer.samples + buffer.frames * buffer.channels);
+        recorded.frames = buffer.frames;
+        recorded.channels = buffer.channels;
+        recorded.left_volume = buffer.left_volume;
+        recorded.right_volume = buffer.right_volume;
+        recorded.channel = buffer.channel;
+        recorded.start_us = buffer.start_us;
+        buffers.push_back(std::move(recorded));
+        return true;
+    }
+
+    std::vector<Recorded> buffers;
+};
+
+void audio_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    RecordingSink sink;
+    gungnir::audio::set_audio_sink(&sink);
+    struct SinkGuard {
+        ~SinkGuard() { gungnir::audio::set_audio_sink(nullptr); }
+    } guard;
+    auto &k = f.k;
+    auto &mem = f.runtime.memory();
+    const auto loader = k.current_uid();
+    const auto audio = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceAudio", name, args);
+    };
+    const std::uint32_t buffer = Fixture::kOutput;
+    const std::uint32_t buffer2 = Fixture::kOutput + 0x400u;
+    for (std::uint32_t i = 0u; i < 128u; ++i)
+        mem.store16(buffer + i * 2u, static_cast<std::uint16_t>(i * 100u));
+    for (std::uint32_t i = 0u; i < 128u; ++i)
+        mem.store16(buffer2 + i * 2u, static_cast<std::uint16_t>(0x1000u + i));
+
+    check(audio("sceAudioChReserve", {2u, 64u, 0u}) == 2u, "channel reserved");
+    check(audio("sceAudioChReserve", {2u, 64u, 0u}) == 0x80260003u, "reserved channel refused");
+    check(audio("sceAudioChReserve", {8u, 64u, 0u}) == 0x80260003u, "bad channel refused");
+    check(audio("sceAudioChReserve", {3u, 63u, 0u}) == 0x80260006u, "unaligned sample count refused");
+    check(audio("sceAudioChReserve", {3u, 64u, 1u}) == 0x80260007u, "bad format refused");
+    check(audio("sceAudioOutput", {3u, 0x8000u, buffer}) == 0x80260001u, "unreserved output refused");
+    check(audio("sceAudioOutput", {2u, 0x10000u, buffer}) == 0x8026000Bu, "invalid volume refused");
+    check(audio("sceAudioOutputPannedBlocking", {2u, 0xFFFFFFFFu, 0u, buffer}) == 0x8026000Bu,
+        "negative panned blocking volume refused");
+    check(audio("sceAudioOutput", {2u, 0x8000u, buffer}) == 64u, "output starts a buffer");
+    check(sink.buffers.size() == 1u && sink.buffers[0].frames == 64u && sink.buffers[0].channels == 2u &&
+              sink.buffers[0].left_volume == 0x8000u && sink.buffers[0].channel == 2u &&
+              sink.buffers[0].samples[0] == 0 && sink.buffers[0].samples[1] == 100,
+        "stereo buffer reached the sink");
+    check(audio("sceAudioGetChannelRestLen", {2u}) == 64u, "rest length after output");
+    check(audio("sceAudioGetChannelRestLength", {2u}) == 64u, "rest length agrees while a buffer plays");
+    check(audio("sceAudioOutput", {2u, 0x8000u, buffer2}) == 0x80260002u, "second output is busy");
+
+    const std::int32_t waiter_uid = k.create_thread("audio", 0x08824000u, 0x30u, 0x1000u, 0u, 0x08801000u);
+    check(waiter_uid > 0 && k.start_thread(f.ctx, waiter_uid, 0u, 0u) == 0, "audio waiter started");
+    const std::uint32_t waiter = static_cast<std::uint32_t>(waiter_uid);
+    k.delay_current(f.ctx, 10u, 0u);
+    check(k.current_uid() == waiter, "audio waiter gets the CPU");
+    check(audio("sceAudioOutputPannedBlocking", {2u, 0x8000u, 0x8000u, buffer2}) == 0u,
+        "blocking output parks the caller");
+    check(k.current_uid() == loader, "blocking output returns to the loader");
+    check(audio("sceAudioChRelease", {2u}) == 0x80260002u, "release refused while a thread is parked");
+    check(audio("sceAudioGetChannelRestLen", {2u}) == 128u, "parked buffer counted once");
+    check(audio("sceAudioGetChannelRestLength", {2u}) == 128u, "parked buffer counted by both rest calls");
+    k.delay_current(f.ctx, 2000u, 0u);
+    check(k.current_uid() == waiter, "blocked output wakes when the buffer drains");
+    check(f.ctx.gpr[2] == 64u, "blocked output returns its sample count");
+    check(sink.buffers.size() == 2u && sink.buffers[1].samples[0] == 0x1000, "blocked buffer reached the sink");
+    k.exit_current_thread(f.ctx, 0, false);
+    check(k.current_uid() == loader, "loader resumes after the audio wait");
+    check(audio("sceAudioGetChannelRestLen", {2u}) == 64u, "new buffer rest length");
+    k.delay_current(f.ctx, 2000u, 0u);
+    check(audio("sceAudioGetChannelRestLen", {2u}) == 0u, "buffer drained");
+
+    check(audio("sceAudioOutput", {2u, 0u, 0u}) == 64u, "null output accepted");
+    check(audio("sceAudioGetChannelRestLen", {2u}) == 64u, "null drain counted by rest len");
+    check(audio("sceAudioGetChannelRestLength", {2u}) == 0u, "null drain excluded by rest length");
+    check(audio("sceAudioOutput", {2u, 0u, buffer}) == 64u, "null drain can be replaced");
+    check(audio("sceAudioSetChannelDataLen", {2u, 63u}) == 0x80260006u, "unaligned length refused");
+    check(audio("sceAudioSetChannelDataLen", {3u, 63u}) == 0x80260006u, "length checked before reservation");
+    check(audio("sceAudioChangeChannelConfig", {2u, 1u}) == 0x80260002u, "config refused while playing");
+    check(audio("sceAudioChangeChannelVolume", {3u, 0x10000u, 0u}) == 0x8026000Bu, "volume checked before reservation");
+    check(audio("sceAudioChangeChannelVolume", {3u, 0x100u, 0x100u}) == 0u, "volume accepted without reservation");
+    k.delay_current(f.ctx, 3000u, 0u);
+    check(audio("sceAudioChangeChannelConfig", {2u, 0x10u}) == 0u, "mono config accepted when idle");
+    check(audio("sceAudioOutput", {2u, 0x8000u, buffer}) == 64u, "mono output starts");
+    check(sink.buffers.back().channels == 1u && sink.buffers.back().frames == 64u, "mono buffer staged");
+    check(audio("sceAudioChRelease", {2u}) == 0u, "channel released while playing");
+    check(audio("sceAudioChRelease", {2u}) == 0x80260008u, "second release refused");
+}
+
 void io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), iso, memory_stick);
     auto &mem = f.runtime.memory();
@@ -576,6 +685,7 @@ int main(int argc, char **argv) {
         msgpipe_contracts();
         fpl_contracts();
         thread_end_contracts();
+        audio_contracts();
         lwmutex_contracts();
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);

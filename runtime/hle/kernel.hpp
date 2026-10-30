@@ -32,6 +32,7 @@ using SceUID = std::int32_t;
 
 namespace error {
 inline constexpr std::uint32_t kIllegalArgument = 0x800200D2u;
+inline constexpr std::uint32_t kIllegalContext = 0x80020064u;
 inline constexpr std::uint32_t kIllegalAddr = 0x800200D3u;
 inline constexpr std::uint32_t kIllegalPerm = 0x800200D1u;
 inline constexpr std::uint32_t kUnknownModule = 0x8002012Eu;
@@ -109,6 +110,7 @@ enum class WaitType {
     Fpl,
     MsgPipeSend,
     MsgPipeReceive,
+    Audio,
     Host, // a condition only the host can check, such as network data arriving
 };
 
@@ -129,7 +131,10 @@ struct WaitState {
     std::uint32_t buffer_address{};
     std::uint32_t total{};
     std::optional<std::uint64_t> deadline_us;
-    HostWaitPoll host_poll; // WaitType::Host
+    HostWaitPoll host_poll; // WaitType::Host, WaitType::Audio at the deadline
+    // Runs when the wait is abandoned (thread terminated), so the object can
+    // drop its parked-thread marker.
+    std::function<void()> cancel_hook;
 };
 
 struct Thread {

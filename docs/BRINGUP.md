@@ -313,3 +313,42 @@ new paths are exercised by the game, not only by unit fixtures.
 `Missing HLE import sceAudio::sceAudioChReserve (NID_0x5EC81C55)`; output
 channel reservation/output is the next boot-depth task (T6f). Full SAS/ATRAC
 synthesis remains T12.
+
+## 2026-10-30 — T6f: sceAudio output channels
+
+**Symptom.** After T6e the deeper boot stopped at
+`Missing HLE import sceAudio::sceAudioChReserve (NID_0x5EC81C55)` after
+20,612 dispatches.
+
+**Falsification.** The import is bound in the inventory; the stop is HLE
+coverage. The executed set also shows `sceAudioChangeChannelConfig` and
+`sceAudioSetChannelDataLen`, so the title configures channels before it ever
+outputs a buffer.
+
+**Root cause.** No sceAudio state existed. The host also had no sink seam, so
+accepting guest PCM would have been a silent stub.
+
+**Fix.** `runtime/hle/hle_audio.*` models the eight mixer channels from the
+hardware contract: one buffer per channel, one parked blocking caller, a
+44.1 kHz drain scheduled on the virtual clock, both rest-length calls (they
+differ after a null-buffer drain), broadcast vs panned volume rules and the
+documented error-check order. `runtime/audio/audio_sink.*` is the host seam;
+the boot runner installs an explicit counting sink, and a run without a sink
+stops with `no audio sink registered` rather than dropping samples. This is
+not Yakumo audio code: the device backend (SDL3/AAudio ring buffer, underrun
+counters) remains T12, where the MIT Yakumo sink can be adapted if useful.
+
+**Evidence.** `tests/hle/kernel_tests.cpp` adds audio contracts: reserve
+errors, one-buffer busy, blocked output parked until the drain, both rest
+counts (64 + parked 64 = 128), null-drain disagreement, mono/stereo staging,
+volume/config/data-length check order, and release while a thread is parked.
+Mutation check: returning `BUSY` instead of parking fails "blocking output
+parks the caller". The bounded boot now reaches 20,639 dispatches with
+127/215 imports bound and 61 executed, zero missing or silent NIDs; the
+executed audio calls are reserve, change-config and set-data-length, with no
+output buffer yet.
+
+**Next blocker (SAS synthesis).** The run stops at
+`Missing HLE import sceSasCore::__sceSasInit (NID_0x42778A9F)`. A bounded SAS
+core slice (init, voice setup, grain render into a guest buffer) is the next
+boot-depth task, tracked as T6g; full audio mixing/output remains T12.
