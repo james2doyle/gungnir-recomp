@@ -9,9 +9,9 @@ reimplementation of PSP system software with a Vulkan renderer.
 **Bring your own game.** This repository contains no game data, no game code
 (including no generated/translated game code), no keys, no firmware, and no
 driver binaries — by design and by enforcement (see below). You supply your
-own legally obtained `game.chd`/ISO; the pipeline verifies its identity,
-generates recompiled code locally into a gitignored `build/` tree, and the
-result runs on your device.
+own legally obtained UMD ISO (`.chd` dumps are converted first — see
+Building); the pipeline verifies its identity, generates recompiled code
+locally into a gitignored `build/` tree, and the result runs on your device.
 
 > Not affiliated with or endorsed by Sting Co., Ltd. or Atlus U.S.A., Inc.
 > PSP/PlayStation are trademarks of Sony Interactive Entertainment Inc.
@@ -64,6 +64,14 @@ build/       GITIGNORED: your game tree, generated recompiled code, outputs
 See `docs/BUILDING.md` (landing with milestone M4). Prerequisites:
 `cmake`, `ninja`, a C++20 compiler, Python 3.11+, Android SDK/NDK (arm64),
 and your own disc image.
+
+**Have a `.chd`?** The pipeline's input is a plain UMD **ISO** — convert
+once with [CHDStudio](https://github.com/purelogiccode/CHDStudio) (GUI) or
+`chdman extractcd` (MAME CLI), then keep `game.iso`. Intake refuses `.chd`
+with a named error and never parses CHD itself: the identity gate
+(262,766,592 bytes, CRC32 `183F3EDC`) *verifies* whatever produced the ISO,
+so any correct converter works. `game.chd`/`game.iso` are gitignored and
+never committed.
 
 ## License
 

@@ -11,6 +11,14 @@ orientation. Work is tracked as dex tasks in `.dex/tasks.jsonl` (in-repo).
 
 ## Hard limits (never relaxed)
 
+0. **Never write a clean-room reimplementation of an existing format, codec,
+   or protocol without explicit user sign-off.** If a task reduces to
+   "implement X that already exists" (a container parser, a codec, a
+   well-specified file format), **stop and ask**: prefer using the existing
+   tool or library (out-of-process if its license demands isolation), or get
+   approval before reimplementing. Example: `game.chd` → ISO uses CHDStudio
+   or `chdman`, not a hand-written CHD decoder.
+
 1. **No proprietary content, code, or work is ever committed.** No game
    disc images (ISO/CHD/CSO), no EBOOT/BOOT/ELF/PRX (encrypted or decrypted),
    no game assets (DAR contents, TPL textures, VAG/AT3 audio, PGF fonts,

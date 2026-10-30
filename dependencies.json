@@ -1,0 +1,14 @@
+{
+  "comment": "Pinned third-party revisions (azazel6 pattern). Every entry must have a matching THIRD_PARTY_LICENSES/ or third_party/<name>/ license text and a PROVENANCE.md. Verified by tools/package_notices.py (T2).",
+  "dependencies": [
+    {
+      "name": "yakumo-framework-subset",
+      "upstream": "https://github.com/TeamGDB/Yakumo",
+      "commit": "b61852aef10870400320b96d92a14136ac17b051",
+      "license": "MIT",
+      "path": "third_party/yakumo",
+      "provenance": "third_party/yakumo/PROVENANCE.md",
+      "note": "ELF32/PRX loader, ISO9660 reader, PARAM.SFO, UTF-8 path helpers (framework subset, byte-identical)"
+    }
+  ]
+}
