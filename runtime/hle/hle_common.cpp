@@ -3,6 +3,9 @@
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <unordered_set>
 
 namespace gungnir::hle {
 
@@ -75,9 +78,33 @@ bool HleRegistrar::try_add(std::string_view library, std::string_view name, HleF
 }
 
 void HleRegistrar::add(std::string_view library, std::string_view name, HleFunction function) {
-    if (!try_add(library, name, std::move(function)))
-        throw psprecomp::Error("Unknown HLE function " + std::string(library) + "::" + std::string(name) +
-            " (missing from configs/nids.csv)");
+    // Optional handler: the profile registers the whole boot surface, while
+    // this title imports a subset. A name absent from the CSV is simply not
+    // bound; if the guest later imports it, the runtime's missing-import trap
+    // names the NID. Required coverage is checked against the module's import
+    // inventory, not against this registration list.
+    (void)try_add(library, name, std::move(function));
+}
+
+bool trace_sync() {
+    static const bool enabled = std::getenv("GUNGNIR_TRACE_SYNC") != nullptr;
+    return enabled;
+}
+
+void log_sync(const std::string &message) {
+    static std::uint64_t remaining = [] {
+        const char *limit = std::getenv("GUNGNIR_TRACE_SYNC_LIMIT");
+        return limit != nullptr ? std::strtoull(limit, nullptr, 10) : 4000ull;
+    }();
+    if (remaining == 0u) return;
+    --remaining;
+    const Thread *thread = kernel().current_thread();
+    std::cerr << "[sync] " << (thread != nullptr ? thread->name : "interrupt") << " " << message << "\n";
+}
+
+void log_once(const std::string &key, const std::string &message) {
+    static std::unordered_set<std::string> seen;
+    if (seen.insert(key).second) std::cerr << message << "\n";
 }
 
 bool HleRegistrar::bound(const std::string &library, std::uint32_t nid) const {

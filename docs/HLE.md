@@ -40,8 +40,8 @@ cross-library alias path, and a bound handler invocation.
 | Area | State | Notes |
 |---|---|---|
 | Registrar + NID registry | VERIFIED (T6a) | `runtime/hle/hle_common.*` |
-| Kernel (cooperative threads, semas, eventflags, mutexes, VTimers, memory partitions) | PLANNED (T6b) | adapting the MIT Yakumo kernel at the pinned commit |
-| ThreadMan / SysMem / IoFileMgr | PLANNED (T6b) | unit tests are TC-6.1 |
+| Kernel (cooperative threads, semas, eventflags, mutexes, VTimers, memory partitions) | VERIFIED (T6b) | adapted MIT Yakumo kernel; deterministic unpaced clock for tests |
+| ThreadMan / SysMem / IoFileMgr | VERIFIED (T6b) | TC-6.1 unit fixtures: memory, create/start/exit/delay, sema/eventflag blocking, VTimer interrupt, ISO disc read + memory-stick write/read |
 | Display / GE / Ctrl / Power / RTC / LoadExec / Stdio | PLANNED (T6c) | first `sceDisplaySetFrameBuf` is TC-6.2 |
 | ModuleMgr PRX overlay tiers | PLANNED (T6d) | translate-on-load, unregister-on-unload (TC-6.3) |
 
@@ -51,6 +51,24 @@ The kernel/HLE design is adopted from TeamGDB/Yakumo (MIT, pinned
 `b61852a`), with profile-specific pieces removed and recorded in
 `third_party/yakumo/PROVENANCE.md`. NID data provenance is in
 `third_party/pspsdk-nids/PROVENANCE.md`. No emulator code is linked.
+
+## Kernel/HLE fixtures (T6b)
+
+`tests/hle/kernel_tests.cpp` exercises the real handlers through
+`Runtime::invoke_import` on a 32 MiB runtime:
+
+- partition allocation/free/coalescing and invalid-type rejection;
+- thread create/start/priority preemption/exit/delete, GP inheritance and a
+  virtual-clock delay (`sceKernelDelayThread`);
+- semaphore acquire/poll/signal/overflow/delete;
+- event-flag set/poll/clear/delete;
+- a blocked waiter resumed by a signal;
+- VTimer expiry delivered through the interrupt path;
+- `disc0:/PSP_GAME/PARAM.SFO` open/read/close and a memory-stick
+  create/write/close/reopen round-trip.
+
+Pacing is disabled in unit fixtures (`Kernel::set_pacing_enabled(false)`) so
+two runs see identical virtual time; interactive boots keep 59.94 Hz pacing.
 
 ## Commands
 

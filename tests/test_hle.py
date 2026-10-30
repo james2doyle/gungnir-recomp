@@ -9,13 +9,16 @@ Red-first: written before runtime/hle or the hle_import_tests target existed.
 """
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "build"
 BINARY = BUILD / "tests" / "hle" / "hle_import_tests"
+KERNEL_BINARY = BUILD / "tests" / "hle" / "hle_kernel_tests"
 NIDS = REPO / "configs" / "nids.csv"
+GAME_ISO = REPO / "game.iso"
 
 
 def setUpModule():
@@ -24,10 +27,11 @@ def setUpModule():
                          capture_output=True, text=True)
     if cfg.returncode != 0:
         raise RuntimeError(f"cmake configure failed:\n{cfg.stderr}")
-    bld = subprocess.run(["cmake", "--build", str(BUILD), "--target", "hle_import_tests"],
+    bld = subprocess.run(["cmake", "--build", str(BUILD),
+                          "--target", "hle_import_tests", "hle_kernel_tests"],
                          capture_output=True, text=True)
     if bld.returncode != 0:
-        raise RuntimeError(f"hle_import_tests build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
+        raise RuntimeError(f"HLE tests build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
 
 
 class TestHleRegistry(unittest.TestCase):
@@ -55,6 +59,18 @@ class TestHleRegistry(unittest.TestCase):
         text = self.run_case("--unknown")
         self.assertIn("stopped", text)
         self.assertNotIn("silent-zero", text)
+
+
+class TestKernelHle(unittest.TestCase):
+    def test_memory_threads_sync_and_io(self):
+        args = [str(KERNEL_BINARY), "--nids", str(NIDS)]
+        with tempfile.TemporaryDirectory(prefix="gungnir-ms-") as ms:
+            if GAME_ISO.exists():
+                args += ["--iso", str(GAME_ISO), "--ms", ms]
+            proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0,
+                         f"kernel HLE contracts failed:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("hle_kernel_tests: OK", proc.stdout)
 
 
 if __name__ == "__main__":

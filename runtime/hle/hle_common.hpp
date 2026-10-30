@@ -8,6 +8,8 @@
 // namespace and the profile-specific pieces (mods, media state, renderer)
 // are removed. Behaviour: bind only known symbols, fail loudly otherwise.
 
+#include "hle/kernel.hpp"
+
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/runtime.hpp"
 
@@ -24,6 +26,8 @@
 
 namespace gungnir::hle {
 
+using psprecomp::AllegrexContext;
+using psprecomp::Runtime;
 using HleFunction = std::function<void(psprecomp::Runtime &, psprecomp::AllegrexContext &)>;
 
 // PSP EABI argument registers: a0-a3 then t0-t3.
@@ -47,6 +51,15 @@ void store64(psprecomp::GuestMemory &memory, std::uint32_t address, std::uint64_
 // a named error, never a silently empty registry.
 void load_nid_registry(psprecomp::Runtime &runtime, const std::filesystem::path &csv);
 
+// Reads from an open guest file descriptor without moving its position.
+// Returns the number of bytes read; 0 when the descriptor is unknown.
+std::size_t read_open_file(std::uint32_t fd, std::uint64_t offset, std::uint8_t *output, std::size_t size);
+
+// Kernel-object tracing: GUNGNIR_TRACE_SYNC gates one-line activity logs.
+[[nodiscard]] bool trace_sync();
+void log_sync(const std::string &message);
+void log_once(const std::string &key, const std::string &message);
+
 class HleRegistrar {
 public:
     explicit HleRegistrar(psprecomp::Runtime &runtime);
@@ -64,5 +77,11 @@ private:
     std::map<std::string, std::vector<std::pair<std::string, std::uint32_t>>> nids_by_symbol_;
     std::set<std::pair<std::string, std::uint32_t>> bound_;
 };
+
+void register_sysmem(HleRegistrar &hle);
+void register_threadman(HleRegistrar &hle);
+void register_system(HleRegistrar &hle);
+void register_io(HleRegistrar &hle, const std::filesystem::path &disc_image,
+    const std::filesystem::path &memory_stick);
 
 } // namespace gungnir::hle

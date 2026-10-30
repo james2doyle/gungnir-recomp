@@ -90,7 +90,9 @@ skips when the private disc is absent; it never passes silently.
   CSV digest is pinned; PSPSDK provenance/license are recorded.
 - `tests/test_hle.py`: cross-library symbol alias binds and invokes; an
   unbound import stops with `Missing HLE import … (NID_0x…)`, never a silent
-  zero.
+  zero. `tests/hle/kernel_tests.cpp` covers memory partitions, thread
+  lifecycle/preemption/delay, semaphores, event flags, blocking waits, VTimer
+  interrupts, and ISO disc + memory-stick IO.
 
 ## Commands
 

@@ -96,12 +96,15 @@ everything else: title-specific, out of scope.
 
 ## Adapted files outside this tree
 
-`runtime/hle/hle_common.hpp/.cpp` adapts
-`profiles/mhp3rd/host/hle/hle_common.*` (MIT, same pinned commit). Changes:
-namespace `gungnir::hle`; profile-only includes (mods, media, renderer) removed;
-the registrar gains cross-library alias resolution and ambiguity refusal.
-These files are not part of the digest-verified subtree above; keep their
-attribution here when they change.
+`runtime/hle/hle_common.*`, `kernel.*`, `hle_sysmem.cpp`,
+`hle_threadman.cpp`, `hle_system.cpp`, and `hle_io.cpp` adapt
+`profiles/mhp3rd/host/hle/*` and `profiles/mhp3rd/host/kernel/*` (MIT, same
+pinned commit). Changes: namespace `gungnir::hle`; profile-only includes
+(mods, translation, overlays, fast loading/forward, frame stats, settings)
+removed; pacing is an explicit switch; 32 MiB user-memory end; the registrar
+gains cross-library alias resolution and ambiguity refusal. These files are not
+part of the digest-verified subtree above; keep their attribution here when
+they change.
 
 ## Emitted-output notes
 
