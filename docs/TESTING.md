@@ -1,7 +1,7 @@
-# TESTING — oracle hierarchy and fixture rules (T4 state)
+# TESTING — oracle hierarchy and fixture rules (T6 state)
 
-Policy: plan §8.1 (red-first) and §8.2 (oracle hierarchy). This file describes
-how the T4 core harness implements them.
+Policy: plan §8.1 (red-first) and §8.2 (oracle hierarchy). This file covers
+the T4 core harness, the T5 profile gates, and the T6 HLE fixtures.
 
 ## Oracle hierarchy
 
@@ -101,7 +101,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 python3 -m unittest tests.test_core_fixtures -v     # TC-4.1..TC-4.4
 python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
-python3 -m unittest tests.test_nids tests.test_hle -v  # T6a registry/HLE
+python3 -m unittest tests.test_nids tests.test_hle -v  # T6a/T6b registry + kernel/HLE
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 

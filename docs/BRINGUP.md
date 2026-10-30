@@ -101,3 +101,31 @@ import-wrapper dispatch.
 
 **Regression.** `tests/test_profile.py::TestDispatchCoverage::test_forced_fallback_is_counted_not_silent`
 (and the local patch ledger, entry 6).
+
+## 2026-10-30 — T6b: optional HLE registrations aborted the boot fixture
+
+**Symptom.** The kernel fixture failed during registration with
+`Unknown HLE function SysMemUserForUser::sceKernelAllocMemoryBlock` even
+though Gungnir never imports that symbol.
+
+**Falsification.** The adapted boot surface registers every handler the
+MHP3rd profile needed, but Gungnir's import inventory is a 215-symbol subset;
+PSPSDK-derived `configs/nids.csv` correctly does not contain every optional
+handler name. The failure was registration-time, before any guest code ran.
+
+**Root cause.** Treating the registration list as the coverage contract. The
+real contract is the module's import inventory: a handler may be optional,
+but an executed import without a binding must stop.
+
+**Fix.** `HleRegistrar::add` treats a name absent from the registry as an
+optional handler and skips it; `Runtime::invoke_import` remains the
+fail-closed gate with the named NID trap. VERIFIED by the kernel fixtures,
+which bind only what the CSV resolves and still exercise every intended path.
+
+**Regression.** `tests/hle/kernel_tests.cpp` (fixture construction) and
+`tests/test_hle.py::TestKernelHle::test_memory_threads_sync_and_io`.
+
+**Follow-up.** T6c's boot runner must compare the module's full import
+inventory against bound `(library, NID)` pairs before/at the end of the
+bounded run, so an unwittingly skipped handler is counted rather than assumed
+optional.

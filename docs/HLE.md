@@ -26,7 +26,8 @@ name are refused as ambiguous.
 
 ## Unknown-import policy (VERIFIED)
 
-An unbound import stops with
+Profile registration may include handlers this title does not import; those
+are skipped. The contract is the executed import: an unbound import stops with
 
 ```
 Missing HLE import <library>::<name-or-unknown> (NID_0x…)
@@ -42,8 +43,28 @@ cross-library alias path, and a bound handler invocation.
 | Registrar + NID registry | VERIFIED (T6a) | `runtime/hle/hle_common.*` |
 | Kernel (cooperative threads, semas, eventflags, mutexes, VTimers, memory partitions) | VERIFIED (T6b) | adapted MIT Yakumo kernel; deterministic unpaced clock for tests |
 | ThreadMan / SysMem / IoFileMgr | VERIFIED (T6b) | TC-6.1 unit fixtures: memory, create/start/exit/delay, sema/eventflag blocking, VTimer interrupt, ISO disc read + memory-stick write/read |
-| Display / GE / Ctrl / Power / RTC / LoadExec / Stdio | PLANNED (T6c) | first `sceDisplaySetFrameBuf` is TC-6.2 |
+| LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock | 
+| Display / GE / Ctrl | PLANNED (T6c) | first `sceDisplaySetFrameBuf` is TC-6.2 |
+| sceRtc | PARTIAL | local clock implemented; Gungnir imports `sceRtcGetCurrentTick`, still pending T6c |
 | ModuleMgr PRX overlay tiers | PLANNED (T6d) | translate-on-load, unregister-on-unload (TC-6.3) |
+
+## T6c references rechecked (2026-10-30)
+
+The MIT Yakumo tree has no separate display/GE/controls HLE file: those
+handlers live in `profiles/mhp3rd/host/hle/hle_media.cpp`, together with
+audio/renderer/input code. T6c will adapt only the timing/callback semantics
+(sampling, vblank waits, GE list completion, EDRAM address/size) and keep the
+renderer/audio dependencies out until T7/T12.
+
+Gungnir's actual import set for the next stage:
+
+- `sceDisplay`: SetMode, SetFrameBuf, WaitVblankStart, WaitVblankStartCB,
+  WaitVblankStartMultiCB, GetVcount, GetFramePerSec.
+- `sceGe_user`: EdramGetAddr/GetSize/SetAddrTranslation, Set/UnsetCallback,
+  ListEnQueue/EnQueueHead/UpdateStallAddr, ListSync, DrawSync, Break, Continue.
+- `sceCtrl`: SetSamplingMode/Cycle, SetIdleCancelThreshold,
+  ReadBufferPositive.
+- `sceRtcGetCurrentTick` is imported but not yet handled.
 
 ## Provenance
 

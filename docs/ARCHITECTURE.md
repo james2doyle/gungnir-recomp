@@ -1,8 +1,9 @@
-# ARCHITECTURE — runtime core (T4 state)
+# ARCHITECTURE — runtime core and HLE (T6 state)
 
 The runtime is the MIT PSPRecomp framework core (vendored at
-`third_party/yakumo/`, pinned + digest-verified; two recorded local patches)
-plus project glue built around it from T5 onward.
+`third_party/yakumo/`, pinned + digest-verified; seven recorded local patches)
+plus project glue built around it from T5 onward: the profile/codegen driver,
+the adapted kernel/HLE boot set, and (next) the desktop boot runner.
 
 ## Layers
 
@@ -11,8 +12,11 @@ tools/intake/          disc -> verified local tree (T3, our glue + vendored read
 third_party/yakumo/    framework core: decoder, interpreter, guest memory,
                        ELF/PRX loader, program analysis, bounded dispatcher,
                        NID registry, SHA-256, deflate; CLI analyzer/codegen
+runtime/hle/           adapted MIT kernel + HLE: cooperative scheduler,
+                       ThreadMan/SysMem/IO, guest exit stubs, registrar
 tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
                        (our authorship; .mips text sources, ELF built into build/)
+tests/hle/             kernel/HLE contracts (memory, threads, sync, timers, IO)
 ```
 
 Nothing under `third_party/` is hand-edited without a recorded patch in its
@@ -28,9 +32,9 @@ Nothing under `third_party/` is hand-edited without a recorded patch in its
 | Main RAM | canonical `0x08000000` (user alias `0x08800000`) | 32 MiB (64 MiB option) | inline AOT fast path covers RAM only |
 | Cache aliases | `0x8…`/`0xA…` | — | canonicalized (`& 0x1FFFFFFF`) before resolution |
 
-EDRAM and other system windows are out of scope for user-mode guest code;
-out-of-window accesses throw a named `Guest memory access outside PSP RAM`
-error, never a silent zero.
+EDRAM is the `0x04000000` VRAM window above; other system windows are out of
+scope for user-mode guest code. Out-of-window accesses throw a named
+`Guest memory access outside PSP RAM` error, never a silent zero.
 
 ## Dispatch contract
 
@@ -49,6 +53,25 @@ error, never a silent zero.
 - Installing dispatch/chain observer hooks disables direct unit chaining so
   every unit boundary becomes observable — the fixture harness relies on this
   for deterministic traces.
+
+## HLE contract (T6)
+
+- `Runtime::register_hle(library, nid, fn)` binds a handler. Profile code
+  registers by `(library, name)` through `gungnir::hle::HleRegistrar`;
+  names resolve through `configs/nids.csv`, with cross-library aliases
+  accepted only when the NID is unambiguous.
+- Generated import wrappers call `invoke_import_cached`; an unbound import
+  stops with `Missing HLE import <library>::<name-or-unknown> (NID_0x…)`.
+  Registration itself is optional per title; executed imports are the
+  fail-closed gate.
+- `Kernel::install` owns the loader thread, guest exit/interrupt stubs, the
+  cooperative scheduler (priority, delay, sema/eventflag/mutex/waiter),
+  VTimer/vblank delivery, and partition memory. HLE calls run at outer
+  dispatch level; blocking saves the caller context and switches to the next
+  ready thread through the runtime identity hook.
+- Interactive boots pace virtual time to 59.94 Hz (`16,683 µs`); unit
+  fixtures disable pacing for deterministic traces. The boot runner is the
+  next T6c deliverable.
 
 ## Fixture pipeline (T4 proof)
 

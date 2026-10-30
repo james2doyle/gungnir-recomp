@@ -13,7 +13,7 @@ verified by `tools/deps.py verify` (TC-2.1) and by
 | Subtree | Upstream | Commit | License | Disposition | Notes |
 |---|---|---|---|---|---|
 | `third_party/pspsdk-nids` | pspdev/pspsdk | `c3da4314` | BSD-3-Clause (in-tree `LICENSE`) | generated NID facts (`configs/nids.csv`); no upstream source vendored | `third_party/pspsdk-nids/PROVENANCE.md` |
-| `third_party/yakumo` | TeamGDB/Yakumo | `b61852af` (full pin in dependencies.json) | MIT (in-tree `LICENSE`) | subset (readers + framework core + CLI tooling), **7 recorded local patches** | per-file mapping, patch list, game-content audit: `third_party/yakumo/PROVENANCE.md` |
+| `third_party/yakumo` | TeamGDB/Yakumo | `b61852af` (full pin in dependencies.json) | MIT (in-tree `LICENSE`) | subset (readers + framework core + CLI tooling), **7 recorded local patches**; kernel/HLE adapted outside the tree | per-file mapping, patch list, adapted-file list, game-content audit: `third_party/yakumo/PROVENANCE.md` |
 
 ## Rules this ledger enforces
 
