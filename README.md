@@ -27,10 +27,13 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 |---|---|---|
 | M0 | Repo live, IP policy enforced | **closed** (T1+T2+T3; ledger: `data/milestones.json`) |
 | M1 | Recomp pipeline proven on synthetic fixtures (Linux) | **closed** (T4; `data/milestones.json`) |
-| M2 | Gungnir analyzed, AOT generated locally | planned |
+| M2 | Gungnir analyzed, AOT generated locally | **closed** (T5; `data/milestones.json`) |
 | M3 | Bounded boot on Linux desktop | planned |
 | M4 | **Title screen on adb device** | planned |
 | M5 | Hardening: audio, saves, texture upscaling, driver picker, perf | planned |
+
+Analysis details and the current census: [`docs/ANALYSIS.md`](docs/ANALYSIS.md);
+bring-up findings journal: [`docs/BRINGUP.md`](docs/BRINGUP.md).
 
 ## Hard constraints
 

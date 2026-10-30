@@ -363,27 +363,108 @@ std::optional<PspModuleInfo> Elf32Image::find_module_info(const GuestMemory &mem
     const auto section_it = std::find_if(sections_.begin(), sections_.end(), [](const ElfSection &section) {
         return section.name == ".rodata.sceModuleInfo" || section.name == ".sceModuleInfo";
     });
-    if (section_it == sections_.end() || section_it->size < sizeof(ModuleInfo32)) return std::nullopt;
-    const std::uint32_t addr = section_runtime_address(*section_it, load_base);
-    if (!memory.contains(addr, sizeof(ModuleInfo32))) return std::nullopt;
-
-    char name[28]{};
-    for (std::size_t i = 0; i < sizeof(name); ++i) {
-        name[i] = static_cast<char>(memory.load8(addr + 4u + static_cast<std::uint32_t>(i)));
+    if (section_it != sections_.end() && section_it->size >= sizeof(ModuleInfo32)) {
+        const std::uint32_t addr = section_runtime_address(*section_it, load_base);
+        if (memory.contains(addr, sizeof(ModuleInfo32))) {
+            char name[28]{};
+            for (std::size_t i = 0; i < sizeof(name); ++i) {
+                name[i] = static_cast<char>(memory.load8(addr + 4u + static_cast<std::uint32_t>(i)));
+            }
+            const auto nul = std::find(std::begin(name), std::end(name), '\0');
+            return PspModuleInfo{
+                memory.load16(addr),
+                memory.load8(addr + 2u),
+                memory.load8(addr + 3u),
+                std::string(name, nul),
+                memory.load32(addr + 32u),
+                memory.load32(addr + 36u),
+                memory.load32(addr + 40u),
+                memory.load32(addr + 44u),
+                memory.load32(addr + 48u),
+                addr,
+            };
+        }
     }
-    const auto nul = std::find(std::begin(name), std::end(name), '\0');
-    return PspModuleInfo{
-        memory.load16(addr),
-        memory.load8(addr + 2u),
-        memory.load8(addr + 3u),
-        std::string(name, nul),
-        memory.load32(addr + 32u),
-        memory.load32(addr + 36u),
-        memory.load32(addr + 40u),
-        memory.load32(addr + 44u),
-        memory.load32(addr + 48u),
-        addr,
-    };
+
+    // Local patch (third_party/yakumo/PROVENANCE.md): stripped commercial PRXs
+    // keep their section headers but blank the section-name table, so the
+    // name-based lookup above cannot find .sceModuleInfo. Recover the header by
+    // content and validate it functionally: a candidate is only accepted when
+    // scan_imports() yields sane library/NID rows. Module-relative fields are
+    // shifted to runtime addresses when they fall below the load base.
+    constexpr std::size_t kStructSize = 56u;
+    for (std::size_t offset = 0x80u; offset + kStructSize <= bytes_.size(); offset += 4u) {
+        const std::uint8_t *raw = bytes_.data() + offset;
+        const std::uint8_t *name = raw + 4u;
+        if (name[0] < 0x20u || name[0] > 0x7Eu) continue;
+        std::size_t length = 0u;
+        while (length < 28u && name[length] != 0u) ++length;
+        if (length == 0u || length >= 28u || name[length] != 0u || length > 25u) continue;
+        bool clean_name = true;
+        for (std::size_t i = 0; i < length; ++i) {
+            const char c = static_cast<char>(name[i]);
+            if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                  (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-'))
+                clean_name = false;
+        }
+        if (!clean_name) continue;
+        const auto u32 = [&](std::size_t at) {
+            return static_cast<std::uint32_t>(raw[at]) |
+                (static_cast<std::uint32_t>(raw[at + 1u]) << 8u) |
+                (static_cast<std::uint32_t>(raw[at + 2u]) << 16u) |
+                (static_cast<std::uint32_t>(raw[at + 3u]) << 24u);
+        };
+        PspModuleInfo candidate{};
+        candidate.attributes = static_cast<std::uint16_t>(raw[0]) |
+            (static_cast<std::uint16_t>(raw[1]) << 8u);
+        candidate.minor_version = raw[2];
+        candidate.major_version = raw[3];
+        candidate.name.assign(reinterpret_cast<const char *>(name), length);
+        candidate.gp = u32(32u);
+        candidate.ent_top = u32(36u);
+        candidate.ent_end = u32(40u);
+        candidate.stub_top = u32(44u);
+        candidate.stub_end = u32(48u);
+        candidate.address = u32(52u);
+        if (candidate.ent_top >= candidate.ent_end || candidate.stub_top >= candidate.stub_end) continue;
+        if (candidate.ent_end - candidate.ent_top > 0x200000u ||
+            candidate.stub_end - candidate.stub_top > 0x200000u)
+            continue;
+        const std::uint32_t max_address =
+            GuestMemory::kPhysicalBase + required_ram_size(load_base);
+        const bool module_relative = candidate.stub_end < load_base &&
+            candidate.ent_end < load_base && candidate.address < load_base;
+        if (module_relative) {
+            candidate.gp += candidate.gp == 0u ? 0u : load_base;
+            candidate.ent_top += load_base;
+            candidate.ent_end += load_base;
+            candidate.stub_top += load_base;
+            candidate.stub_end += load_base;
+            candidate.address += load_base;
+        }
+        if (candidate.gp != 0u && candidate.gp > max_address) continue;
+        if (candidate.stub_top > max_address || candidate.stub_end > max_address ||
+            candidate.ent_top > max_address || candidate.ent_end > max_address)
+            continue;
+        try {
+            const auto imports = scan_imports(memory, candidate);
+            if (imports.empty()) continue;
+            bool sane = true;
+            for (const auto &import : imports) {
+                if (import.library.empty()) sane = false;
+                for (const char c : import.library) {
+                    if (static_cast<unsigned char>(c) < 0x20u ||
+                        static_cast<unsigned char>(c) > 0x7Eu)
+                        sane = false;
+                }
+            }
+            if (!sane) continue;
+        } catch (const Error &) {
+            continue;
+        }
+        return candidate;
+    }
+    return std::nullopt;
 }
 
 std::vector<PspImport> Elf32Image::scan_imports(const GuestMemory &memory, const PspModuleInfo &module) const {

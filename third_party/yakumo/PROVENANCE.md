@@ -6,7 +6,7 @@
 | Commit | `b61852aef10870400320b96d92a14136ac17b051` |
 | License | MIT (repo root `LICENSE`, copied here verbatim) |
 | Imported | 2026-10-30 (framework core + tooling added with T4) |
-| Disposition | **byte-identical except one recorded local patch** (see “Local patches”) |
+| Disposition | **byte-identical except six recorded local patches** (see “Local patches”) |
 
 ## Files
 
@@ -14,7 +14,7 @@
 
 | Upstream path | Here |
 |---|---|
-| `src/elf32.cpp` | `src/elf32.cpp` |
+| `src/elf32.cpp` | `src/elf32.cpp` (one local patch, below) |
 | `include/psprecomp/elf32.hpp` | `include/psprecomp/elf32.hpp` |
 | `include/psprecomp/common.hpp` | `include/psprecomp/common.hpp` |
 | `include/psprecomp/guest_memory.hpp` | `include/psprecomp/guest_memory.hpp` |
@@ -43,8 +43,8 @@
 | `src/deflate.cpp` | same |
 | `src/interpreter.cpp` | same |
 | `src/nid_registry.cpp` | same |
-| `src/program_analysis.cpp` | same |
-| `src/runtime.cpp` | same |
+| `src/program_analysis.cpp` | same (one local patch, below) |
+| `src/runtime.cpp` | same (one local patch, below) |
 | `src/sha256.cpp` | same |
 | `tools/analyzer_main.cpp` | `tools/analyzer_main.cpp` |
 | `tools/codegen_main.cpp` | `tools/codegen_main.cpp` |
@@ -73,6 +73,26 @@ everything else: title-specific, out of scope.
    (plan gotcha C.4). Regression: `tests/core/fixtures/scratchpad_basic.mips`.
    The AOT inline fast path already declines the scratchpad window and falls
    through to the slow path, so no generated-code change was needed.
+3. `src/elf32.cpp` — **content-anchored module-info fallback**. Commercial PSP
+   PRXs may keep section headers but blank the section-name table, so the
+   name-based `.sceModuleInfo` lookup returns nothing; the analyzer then
+   reported zero imports and codegen emitted no HLE wrappers (an import stub
+   would silently return). The fallback scans for the 56-byte module-info
+   shape, normalizes module-relative fields, and accepts a candidate only when
+   `scan_imports()` yields sane library rows. T5 evidence: 215/215 import
+   stubs mapped, 215 generated wrappers. Intake's caller-side shim can be
+   retired on re-sync.
+4. `src/program_analysis.cpp` — **HI16/LO16 pair seeding** (plan gotcha C.5).
+   Relocation sites of type 5/6 are paired by register in address order
+   (LUI high half + ADDIU/ORI low half, bounded distance), and executable
+   targets become seeds with source `hi16_lo16_pair`. The existing
+   materialized-pointer scan misses pairs split across block boundaries.
+   T5 evidence: 282 pair seeds on the main module.
+5. `src/program_analysis.cpp` — **prologue-after-return seeding** (plan gotcha
+   C.5). Scans for `jr $ra` followed by a new stack-frame prologue
+   (`addiu $sp,$sp,-N`), catching adjacent functions with no direct call or
+   relocated pointer. T5 evidence: 3,221 candidate starts, 5 not already
+   discovered by other sources.
 
 ## Emitted-output notes
 

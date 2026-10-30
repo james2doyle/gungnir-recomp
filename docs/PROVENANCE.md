@@ -12,7 +12,7 @@ verified by `tools/deps.py verify` (TC-2.1) and by
 
 | Subtree | Upstream | Commit | License | Disposition | Notes |
 |---|---|---|---|---|---|
-| `third_party/yakumo` | TeamGDB/Yakumo | `b61852af` (full pin in dependencies.json) | MIT (in-tree `LICENSE`) | subset (readers + framework core + CLI tooling), **2 recorded local patches** | per-file mapping, patch list, game-content audit: `third_party/yakumo/PROVENANCE.md` |
+| `third_party/yakumo` | TeamGDB/Yakumo | `b61852af` (full pin in dependencies.json) | MIT (in-tree `LICENSE`) | subset (readers + framework core + CLI tooling), **6 recorded local patches** | per-file mapping, patch list, game-content audit: `third_party/yakumo/PROVENANCE.md` |
 
 ## Rules this ledger enforces
 

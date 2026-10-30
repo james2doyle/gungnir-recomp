@@ -1,0 +1,46 @@
+# Gungnir (USA, ULUS-10592) profile configuration.
+#
+# Facts are verified against the intake manifest on every analysis run; a
+# mismatch aborts with a named FACTS error. Choices are our policy decisions
+# and are recorded in docs/ANALYSIS.md. Dump-specific hashes and address pins
+# live in the gitignored profiles/gungnir/local/ directory, never here.
+
+[facts]
+title = "Gungnir"
+disc_id = "ULUS10592"
+region = "USA"
+main_module = "9th"
+main_disc_path = "PSP_GAME/SYSDIR/EBOOT.BIN"
+load_base = 0x08804000
+
+[choices]
+# AOT corpus partitioning. 16 KiB keeps one generated unit near 4k guest
+# instructions, which compiles and links reliably; it also matches the PSP
+# memory-window granularity later used for overlay swaps.
+unit_span_bytes = 0x4000
+
+# Census gates. Bounds, not exact equality: discovery improvements may add
+# seeds, but a silent drop in coverage must fail loudly. Actual values are
+# recorded in profiles/gungnir/local/profile_pins.json by each local run.
+expect_functions = [6000, 6800]
+expect_instructions = [350000, 380000]
+
+# Runtime policy for this profile: never paper over a missing function or an
+# unmodelled instruction.
+missing_function = "stop"
+unsupported_instruction = "stop"
+interpreter_fallback = "counted"
+
+[analysis]
+# Discovery sources that must produce at least one seed. R_MIPS_32 mining and
+# HI16/LO16 pair seeding are mandatory (plan gotcha C.5); direct jal targets
+# and the ELF entry are the baseline. materialized_code_pointer catches
+# LUI+ADDIU/ORI pointers assembled immediately before a call.
+require_seed_sources = [
+    "elf_entry",
+    "direct_jal_target",
+    "materialized_code_pointer",
+    "relocated_r_mips32_code_pointer",
+    "hi16_lo16_pair",
+    "prologue_after_return",
+]

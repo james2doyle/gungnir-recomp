@@ -1136,6 +1136,23 @@ void Runtime::unregister_functions(std::uint32_t start, std::uint32_t end) {
         }
         it = functions_.erase(it);
     }
+    // Local patch (third_party/yakumo/PROVENANCE.md): a fully unregistered
+    // generated unit must leave the fast unit table too. Overlay swaps call
+    // unregister_functions() before reusing an address window; a stale unit
+    // pointer would keep dispatching the old code even though has_function()
+    // reports the address gone.
+    if (generated_unit_layout_valid_ && generated_unit_span_ != 0u) {
+        for (std::size_t unit = 0; unit < kGeneratedUnitFastCapacity; ++unit) {
+            const std::uint64_t unit_start =
+                static_cast<std::uint64_t>(generated_unit_base_) + unit * generated_unit_span_;
+            const std::uint64_t unit_end = unit_start + generated_unit_span_;
+            if (unit_start >= start && unit_end <= end) {
+                generated_units_[unit] = nullptr;
+                generated_unit_entries_[unit] = nullptr;
+                generated_unit_disabled_[unit] = 1u;
+            }
+        }
+    }
 }
 
 void Runtime::register_native_fast_path(std::uint32_t address, NativeFastPath function) {

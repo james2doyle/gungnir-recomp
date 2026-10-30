@@ -360,6 +360,79 @@ void collect_section_data_code_pointers(const Elf32Image &elf, const GuestMemory
     }
 }
 
+// Local patch (third_party/yakumo/PROVENANCE.md): HI16/LO16 pair seeding.
+// Commercial PSP binaries materialize function pointers with a relocated
+// `lui`/`addiu` (or `ori`) pair. Walking relocation sites by register, rather
+// than only following straight-line constant propagation, finds pointers whose
+// halves are separated by a block boundary or an unrelated instruction.
+void collect_hi16_lo16_code_pointers(const Elf32Image &elf, const GuestMemory &memory,
+    std::uint32_t load_base, const std::vector<ExecutableRange> &ranges,
+    std::map<std::uint32_t, std::string> &seeds) {
+    struct PendingHigh {
+        std::uint32_t value{};
+        std::uint32_t site{};
+    };
+    std::map<std::uint32_t, PendingHigh> pending;
+    auto sites = elf.relocation_sites(load_base);
+    std::sort(sites.begin(), sites.end(), [](const auto &a, const auto &b) {
+        return a.patch_address < b.patch_address;
+    });
+    std::uint32_t previous_site = 0u;
+    for (const auto &site : sites) {
+        if (previous_site != 0u && site.patch_address - previous_site > 0x1000u) pending.clear();
+        previous_site = site.patch_address;
+        if (!memory.contains(site.patch_address, 4u)) continue;
+        const std::uint32_t word = memory.load32(site.patch_address);
+        const std::uint32_t opcode = word >> 26u;
+        if (site.type == 5u) { // R_MIPS_HI16
+            if (opcode != 0x0Fu) continue;
+            const std::uint32_t rt = (word >> 16u) & 31u;
+            pending[rt] = {word << 16u, site.patch_address};
+            continue;
+        }
+        if (site.type != 6u) continue; // R_MIPS_LO16
+        const std::uint32_t rs = (word >> 21u) & 31u;
+        const auto it = pending.find(rs);
+        if (it == pending.end()) continue;
+        if (site.patch_address - it->second.site > 0x1000u) {
+            pending.erase(it);
+            continue;
+        }
+        const std::uint32_t low = word & 0xFFFFu;
+        std::uint32_t target = 0u;
+        if (opcode == 0x09u) { // addiu
+            target = it->second.value + static_cast<std::uint32_t>(
+                static_cast<std::int32_t>(static_cast<std::int16_t>(low)));
+        } else if (opcode == 0x0Du) { // ori
+            target = it->second.value | low;
+        } else {
+            pending.erase(it);
+            continue;
+        }
+        pending.erase(it);
+        add_seed(seeds, ranges, target, "hi16_lo16_pair");
+    }
+}
+
+// Local patch (third_party/yakumo/PROVENANCE.md): prologue-after-return
+// seeding. Adjacent functions without a direct `jal` or a relocated pointer
+// are still visible as `jr $ra` followed by a new stack-frame prologue. The
+// shape is conservative (return + delay slot + `addiu $sp,$sp,-N`) so data
+// words and mid-function labels do not enter the seed set.
+void collect_prologue_after_return(const GuestMemory &memory,
+    const std::vector<ExecutableRange> &ranges, std::map<std::uint32_t, std::string> &seeds) {
+    for (const auto &range : ranges) {
+        for (std::uint32_t pc = range.start + 8u; pc + 4u <= range.end; pc += 4u) {
+            if (memory.load32(pc - 8u) != 0x03E00008u) continue;
+            const std::uint32_t word = memory.load32(pc);
+            const bool stack_prologue = (word >> 26u) == 0x09u &&
+                ((word >> 21u) & 31u) == 29u && ((word >> 16u) & 31u) == 29u &&
+                (word & 0x8000u) != 0u;
+            if (stack_prologue) add_seed(seeds, ranges, pc, "prologue_after_return");
+        }
+    }
+}
+
 std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf, const GuestMemory &memory,
     std::uint32_t load_base, const std::vector<ExecutableRange> &ranges) {
     std::map<std::uint32_t, std::string> seeds;
@@ -373,6 +446,8 @@ std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf
             add_seed(seeds, ranges, direct_jump_target(pc, decoded), "direct_jal_target");
         }
     }
+    collect_hi16_lo16_code_pointers(elf, memory, load_base, ranges, seeds);
+    collect_prologue_after_return(memory, ranges, seeds);
     collect_materialized_code_pointers(memory, ranges, seeds);
     collect_relocated_data_code_pointers(elf, memory, load_base, ranges, seeds);
     if (!elf.is_psp_prx()) collect_section_data_code_pointers(elf, memory, load_base, ranges, seeds);

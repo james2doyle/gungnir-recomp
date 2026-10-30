@@ -64,12 +64,33 @@ fixture's declared memory windows. Stops exit 4 (loud); clean fixture
 completion exits 0; an exhausted dispatch budget exits 3 — never silent
 success.
 
+## Profile gates (T5)
+
+`tests/test_profile.py` adds four gates on the real local module. The suite
+skips when the private disc is absent; it never passes silently.
+
+- TC-5.1 `TestAnalysisManifest`: accounting identity
+  (`analyzed + unreached == executable words`), census bounds asserted by the
+  tool, required discovery sources present, 215/215 import stubs mapped,
+  deterministic manifest bytes.
+- TC-5.2 `TestCodegen`: every executable word is a registered entry, import
+  wrappers match the inventory, repeated codegen is byte-identical and rewrites
+  zero units, and the whole generated corpus compiles.
+- TC-5.3 `TestMutationGate`: changing one generated fixture semantic
+  (`+1` -> `+2`) must make the interpreter/AOT traces diverge with a changed
+  guest register. A build error does not count; the mutation must kill the
+  gate for the right reason.
+- TC-5.4 `TestDispatchCoverage`: a bounded real-module run classifies every
+  outer dispatch as translated or interpreter fallback; the negative control
+  drops the entry unit and requires a nonzero, listed fallback count.
+
 ## Commands
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 python3 -m unittest tests.test_core_fixtures -v     # TC-4.1..TC-4.4
+python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 

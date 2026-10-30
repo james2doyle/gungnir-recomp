@@ -62,8 +62,35 @@
       ]
     },
     "M2": {
-      "name": "Gungnir analyzed, AOT generated locally",
-      "state": "planned"
+      "name": "Game analyzed, AOT generated",
+      "recorded": "2026-10-30",
+      "state": "closed",
+      "criteria": [
+        "census gates pass with declared bounds (functions 6,062; instructions 359,429)",
+        "100% of executable words accounted and registered as dispatch entries",
+        "all 215 import stubs mapped and wrapped",
+        "chunked AOT corpus compiles",
+        "repeated codegen is byte-stable",
+        "bounded dispatch-coverage run classifies every dispatch"
+      ],
+      "evidence": {
+        "analysis": "docs/ANALYSIS.md \u2014 424,373 executable words = 359,429 analyzed + 64,944 counted data/trap; 6,062 seed functions; 215 imports across 23 libraries, 0 unmapped; local pins in profiles/gungnir/local/",
+        "codegen": "104 translation units at 16 KiB spans; 424,373 registered entries; 215 import wrappers; repeated run rewrites 0 units",
+        "tests": "tests/test_profile.py \u2014 TC-5.1 census/accounting/import inventory; TC-5.2 whole-corpus compile + byte-stable regeneration; TC-5.3 mutation gate; TC-5.4 bounded coverage with forced-fallback negative control",
+        "documents": [
+          "docs/ANALYSIS.md",
+          "docs/BRINGUP.md"
+        ],
+        "tasks": [
+          "T5"
+        ]
+      },
+      "gaps": [
+        "updater module (SYSDIR/UPDATE/EBOOT.BIN) excluded as firmware-updater payload, never loaded by the title",
+        "33 unsupported instruction occurrences counted; runtime stops loudly under profile policy",
+        "Ghidra DATA-xref jump-table recovery not implemented; every executable word is a dispatch entry so computed jumps have a runtime fallback",
+        "T6 still needs to bind the 215 HLE imports; the bounded T5 run stops at the first import by design"
+      ]
     },
     "M3": {
       "name": "Bounded boot on Linux desktop",
