@@ -1,7 +1,8 @@
 # Intake — supplying your own disc (T3)
 
-Intake turns your own `game.chd` into a verified local module tree under
-`build/game/`-style output. It never parses CHD, never decrypts in-repo, and
+Intake turns your own `game.iso` into a verified local module tree under
+`build/game/`-style output. **Disc input is ISO only** — a `.chd` is never
+parsed and is refused outright (see §1). It never decrypts in-repo, and
 never writes outside the output directory. Every gate fails closed with a
 **named error** — no silent skips.
 
@@ -9,7 +10,7 @@ never writes outside the output directory. Every gate fails closed with a
 
 | File | Role |
 |---|---|
-| Your disc image | source of truth: PSP UMD ISO or CHD to convert |
+| Your disc image | source of truth: a PSP UMD **ISO** (converted from your CHD, §1) |
 | Decrypt tool | user-supplied, runs out-of-process (see §3) |
 
 The repo never receives any of these. Intake reads them, gates them, and
