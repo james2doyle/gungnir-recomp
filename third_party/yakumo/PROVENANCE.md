@@ -41,13 +41,13 @@
 | `include/psprecomp/sha256.hpp` | same |
 | `src/decoder.cpp` | same (one local patch, below) |
 | `src/deflate.cpp` | same |
-| `src/interpreter.cpp` | same |
 | `src/nid_registry.cpp` | same |
 | `src/program_analysis.cpp` | same (one local patch, below) |
 | `src/runtime.cpp` | same (one local patch, below) |
+| `src/interpreter.cpp` | same (one local patch, below) |
+| `tools/codegen_main.cpp` | same (one local patch, below) |
 | `src/sha256.cpp` | same |
 | `tools/analyzer_main.cpp` | `tools/analyzer_main.cpp` |
-| `tools/codegen_main.cpp` | `tools/codegen_main.cpp` |
 | `tools/dump_function.cpp` | `tools/dump_function.cpp` |
 
 Not imported: `configs/nids.csv` (upstream does not document its provenance;
@@ -93,6 +93,22 @@ everything else: title-specific, out of scope.
    (`addiu $sp,$sp,-N`), catching adjacent functions with no direct call or
    relocated pointer. T5 evidence: 3,221 candidate starts, 5 not already
    discovered by other sources.
+6. `src/runtime.cpp` — **named unknown-import trap**. A missing HLE binding
+   stops with `Missing HLE import <library>::<name-or-unknown> (NID_0x…)`
+   instead of a numeric-only message, so every counted HLE gap maps back to
+   the import inventory. Regression: `tests/test_hle.py`.
+7. `include/psprecomp/decoder.hpp`, `src/decoder.cpp`,
+   `include/psprecomp/allegrex_context.hpp`, `src/interpreter.cpp`,
+   `tools/codegen_main.cpp` — **missing VFPU forms lowered** (plan gotcha
+   C.3/C.7). The T6 boot exposed 33 explicit `unsupported` words across four
+   families: `vcrs`, `vdet`, `vbfy1/2`, `vi2uc/vi2c/vi2us/vi2s` and
+   `vt4444/vt5551/vt5650`. Decoder kinds and both tiers now share helpers in
+   `AllegrexContext`; a fresh context starts with identity S/T prefixes
+   (`0xE4`) instead of zero, which is the hardware reset state. Evidence:
+   zero `not lowered yet` emissions in the regenerated Gungnir corpus; the
+   bounded boot advances from 233 to 387 dispatches; fixture
+   `tests/core/fixtures/vfpu_boot_gap.mips` is hand-computed and passes both
+   tiers.
 
 ## Adapted files outside this tree
 

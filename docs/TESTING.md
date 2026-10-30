@@ -22,7 +22,7 @@ the T4 core harness, the T5 profile gates, and the T6 HLE fixtures.
 
 - Bug fixes start from a failing fixture in `tests/core/fixtures/` whose stop
   reason or digest pins the bug (examples already recorded: ADDI decoding,
-  scratchpad access).
+  scratchpad access, the VFPU forms in `vfpu_boot_gap.mips`).
 - A fixture is added red, observed failing for the named reason, then fixed;
   the observation is recorded in the task/commit notes.
 - Mutation checks: for codegen/HLE semantic changes, break one semantic and

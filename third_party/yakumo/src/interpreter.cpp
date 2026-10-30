@@ -846,6 +846,23 @@ bool execute_simple(Runtime &rt, AllegrexContext &ctx, const DecodedInstruction 
     case OpcodeKind::VcrossQuat:
         ctx.execute_vfpu_cross_quat(vfpu_vd(d.word), vfpu_vs(d.word), vfpu_vt(d.word), vfpu_length(d.word));
         break;
+    case OpcodeKind::Vcrs:
+        ctx.execute_vfpu_vcrs(vfpu_vd(d.word), vfpu_vs(d.word), vfpu_vt(d.word), vfpu_length(d.word));
+        break;
+    case OpcodeKind::Vdet:
+        ctx.execute_vfpu_vdet(vfpu_vd(d.word), vfpu_vs(d.word), vfpu_vt(d.word), vfpu_length(d.word));
+        break;
+    case OpcodeKind::Vi2x:
+        ctx.execute_vfpu_vi2x(vfpu_vd(d.word), vfpu_vs(d.word), vfpu_length(d.word), ((d.word >> 16u) & 31u) - 28u);
+        break;
+    case OpcodeKind::Vbfy:
+        ctx.execute_vfpu_vbfy(vfpu_vd(d.word), vfpu_vs(d.word), vfpu_length(d.word),
+            ((d.word >> 16u) & 31u) == 3u);
+        break;
+    case OpcodeKind::ColorConv:
+        ctx.execute_vfpu_color_convert(
+            vfpu_vd(d.word), vfpu_vs(d.word), vfpu_length(d.word), ((d.word >> 16u) & 31u) - 24u);
+        break;
     case OpcodeKind::Vminmax:
         ctx.execute_vfpu_vminmax(
             vfpu_vd(d.word), vfpu_vs(d.word), vfpu_vt(d.word), vfpu_length(d.word), ((d.word >> 23u) & 7u) == 3u);

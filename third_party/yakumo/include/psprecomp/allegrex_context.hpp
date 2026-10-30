@@ -28,7 +28,10 @@ struct alignas(16) AllegrexContext {
     // VFPU is represented as 128 scalar lanes for now. The physical PSP
     // register views overlap; the final lowering layer will provide S/V/M views.
     std::array<float, 128> vfpu{};
-    std::array<std::uint32_t, 16> vfpu_ctrl{};
+    // S and T prefixes reset to the identity swizzle (x, y, z, w); D starts
+    // with no saturation or write mask. Prefix-eating restores these, and a
+    // freshly created context must start in the same state.
+    std::array<std::uint32_t, 16> vfpu_ctrl{0xE4u, 0xE4u, 0u};
 
     [[nodiscard]] PSPRECOMP_CONTEXT_FORCEINLINE std::uint32_t fpr_bits(std::uint32_t index) const noexcept {
         return index < fpr.size() ? std::bit_cast<std::uint32_t>(fpr[index]) : 0u;
@@ -633,6 +636,180 @@ struct alignas(16) AllegrexContext {
         for (std::uint32_t lane = 0u; lane < destination_length; ++lane)
             result[lane] = std::bit_cast<float>(result_bits[lane]);
         write_vfpu_vector_with_destination_prefix(result, destination_register, destination_length);
+    }
+
+    void execute_vfpu_vcrs(std::uint32_t destination_register, std::uint32_t source_register,
+        std::uint32_t target_register, std::uint32_t length) noexcept {
+        if (length == 0u || length > 4u) return;
+
+        float source[4]{};
+        float target[4]{};
+        read_vfpu_vector(source, source_register, length);
+        read_vfpu_vector(target, target_register, length);
+
+        // The cross product is produced as a lane-wise multiply of the forced
+        // S view (y, z, x, w) and T view (z, x, y, w). Swizzle bits are
+        // replaced; the original negate/absolute/constant controls remain.
+        const std::uint32_t source_prefix = vfpu_ctrl[0];
+        const std::uint32_t target_prefix = vfpu_ctrl[1];
+        vfpu_ctrl[0] = (source_prefix & ~0x3Fu) | 0x09u;
+        vfpu_ctrl[1] = (target_prefix & ~0x3Fu) | 0x12u;
+        apply_vfpu_source_prefix(source, length, 0u);
+        apply_vfpu_source_prefix(target, length, 1u);
+        vfpu_ctrl[0] = source_prefix;
+        vfpu_ctrl[1] = target_prefix;
+
+        float result[4]{};
+        for (std::uint32_t lane = 0u; lane < length; ++lane) result[lane] = source[lane] * target[lane];
+        write_vfpu_vector_with_destination_prefix(result, destination_register, length);
+    }
+
+    // VDet: a two-dimensional determinant. S is read through a quad view, T
+    // keeps its original y/x swizzle controls, then only the first two source
+    // lanes are negated into the dot product (x0*y1 - x1*y0).
+    void execute_vfpu_vdet(std::uint32_t destination_register, std::uint32_t source_register,
+        std::uint32_t target_register, std::uint32_t length) noexcept {
+        if (length == 0u || length > 4u) return;
+
+        float source[4]{};
+        float target[4]{};
+        read_vfpu_vector(source, source_register, length);
+        read_vfpu_vector(target, target_register, length);
+
+        apply_vfpu_source_prefix(source, 4u, 0u);
+        const std::uint32_t target_prefix = vfpu_ctrl[1];
+        vfpu_ctrl[1] = (target_prefix & ~0x0Fu) | 0x01u;
+        apply_vfpu_source_prefix(target, 4u, 1u);
+        vfpu_ctrl[1] = target_prefix;
+
+        source[1] = -source[1];
+        float sum = 0.0f;
+        for (std::uint32_t lane = 0u; lane < 4u; ++lane) sum += source[lane] * target[lane];
+        if (std::isnan(sum)) sum = std::fabs(sum);
+
+        const float result[1]{sum};
+        write_vfpu_vector_with_destination_prefix(result, destination_register, 1u);
+    }
+
+    // VBfy1/VBfy2: force the S negate flags for the upper half and the T
+    // swizzle yxwz / zwxy, then add the two views lane-wise.
+    void execute_vfpu_vbfy(std::uint32_t destination_register, std::uint32_t source_register,
+        std::uint32_t length, bool second) noexcept {
+        if (length == 0u || length > 4u) return;
+
+        float source[4]{};
+        float target[4]{};
+        read_vfpu_vector(source, source_register, length);
+        read_vfpu_vector(target, source_register, length);
+
+        const std::uint32_t source_prefix = vfpu_ctrl[0];
+        const std::uint32_t target_prefix = vfpu_ctrl[1];
+        vfpu_ctrl[0] = source_prefix | (second ? 0x000C0000u : 0x000A0000u);
+        vfpu_ctrl[1] = (target_prefix & ~0xFFu) | (second ? 0x4Eu : 0xB1u);
+        apply_vfpu_source_prefix(source, length, 0u);
+        apply_vfpu_source_prefix(target, length, 1u);
+        vfpu_ctrl[0] = source_prefix;
+        vfpu_ctrl[1] = target_prefix;
+
+        float result[4]{};
+        for (std::uint32_t lane = 0u; lane < length; ++lane) result[lane] = source[lane] + target[lane];
+        write_vfpu_vector_with_destination_prefix(result, destination_register, length);
+    }
+
+    // VI2UC/VI2C/VI2US/VI2S pack integer lanes into 8- or 16-bit fields. The
+    // source prefix applies through a four-lane view; only the encoded input
+    // lanes contain data. The destination prefix applies to the packed result.
+    void execute_vfpu_vi2x(std::uint32_t destination_register, std::uint32_t source_register,
+        std::uint32_t source_length, std::uint32_t operation) noexcept {
+        if (source_length == 0u || source_length > 4u || operation > 3u) return;
+
+        float source[4]{};
+        read_vfpu_vector(source, source_register, source_length);
+        apply_vfpu_source_prefix(source, 4u, 0u);
+
+        std::uint32_t packed[2]{};
+        std::uint32_t destination_length = 1u;
+        if (operation <= 1u) {
+            for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
+                const std::uint32_t raw = std::bit_cast<std::uint32_t>(source[lane]);
+                if (operation == 0u) { // VI2UC
+                    auto value = std::bit_cast<std::int32_t>(raw);
+                    if (value < 0) value = 0;
+                    packed[0] |= ((static_cast<std::uint32_t>(value) >> 23u) & 0xFFu) << (lane * 8u);
+                } else { // VI2C
+                    packed[0] |= (raw >> 24u) << (lane * 8u);
+                }
+            }
+        } else {
+            destination_length = (source_length + 1u) / 2u;
+            for (std::uint32_t pair = 0u; pair < destination_length; ++pair) {
+                const std::uint32_t low = std::bit_cast<std::uint32_t>(source[pair * 2u]);
+                const std::uint32_t high = std::bit_cast<std::uint32_t>(source[pair * 2u + 1u]);
+                if (operation == 2u) { // VI2US
+                    auto low_value = std::bit_cast<std::int32_t>(low);
+                    auto high_value = std::bit_cast<std::int32_t>(high);
+                    if (low_value < 0) low_value = 0;
+                    if (high_value < 0) high_value = 0;
+                    packed[pair] = (static_cast<std::uint32_t>(low_value) >> 15u) |
+                        ((static_cast<std::uint32_t>(high_value) >> 15u) << 16u);
+                } else { // VI2S
+                    packed[pair] = (low >> 16u) | ((high >> 16u) << 16u);
+                }
+            }
+        }
+
+        float result[2]{
+            std::bit_cast<float>(packed[0]),
+            std::bit_cast<float>(packed[1]),
+        };
+        write_vfpu_vector_with_destination_prefix(result, destination_register, destination_length);
+    }
+
+    // VT4444/VT5551/VT5650 convert four 32-bit colours to 16-bit fields and
+    // pack them into two lanes. Inputs are read as a quad regardless of the
+    // encoded size; a scalar-encoded result writes one lane, everything else
+    // two.
+    void execute_vfpu_color_convert(std::uint32_t destination_register, std::uint32_t source_register,
+        std::uint32_t source_length, std::uint32_t operation) noexcept {
+        if (source_length == 0u || source_length > 4u || operation < 1u || operation > 3u) return;
+
+        float source[4]{};
+        read_vfpu_vector(source, source_register, 4u);
+        apply_vfpu_source_prefix(source, 4u, 0u);
+
+        std::uint32_t colors[4]{};
+        for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
+            const std::uint32_t input = std::bit_cast<std::uint32_t>(source[lane]);
+            if (operation == 1u) { // VT4444
+                const std::uint32_t a = ((input >> 24u) & 0xFFu) >> 4u;
+                const std::uint32_t b = ((input >> 16u) & 0xFFu) >> 4u;
+                const std::uint32_t g = ((input >> 8u) & 0xFFu) >> 4u;
+                const std::uint32_t r = (input & 0xFFu) >> 4u;
+                colors[lane] = (a << 12u) | (b << 8u) | (g << 4u) | r;
+            } else if (operation == 2u) { // VT5551
+                const std::uint32_t a = ((input >> 24u) & 0xFFu) >> 7u;
+                const std::uint32_t b = ((input >> 16u) & 0xFFu) >> 3u;
+                const std::uint32_t g = ((input >> 8u) & 0xFFu) >> 3u;
+                const std::uint32_t r = (input & 0xFFu) >> 3u;
+                colors[lane] = (a << 15u) | (b << 10u) | (g << 5u) | r;
+            } else { // VT5650
+                const std::uint32_t b = ((input >> 16u) & 0xFFu) >> 3u;
+                const std::uint32_t g = ((input >> 8u) & 0xFFu) >> 2u;
+                const std::uint32_t r = (input & 0xFFu) >> 3u;
+                colors[lane] = (b << 11u) | (g << 5u) | r;
+            }
+        }
+
+        const std::uint32_t packed[2]{
+            colors[0] | (colors[1] << 16u),
+            colors[2] | (colors[3] << 16u),
+        };
+        float result[2]{
+            std::bit_cast<float>(packed[0]),
+            std::bit_cast<float>(packed[1]),
+        };
+        write_vfpu_vector_with_destination_prefix(
+            result, destination_register, source_length == 1u ? 1u : 2u);
     }
 
     template <std::uint32_t DestinationScalarRegister, std::uint32_t SourceRegister, std::uint32_t TargetRegister,

@@ -842,6 +842,56 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
             << length << "u);\n";
         break;
     }
+    case psprecomp::OpcodeKind::Vcrs: {
+        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
+        const std::uint32_t length = size_code + 1u;
+        const std::uint32_t destination = d.word & 0x7Fu;
+        const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+        const std::uint32_t target = (d.word >> 16u) & 0x7Fu;
+        out << "    ctx.execute_vfpu_vcrs(" << destination << "u, " << source << "u, " << target << "u, "
+            << length << "u);\n";
+        break;
+    }
+    case psprecomp::OpcodeKind::Vdet: {
+        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
+        const std::uint32_t length = size_code + 1u;
+        const std::uint32_t destination = d.word & 0x7Fu;
+        const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+        const std::uint32_t target = (d.word >> 16u) & 0x7Fu;
+        out << "    ctx.execute_vfpu_vdet(" << destination << "u, " << source << "u, " << target << "u, "
+            << length << "u);\n";
+        break;
+    }
+    case psprecomp::OpcodeKind::Vi2x: {
+        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
+        const std::uint32_t source_length = size_code + 1u;
+        const std::uint32_t destination = d.word & 0x7Fu;
+        const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+        const std::uint32_t operation = ((d.word >> 16u) & 31u) - 28u;
+        out << "    ctx.execute_vfpu_vi2x(" << destination << "u, " << source << "u, " << source_length << "u, "
+            << operation << "u);\n";
+        break;
+    }
+    case psprecomp::OpcodeKind::Vbfy: {
+        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
+        const std::uint32_t length = size_code + 1u;
+        const std::uint32_t destination = d.word & 0x7Fu;
+        const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+        const bool second = ((d.word >> 16u) & 31u) == 3u;
+        out << "    ctx.execute_vfpu_vbfy(" << destination << "u, " << source << "u, " << length << "u, "
+            << (second ? "true" : "false") << ");\n";
+        break;
+    }
+    case psprecomp::OpcodeKind::ColorConv: {
+        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
+        const std::uint32_t source_length = size_code + 1u;
+        const std::uint32_t destination = d.word & 0x7Fu;
+        const std::uint32_t source = (d.word >> 8u) & 0x7Fu;
+        const std::uint32_t operation = ((d.word >> 16u) & 31u) - 24u;
+        out << "    ctx.execute_vfpu_color_convert(" << destination << "u, " << source << "u, " << source_length
+            << "u, " << operation << "u);\n";
+        break;
+    }
     case psprecomp::OpcodeKind::Vminmax: {
         const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
         const std::uint32_t length = size_code + 1u;

@@ -651,6 +651,12 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
         } else if (operation == 4u) {
             d.kind = OpcodeKind::Vhdp;
             d.mnemonic = "vhdp";
+        } else if (operation == 5u) {
+            d.kind = OpcodeKind::Vcrs;
+            d.mnemonic = "vcrs";
+        } else if (operation == 6u) {
+            d.kind = OpcodeKind::Vdet;
+            d.mnemonic = "vdet";
         } else {
             d.kind = OpcodeKind::Vfpu;
             d.mnemonic = "vfpu1";
@@ -719,6 +725,10 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
             d.kind = OpcodeKind::Vx2i;
             static constexpr const char *names[4]{"vuc2i", "vc2i", "vus2i", "vs2i"};
             d.mnemonic = names[operation - 24u];
+        } else if (group == 1u && operation >= 28u && operation <= 31u) {
+            d.kind = OpcodeKind::Vi2x;
+            static constexpr const char *names[4]{"vi2uc", "vi2c", "vi2us", "vi2s"};
+            d.mnemonic = names[operation - 28u];
         } else if (group >= 16u && group <= 19u) {
             d.kind = OpcodeKind::Vf2i;
             static constexpr const char *names[4]{"vf2in", "vf2iz", "vf2iu", "vf2id"};
@@ -741,6 +751,13 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
         } else if (group == 2u && (operation == 6u || operation == 7u)) {
             d.kind = OpcodeKind::VfpuHorizontal;
             d.mnemonic = operation == 6u ? "vfad" : "vavg";
+        } else if (group == 2u && (operation == 2u || operation == 3u)) {
+            d.kind = OpcodeKind::Vbfy;
+            d.mnemonic = operation == 2u ? "vbfy1" : "vbfy2";
+        } else if (group == 2u && operation >= 25u && operation <= 27u) {
+            d.kind = OpcodeKind::ColorConv;
+            static constexpr const char *names[3]{"vt4444", "vt5551", "vt5650"};
+            d.mnemonic = names[operation - 25u];
         } else if (group == 0u) {
             switch (operation) {
             case 0u:

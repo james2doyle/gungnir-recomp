@@ -229,3 +229,36 @@ Main-module unload returns ILLEGAL_PERM; unknown ids return UNKNOWN_MODULE.
 
 **Follow-up.** Revisit the loader only when a title or overlay source actually
 requires it; DATA.DAR remains T12 asset work.
+
+## 2026-10-30 — T5a: the VFPU4/VFPU1 gap is fixed
+
+**Symptom.** The deeper T6c boot stopped at `0x0899BD90` with
+`Unsupported Allegrex instruction 0xD0428080: vfpu4 not lowered yet`; 33
+words across the corpus emitted explicit `unsupported` calls.
+
+**Falsification.** The words are valid VFPU encodings, not data: `vcrs`
+(VFPU1 op 5), `vdet` (op 6), `vbfy1/2` (VFPU9 fn 2/3), `vi2uc/c/us/s`
+(VFPU7 fn 28-31) and `vt4444/5551/5650` (VFPU9 fn 25-27). The decoder
+collapsed every one into a generic `vfpu1`/`vfpu4` mnemonic.
+
+**Root cause.** AOT codegen and the interpreter shared no lowering for these
+forms, and a freshly created `AllegrexContext` started with zero S/T prefixes
+instead of the hardware identity swizzle (`0xE4`). The latter made any
+no-prefix VFPU hand check wrong even where a helper existed.
+
+**Fix.** Classified the encodings, added shared `AllegrexContext` helpers
+(`execute_vfpu_vcrs`, `_vdet`, `_vbfy`, `_vi2x`, `_color_convert`) and wired
+both tiers. Prefix rewrites follow the hardware rules: VCrs forces S yzx? /
+T zxy?, VBfy forces the upper-half negates and yxwz/zwxy, VDet forces T yx??
+and negates S.y, while VI2x and colour conversion apply the source prefix
+through a four-lane view. Fresh contexts now reset S/T prefixes to `0xE4`.
+
+**Evidence.** The regenerated corpus has zero `not lowered yet` emissions.
+The bounded boot now advances from 233 to 387 dispatches. The new fixture
+`tests/core/fixtures/vfpu_boot_gap.mips` executes all families with
+hand-computed memory results and passes both tiers.
+
+**Next blocker (HLE, not codegen).** The same run now stops at
+`Missing HLE import ThreadManForUser::sceKernelCreateMsgPipe
+(NID_0x7C0DC2A0)`; message pipes, FPLs and the remaining ThreadMan wait
+objects are the next boot-depth work.

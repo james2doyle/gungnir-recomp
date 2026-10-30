@@ -27,7 +27,8 @@ BUILD = REPO / "build"
 FIXTURES = REPO / "tests" / "core" / "fixtures"
 CODEGEN = BUILD / "tools" / "yakumo_codegen"
 
-POSITIVE = ["arith_mem_basic", "loop_sum", "addi_opcode", "scratchpad_basic"]
+POSITIVE = ["arith_mem_basic", "loop_sum", "addi_opcode", "scratchpad_basic",
+            "vfpu_boot_gap"]
 
 # Hand-computed final state (independent of the implementation):
 # (fixture, {reg index: value}, {byte offset: expected hex})
@@ -47,6 +48,21 @@ HAND_COMPUTED = {
     "scratchpad_basic": (
         {10: 0x2A, 11: 0x2B},
         {16: "2a000000"},
+    ),
+    "vfpu_boot_gap": (
+        {},
+        {
+            0x40: "00006041000070410000c04000000042",
+            0x50: "00004040000080bf0000e040000080bf",
+            0x60: "1f00e00700f8ffff0000ff00ffffffff",
+            0x70: "ff7f0001000000000000000000000000",
+            0x90: "000080400000c040000000c0000000c0",
+            0xA0: "0ff0f000000fffff0000ff00ffffffff",
+            0xC0: "0100ffff020000000000000000000000",
+            0xD0: "0000ff7f0100ffff0000000000000000",
+            0xE0: "1f80e003007cffff0000ff00ffffffff",
+            0x100: "000080c0000000000000000000000000",
+        },
     ),
 }
 

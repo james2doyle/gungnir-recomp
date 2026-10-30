@@ -67,12 +67,16 @@ dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
 | First real flip | `0x04088000`, width 512, format 3 |
 
 The first `sceDisplaySetFrameBuf` call is a zero-width display-off call from
-module init; the gate reports only a buffer with a non-zero width. Deeper
-execution (after four vblanks) currently stops on an AOT codegen gap for
-VFPU4 matrix operations at `0x0899BD90`; that is tracked separately from T6c
-and is not an HLE coverage failure. Details are in `BRINGUP.md`. Two
+module init; the gate reports only a buffer with a non-zero width. Two
 bounded runs with the same inputs produce identical dispatch, virtual-time,
 import and stop fields (TC-6.4).
+
+Deeper execution (after four vblanks) now passes the former VFPU gap: the T5a
+fix lowers `vcrs`, `vdet`, `vbfy1/2`, `vi2uc/c/us/s` and
+`vt4444/5551/5650`, and the regenerated corpus contains no unlowered VFPU
+words. The next blocker is an HLE gap, not codegen:
+`Missing HLE import ThreadManForUser::sceKernelCreateMsgPipe
+(NID_0x7C0DC2A0)` at 387 dispatches. Details are in `BRINGUP.md`.
 
 ## Module registry (T6d, VERIFIED)
 
