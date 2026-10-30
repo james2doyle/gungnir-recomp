@@ -16,6 +16,7 @@
 | `include/psprecomp/elf32.hpp` | `include/psprecomp/elf32.hpp` |
 | `include/psprecomp/common.hpp` | `include/psprecomp/common.hpp` |
 | `include/psprecomp/guest_memory.hpp` | `include/psprecomp/guest_memory.hpp` |
+| `src/guest_memory.cpp` | `src/guest_memory.cpp` |
 | `profiles/mhp3rd/host/kernel/iso_image.cpp` | `src/iso_image.cpp` |
 | `profiles/mhp3rd/host/kernel/iso_image.hpp` | `src/iso_image.hpp` |
 | `profiles/mhp3rd/host/platform/utf8_path.cpp` | `src/utf8_path.cpp` |
@@ -31,6 +32,13 @@ PSPRecomp lineage, audited clean of game content — `iso_image.cpp` and
 or addresses (verified by search before import). `iso_image` is specifically
 the ISO reader seam azazel6's reuse review identified as a demonstrated
 reusable component.
+
+`guest_memory.cpp` requires three embedder-provided diagnostics it declares
+extern (`runtime_thread_uid`, `runtime_thread_name`, `runtime_dispatch_pc` —
+upstream defined in `runtime.cpp`, which is outside this subset's scope).
+Hosting binaries must define them; the intake tool defines inert versions
+feeding env-gated logging paths only. This is a declared seam of the vendored
+file, not a local patch of it (byte-identical disposition stands).
 
 ## Known gap (ours to handle outside this subtree)
 
