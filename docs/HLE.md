@@ -70,7 +70,9 @@ The first `sceDisplaySetFrameBuf` call is a zero-width display-off call from
 module init; the gate reports only a buffer with a non-zero width. Deeper
 execution (after four vblanks) currently stops on an AOT codegen gap for
 VFPU4 matrix operations at `0x0899BD90`; that is tracked separately from T6c
-and is not an HLE coverage failure. Details are in `BRINGUP.md`.
+and is not an HLE coverage failure. Details are in `BRINGUP.md`. Two
+bounded runs with the same inputs produce identical dispatch, virtual-time,
+import and stop fields (TC-6.4).
 
 ## Module registry (T6d, VERIFIED)
 

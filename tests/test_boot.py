@@ -138,6 +138,21 @@ class TestBoundedBoot(unittest.TestCase):
         self.assertTrue(report["first_frame_buf"].startswith("0x04"),
                         "frame buffer should be in the VRAM window")
 
+    def test_two_bounded_runs_produce_identical_reports(self):
+        first_proc, first = self.run_boot("--no-stop-at-flip")
+        second_proc, second = self.run_boot("--no-stop-at-flip")
+        self.assertIsNotNone(first, first_proc.stderr[-4000:])
+        self.assertIsNotNone(second, second_proc.stderr[-4000:])
+        stable = ("module", "entry", "gp", "image_end", "functions", "dispatches",
+                  "vblanks", "virtual_us", "flips", "first_frame_buf", "display_width",
+                  "hle_bound", "imports_total", "imports_bound", "imports_unbound",
+                  "imports_executed", "stop_reason", "stop_pc")
+        differences = {key: (first[key], second[key]) for key in stable
+                       if first[key] != second[key]}
+        self.assertEqual(differences, {}, "bounded runs diverged")
+        self.assertEqual(first["stop_reason"], second["stop_reason"])
+        self.assertGreater(first["dispatches"], 0)
+
     def test_no_unbound_import_executed_and_no_silent_nid(self):
         proc, report = self.run_boot()
         self.assertIsNotNone(report, proc.stderr[-4000:])

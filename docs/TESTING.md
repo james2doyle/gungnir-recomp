@@ -101,7 +101,9 @@ skips when the private disc is absent; it never passes silently.
 - `tests/test_boot.py` (TC-6.2): builds the real-module boot runner against
   the T5 corpus and requires module init to reach a non-zero-width
   `sceDisplaySetFrameBuf`, with every executed import bound and no missing or
-  silent NID.
+  silent NID. Two `--no-stop-at-flip` runs must produce identical deterministic
+  fields (dispatches, virtual time, vblanks, flips, import lists, stop
+  reason/PC) — TC-6.4.
 
 ## Commands
 
