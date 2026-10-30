@@ -1,0 +1,396 @@
+# Gungnir Recomp — Master Plan
+
+**Target:** Gungnir (USA) — *Gungnir: Inferno of the Demon Lance and the War of Heroes*, ULUS-10592
+**Goal:** Static recompilation of the game's Allegrex code to native C++, running on Android — from the user's own `game.chd` to a boot on an adb-connected device.
+**First milestone (locked):** title screen rendered on device + menu input navigable (touch + gamepad).
+**Plan date:** 2026-10-30. Source: 14-project discovery survey (see §3).
+
+---
+
+## 0. Hard constraints (non-negotiable)
+
+1. **No proprietary content, code, or work is ever committed.** No game ISO/CHD/ELF/PRX, no decrypted modules, no game assets (DAR contents, TPL textures, VAG audio, script `.bin`), no game text (original or translated), no game screenshots, no Sony firmware, no PGF fonts, no KIRK/DRM keys, no Adreno driver binaries, no generated recompilation output (which is a derivative of the copyrighted executable).
+2. The repo contains only: original tooling and runtime we author, third-party code with licenses preserved and attributed, synthetic fixtures of our own authorship, documentation, and scripts that operate on **user-supplied local files**.
+3. Decryption of `~PSP` modules runs **out-of-process** using user-supplied tools (pspdecrypt / PPSSPP devtools). We ship no decryption implementation and no keys. Same for Adreno driver `.zip`s: user-supplied, extracted to app-private storage, never bundled or committed.
+4. Enforcement is structural, not aspirational: `.gitignore` with rationale, `tools/repository_check.py` (extension + magic-byte + blob-size + ignore-rule audit) in CI, secret scanning, and fail-closed CI (`exit 77` skips) for tests that need private game input.
+5. Game-derived facts that are acceptable to publish: disc identity (size 262,766,592 B, CRC32 `183F3EDC`, redump-recorded), format field layouts, NID values, guest addresses and record sizes (RE facts). Binaries, hashes of binaries pinned as "the expected dump", and content derived from them stay local.
+
+## 1. Decisions locked (2026-10-30)
+
+| Decision | Choice |
+|---|---|
+| Foundation | Adopt an **MIT-licensed PSPRecomp-framework core** (jessicanataliagta/PSPRecomp lineage; TeamGDB/Yakumo framework subset is the same lineage, more mature). We write: Gungnir profile, Android shell, Vulkan renderer, driver loader, texture/shader systems. |
+| Project license | **GPL-3.0-or-later** (max reuse freedom: MIT + BSD + LGPL-dynamic + GPL-2.0-or-later + GPL-3.0 sources; rejects CC BY-NC-SA and unattributed code) |
+| Android baseline | **minSdk 26, Vulkan 1.1 required**, AAudio available; ABIs `arm64-v8a` + `x86_64` (emulator) |
+| Renderer | **Vulkan-only** (no GL ES fallback); software rasterizer kept as parity oracle; post-processing chain (upscale + LCD/scanline shaders) after GE compositing |
+| Audio | AAudio (Android) / SDL audio (desktop); ATRAC3(+) via LGPL `at3_standalone`-class decoder with notices |
+| Game data on device | SAF document-tree picker **or** `adb push` to `getExternalFilesDir()`. **No** `MANAGE_EXTERNAL_STORAGE` |
+| Adreno drivers | User-supplied `.zip` ICDs (Mesa Turnip / Qualcomm-style) loaded via custom Vulkan loader; per-driver selection; fail-closed fallback to system driver |
+| Input | Touch overlay (editable layout) + SDL3 gamepad with per-device profiles (Ayn/Ayaneo-class handhelds) + keyboard/mouse (desktop dev); rumble/haptics via SDL gamepad rumble + Android Vibrator fallback |
+| Textures | Hash-keyed dump→replace pipeline (PPSSPP `textures.ini` semantics) + high-res font-atlas re-rasterization for dialog text (Gungnir stores text in TPL atlases and baked into TPL images) |
+| Testing | **Red-first (TDD where relevant):** the failing test lands before the implementation, and is confirmed red for the expected reason. Regression fixes start from a failing reproduction. No task closes with untested behavior. |
+| Device validation | **Mandatory manual QA on an adb device** before any milestone touching device behavior can close — structured, recorded QA (build ID, device, steps, expected/actual, sign-off), never "CI is green" alone |
+
+## 2. Target facts — Gungnir (USA)
+
+Facts from the discovery survey (kreycai/gungnir-ptbr format docs, redump, PPSSPP logs). These shape the whole plan:
+
+- **Disc:** UMD ISO 9660, 262,766,592 B, CRC32 `183F3EDC` (redump 29734). The local `game.chd` is an LZMA CHD of this disc (header verified: `MComprHD` v5, `lzma`). JP is ULJM-05779 (v1.01) — different offsets everywhere; this plan targets **USA only**.
+- **`PSP_GAME/SYSDIR/EBOOT.BIN`:** 3,336,096 B at ISO offset `0x110000`, `~PSP`-encrypted (magic `0x5053507E`); `BOOT.BIN` sibling is the plaintext form on some discs. Decrypted form: PRX ELF `e_type 0xFFA0`, segment 0 at file offset `0xC0` with `vaddr = file_offset − 0xC0`, relocation section type `0x70000020` (entries 8 B: `r_offset:u32, r_info:u32`, types **2 = R_MIPS_32, 5 = HI16, 6 = LO16**). ~3,552 strings live in the EBOOT (vaddr `0x19F000–0x1D8000` region).
+- **USRDIR archives (DAR format):** `ini.dar` (61 files incl. font atlases `font11pt.tpl`/`font12pt.tpl`), `voice.dar` (voice audio), `data.dar` (~44 MB, plaintext, 1,295 `.tpl` textures + ~13,998 strings + script `.bin`s), plus `INSDIR/DATA.DAR`. DAR header = 4×u32 LE `[nfiles, data_start, names_off, table_off]`; entries = 16 B `[name_off, stored_size, decomp_size, data_off]`; zlib per entry when `decomp_size > stored_size`; **`stored_size == 0` means stored uncompressed** (real size in `decomp_size`).
+- **Text:** fullwidth Shift-JIS (cp932), NUL-terminated; engine break commands `5C 6E` in DAR data, `0x3B` in EBOOT. Script `.bin` files (`event/`, `map/`, `worldmap/`, `setup*/`) = `[u32 type, u32 n, u32 table_off=12]` + n absolute u32 offsets + bytecode with absolute-address jumps — **files must not change size** or every pointer/jump must be remapped.
+- **Fonts/textures:** TPL containers (0x30 B header; per-texture `H,W,BW,bpp,data_off`), 4bpp PSP-swizzled (16×8 blocks), index-as-alpha, and 8bpp+CLUT. Dialog glyph advance = ink width (width table). UI text is also **baked into images** (actname/tutorial/location pages) — text upscaling has two fronts: font atlas re-rasterization + image texture replacement.
+- **Engine/runtime expectations (PPSSPP logs):** calls `sceKernelLoadModule` (PRX overlay tiers needed), "render to area containing texture" (feedback path in GE), one audio-decode quirk. PPSSPP rates it Perfect→Playable — our behavioral oracle.
+- **DAR size fields in ISO 9660 directory records are both-endian** (LE + BE 4 bytes later) — any repack must patch both (we don't repack the ISO for recomp, but the asset pipeline touches DARs inside `build/`).
+
+## 3. Reference projects — what each gives us
+
+All listed repos were surveyed 2026-10-30 (see conversation research threads). Use as **patterns and references**; copy code only where the license allows (we are GPL-3.0-or-later, so MIT/BSD/LGPL/GPL-2.0+ are all adoptable with attribution; CC BY-NC-SA and unattributed code are not).
+
+| Project | License | What we take from it |
+|---|---|---|
+| **Jstar269/nakagawa-recomp** | GPL-3.0 | **The Android deployment template**: `android/` Gradle+CMake skeleton (AGP/NDK pins, `-P` properties for machine paths, `useLegacyPackaging`, deps fetch with pin+digest), `nk_add_title_runtime()` CMake shape, two-process Activity model, env contract, `.gitignore` with rationale comments, AGENTS.md hard-limits culture, CI fail-closed (`exit 77`) + synthetic-fixture-only policy, generated notices from one JSON source of truth |
+| **Jstar269/hst-decomp** | GPL-3.0 | Manifest/data discipline: `modules.json` / `target-manifest.json` (hash-only disc identity, load segments), hex `start end` function lists, `milestones.json` ratchet ("never lower a figure"), toolchain-lock re-verification, REUSE.toml licensing |
+| **jessicanataliagta/PSPRecomp** | MIT | **The framework core we adopt**: `include/psprecomp/` (decoder, elf32, guest_memory, program_analysis, nid_registry, runtime), profile/config split (`[policy]` strictness knobs: `missing_function=stop`), framework/profile architecture docs. ⚠️ Its `profiles/vcs/generated/` (108 MB translated game code) is the #1 anti-pattern to invert — never commit generated output |
+| **TeamGDB/Yakumo** | MIT (+GPL quarantine) | Most mature framework consumer: **overlay runtime-swap design** (`unregister_functions` + missing-function hook + interpreter fallback — the answer to PSP PRX overlays), SAF document picker on Android, touch overlay + editor, savedata crypto (FIPS-197 self-tested), SHA-256-pinned installer ("accept exactly one known input"), `SOURCE_PROVENANCE.md` template, pinned FFmpeg build, multi-platform CI/release automation. Keeps `generated/` gitignored — the policy we follow |
+| **zxyandreay/azazel6** | MIT | **`tools/repository_check.py`** (extension + magic-byte + blob-size + ignore-rule + secret audit — adapt as our CI gate from day one), bounded-run discipline (dispatch + wall limits; never claim synthetic runs as game runs), evidence labels (VERIFIED/HYPOTHESIS/…), `dependencies.json` pin pattern, sectionless-PSP-ELF handling, Vulkan/input/lifecycle **probe APK before any game code**, pixel-readback contract tests |
+| **sp00nznet/psprecomp** | MIT | Oracle discipline ("diff against, never link"), KIRK/decrypt docs **without keys** (`psp_keys.example.txt` placeholder pattern), function-discovery methodology (R_MIPS_32 pointer mining, init/fini arrays), code-outside-`.text` warning (ctors in `.data`), bring-up journal culture, MIT HLE/runtime reference |
+| **sp00nznet/wtf-psp-recomp** | MIT | Per-game repo layout: toolkit as pinned dependency, tiny hand-written `host.c`, `CONFIGURE_DEPENDS` glob over gitignored `gen/`, `docs/NOTES.md` findings journal with logged corrections. ⚠️ Its stated *intent* to commit generated C later is an anti-pattern we reject |
+| **wizardengineer/psprecomp** | GPL-2.0-or-later | Pipeline shape: Ghidra census → `analysis.json` single source of truth → typed IR → C++17 emitter; **jump-table recovery** via DATA xrefs; BIDS (branched-into delay slots); fingerprint staleness gates + `--expect-functions` census gates; **facts-vs-choices config split** (`game.toml`); `purity_gate` (no game literals in runtime core) |
+| **anthonyhfm/psprism** | GPL-3.0 | **Interpreter fallback for dynamic code** (the only surveyed recompiler that has one — required design), code-map format (`entry/function_range/block/gp/t9/overlay/exclude`), "hydrate" bring-your-own-game workflow, `LICENSING.md` boundary doc. ⚠️ Its committed `ppsspp_niddb.xml` lacks attribution — don't copy data tables without provenance |
+| **sal063/PSP-recompilation-project** | Other (mixed) | **Validation layer to copy wholesale**: software rasterizer as parity oracle, PPSSPP-headless golden traces (`microtest_gate`/`codegen_gate` layering), hand-computed self-tests, VFPU differential fuzzer + prefix/quirk model, PGF parser reference, per-`rt/` component map. ⚠️ Anti-patterns: committed Sony PGF fonts, committed `SDL3.dll`, LUT provenance gap |
+| **snuri00/psp-web-recomp** | MIT | **The 10-patch bug-class catalogue** (see Gotchas §7C) — the pre-mortem for our codegen; interpreter + hashed code-cache as permanent tier; PRX translate/unload; `at3_standalone` LGPL ATRAC3 decoder. ⚠️ Anti-pattern: hardcoded KIRK key material in `pgd.cpp` |
+| **kreycai/gungnir-ptbr** | None | **All Gungnir format knowledge** (DAR/TPL/text/script/EBOOT layout — §2), repack in-place rules, round-trip byte-identical proof discipline, ink-width font calibration. Use the *format facts*, never the translated strings/JSON/assets |
+| **codepdbh/PSPRecomp-VCS-Android** | MIT | **Proven Android build pins**: AGP 8.10.1, Gradle 8.11.1, compileSdk 36, minSdk 26, NDK 28.2.13676358, CMake 3.22.1, `c++_static`, C++20; AAudio low-latency path; CPU affinity/priority tuning (incl. SELinux fallback); force `-O2` on generated TUs even in debug; per-unit opt-level overrides for NDK-Clang-choking units. ⚠️ Anti-patterns: 108 MB committed generated corpus, `MANAGE_EXTERNAL_STORAGE`, CPU-readback present path |
+| **alexandercorp287/GTAViceCityStories-Android** | MIT | Touch-overlay UX ideas (floating stick, hide-on-pad, layout editor) — **reimplement behaviorally, never copy** (reVC-derived influence is GPL-tainted); EGL backend attempt (dead code — informs our "one backend interface" requirement). ⚠️ Anti-patterns: no `.gitignore`, committed `local.properties`, Google Drive "ready-made game files" link, in-repo screenshots |
+
+## 4. Architecture & repo layout
+
+```
+gungnir-recomp/
+├── AGENTS.md                    # single policy authority (hard limits, evidence rules)
+├── LICENSE                      # GPL-3.0-or-later
+├── .recomp.json                 # recomp.fyi card
+├── .gitignore                   # game data / keys / generated code, each with rationale
+├── dependencies.json            # pinned third-party revisions (azazel6 pattern)
+├── CMakeLists.txt               # desktop + Android shared build (nk_add_title_runtime shape)
+├── cmake/Deps.cmake             # fetch-or-reuse with lock+digest
+├── configs/nids.csv             # NID registry (BSD pspsdk headers / fetch-with-checksum)
+├── tools/
+│   ├── repository_check.py      # IP gate (azazel6 adaptation) — CI, pre-push
+│   ├── package_notices.py       # generated THIRD_PARTY_NOTICES.txt from one JSON
+│   ├── intake/                  # chd→iso→extract→decrypt-hook→manifest
+│   ├── analyze, codegen         # analysis + AOT (adopted MIT core + our glue)
+│   ├── dar.py, tpl.py           # DAR/TPL readers (user's local files only)
+│   ├── textures/                # dump/replace + font-atlas repack
+│   └── ghidra/ExportPSPFunctions.java   # optional function census
+├── runtime/                     # guest memory, dispatch, interpreter, HLE, GE, post
+│   ├── hle/  ge/  post/  input/  audio/  savedata/
+│   └── platform/adreno/         # custom Vulkan ICD loader
+├── profiles/gungnir/
+│   ├── config.toml              # facts-vs-choices (wizardengineer split)
+│   └── local/                   # GITIGNORED: hashes, address pins, per-dump data
+├── android/                     # Gradle (Kotlin DSL) + JNI shell
+├── assets/shaders/{ge,post}/    # committed GLSL (ours), SPIR-V embedded at build
+├── assets/input_profiles/       # handheld gamepad profiles (ours)
+├── tests/fixtures/              # synthetic Allegrex fixtures of OUR authorship
+├── data/milestones.json         # hst-decomp ratchet ledger
+├── docs/                        # see §6 documentation checkpoints
+└── build/                       # GITIGNORED: game tree, generated code, outputs
+```
+
+**Pipeline:** `game.chd` → [T3 intake] → `build/game/` (verified ISO, decrypted ELF, manifest) → [T5 analyze+codegen] → `build/generated/` (chunked C++ TUs) → [T6/T7 runtime] → Linux desktop boot → [T9/T10/T11 Android] → adb device → [T13] title screen.
+
+## 5. Tasks
+
+Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, reference callouts, gotchas (pointer to §7 register).
+
+**Red-first rule for all tasks (§8.1):** each TC is written and observed red *before* the implementation that satisfies it; bug fixes begin with a reproducing red test; no task below closes with a red or disabled TC. Tasks touching runtime semantics also carry a mutation check.
+
+### T1 — Scaffolding + IP guardrails
+**Depends on:** — (first task)
+**Work:** git init (keep `game.chd` untracked forever); `LICENSE`, `AGENTS.md`, `README.md`, `.gitignore` (case-insensitive blocks for `*.iso *.chd *.cso *.elf *.prx *.pbp *.bin *.pmf *.at3 *.vag`, `keys/`, `generated/`, `game/`, `PSP_GAME/`, `build/`, `profiles/*/local/`, analysis dumps — with rationale comments, nakagawa style); `tools/repository_check.py` (magic-byte sniff of git index for ELF/`~PSP`/CHD/PE, >1 MB blob rejection, ignore-rule regression tests, secret scan); `docs/LEGAL.md` (the IP charter = §0); `docs/SOURCE_PROVENANCE.md`; `.recomp.json`.
+**Test cases:**
+- TC-1.1 `repository_check.py` passes on clean tree.
+- TC-1.2 Staging a dummy `.iso`/`.elf`/`~PSP` blob fails the check (each magic recognized).
+- TC-1.3 Ignore-rule regression: creating `build/game/x.iso` never appears in `git status`.
+- TC-1.4 `game.chd` in workdir is never matched by `git ls-files`.
+**Docs checkpoint:** `docs/LEGAL.md` + `docs/SOURCE_PROVENANCE.md` + `AGENTS.md` written **before any code lands**.
+**Refs:** nakagawa-recomp (`.gitignore`, AGENTS.md), azazel6 (`repository_check.py`), psprism (`LICENSING.md`), Yakumo (`SOURCE_PROVENANCE.md`).
+**Gotchas:** §7A.
+
+### T2 — Third-party dependency ledger + license machine
+**Depends on:** T1
+**Work:** `dependencies.json` pinning: MIT PSPRecomp framework core (choose jessicanataliagta/PSPRecomp `include/+src/` or Yakumo framework subset — record exact commit + provenance), CHD reader (libchdr or chd-rs — audit first), SDL3 (pinned commit, nakagawa `deps.cmake` pattern), stb image, tiny-AES-class public-domain crypto (savedata later), NID name data (BSD pspsdk headers or `pspdev/psp-ghidra-scripts` fetch-with-checksum — **never** copy psprism's unattributed `ppsspp_niddb.xml`; PPSSPP-derived tables are usable under our GPL-3.0 **with attribution**); `cmake/Deps.cmake` (fetch-or-reuse, lock+digest, offline-capable); `THIRD_PARTY_LICENSES/`; `tools/package_notices.py` → `THIRD_PARTY_NOTICES.txt`.
+**Test cases:**
+- TC-2.1 Clean checkout + one command materializes all deps at verified commits (digest check fails on wrong revision).
+- TC-2.2 `package_notices.py` output covers every vendored file (CI gate: no unlisted file under `third_party/`).
+- TC-2.3 License gate rejects a deliberately added CC BY-NC-SA component.
+**Docs checkpoint:** `docs/PROVENANCE.md` (per-subtree: upstream, commit, license, disposition).
+**Refs:** azazel6 (`dependencies.json`), nakagawa (`deps.cmake` + notice generation), wizardengineer (`fetch-niddb.sh` + checksum), psprism (attribution gap as cautionary tale).
+**Gotchas:** §7A.5–A.7.
+
+### T3 — Game intake pipeline (`game.chd` → verified local build tree)
+**Depends on:** T1
+**Work:** `tools/intake/`: (1) CHD→ISO via chdman out-of-process (podman MAME-tools image or built from source — chdman is not on this host) or vendored libchdr/chd-rs reader; (2) identity gate: size 262,766,592 + CRC32 `183F3EDC`, **fail closed** on mismatch; (3) ISO9660 extract of `PSP_GAME/` tree (EBOOT.BIN, USRDIR `*.dar`, INSDIR, PARAM.SFO — verify disc ID ULUS-10592); (4) decrypt hook — **no decryption code in-repo**; invoke user-supplied pspdecrypt/PPSSPP "Dump decrypted EBOOT.BIN" out-of-process, accept `BOOT.BIN` plaintext or user-provided decrypted ELF, validate PRX shape (`e_type 0xFFA0`, `vaddr = file_offset − 0xC0`, reloc section `0x70000020`, types 2/5/6); (5) `build/game/manifest.json`: module list, SHA-256s, segments, reloc counts, NID import inventory. All outputs under `build/` (gitignored).
+**Test cases:**
+- TC-3.1 End-to-end on local `game.chd` produces manifest.json with expected module set.
+- TC-3.2 Wrong-CRC input (bit-flipped ISO) aborts with named error.
+- TC-3.3 Truncated/decrypted-partially ELF rejected (magic + program-header checks).
+- TC-3.4 Every intermediate artifact lands under `build/`; `repository_check` still green.
+**Docs checkpoint:** `docs/INTAKE.md` (user-facing: how to supply their own disc, external decrypt tools, what the gates check).
+**Refs:** gungnir-ptbr (ISO offsets, `~PSP` layout — facts only), wtf-psp-recomp (`extract.ps1` report style), Yakumo (`prepare_game.sh` SHA-pin pattern), codepdbh (`--verify-only` identity gate).
+**Gotchas:** §7B (format traps), §7A.1–A.3.
+
+### T4 — Framework core integration + oracle harness (Linux desktop)
+**Depends on:** T2
+**Work:** Root CMake + `runtime/`: guest memory (32 MB RAM @ `0x08800000`, **16 KB scratchpad @ `0x00010000`**, VRAM @ `0x04000000`, cache-mirror collapse), full-coverage Allegrex decoder (incl. ADDI; tolerant data-as-code decode), AOT codegen to `build/generated/` chunked TUs (never committed; content-hash fingerprint staleness gate), dispatch with **interpreter fallback + FNV block cache as a permanent tier**, forward-branch yield counters. Test strategy: committed synthetic Allegrex fixtures (our authorship) run under interpreter AND AOT with trace equality; hand-computed self-tests (sal063 pattern — expectations never generated from the implementation); `ctest` on Linux x86_64.
+**Test cases:**
+- TC-4.1 All synthetic fixtures: interpreter trace == AOT trace (byte-equal).
+- TC-4.2 Deliberately broken fixtures (bad opcode, dispatch miss, stack imbalance) fail loudly — no silent fallback.
+- TC-4.3 `git ls-files` contains zero generated units; regenerate-twice is byte-stable (fingerprint gate).
+- TC-4.4 VFPU differential fuzz: codegen-emitted VFPU vs interpreter VFPU, randomized states, bitwise compare (`vi[]` + float bits) — zero diffs on the supported op set.
+**Docs checkpoint:** `docs/ARCHITECTURE.md` (pipeline + memory map + dispatch contract), `docs/TESTING.md` (oracle hierarchy).
+**Refs:** jessicanataliagta/PSPRecomp (core), sal063 (golden-trace layering, VFPU fuzz), snuri00 (interpreter+cache, the 10 bug classes), wizardengineer (fingerprint/census gates), sp00nznet (oracle discipline).
+**Gotchas:** §7C (recompiler bug classes).
+
+### T5 — Gungnir profile: static analysis + AOT generation
+**Depends on:** T3, T4
+**Work:** `profiles/gungnir/`: function discovery = entry + `jal` targets + **R_MIPS_32 relocation mining** (stored function pointers — wtf found 2,633 on one module) + **HI16/LO16 pair seeding** + prologue-after-return heuristic + init/fini arrays + code-outside-`.text` awareness (ctors in `.data`); jump tables via Ghidra DATA-xref export (optional tool) with runtime dispatch fallback; `config.toml` facts-vs-choices; all hashes/address pins in gitignored `profiles/gungnir/local/`; policy `missing_function=stop`, `unsupported_instruction=stop` (no silent stubs). Input: Gungnir EBOOT + PRXs from T3.
+**Test cases:**
+- TC-5.1 Analysis manifest covers 100% of executable bytes in the import inventory (census gate: `--expect-functions`/`--expect-instructions` bounds asserted, not eyeballed).
+- TC-5.2 Codegen emits compilable chunked TUs; repeated run byte-stable.
+- TC-5.3 Mutation gate: breaking one instruction semantics kills the synthetic-fixture gate (mutations count only when they kill for the right reason — hst-decomp rule).
+- TC-5.4 Dispatch-coverage report from a bounded run: every executed address maps to a translated function or an explicit interpreter fallback (counted, not silent).
+**Docs checkpoint:** `docs/ANALYSIS.md` (discovery seeds, coverage numbers), `docs/BRINGUP.md` **journal opened** (symptom→falsification→root-cause entries with retractions logged, sp00nznet/hst style).
+**Refs:** wizardengineer (analysis.json + jump tables + census gates), wtf-psp-recomp (reloc mining), hst-decomp (function list formats, blocked-functions ledger), azazel6 (bounded runs, sectionless ELF), gungnir-ptbr (EBOOT reloc types 5/6 facts).
+**Gotchas:** §7C.3–C.8.
+
+### T6 — HLE kernel bring-up (Linux desktop)
+**Depends on:** T4, T5
+**Work:** `runtime/hle/` boot set: SysMem, ThreadMan (cooperative first — consensus of all surveyed repos — real-threads seam like sp00nznet's `PSPRECOMP_REAL_THREADS`), InterruptManager, IoFileMgr (ISO9660 + `sce_lbn` raw extents), Display + VBLANK @ 59.94 Hz pacing, sceGe command submission, sceCtrl, LoadExec, **ModuleMgr with PRX overlay tiers** (translate-on-load, `unregister_functions` on unload — Gungnir logs `sceKernelLoadModule`), scePower, sceRtc. Unknown-NID handling: **fail-closed loud trap** naming `NID_0x…` + registry name — never silent 0-returns (azazel6 rule). Unknown-but-required NIDs discovered by executing the game's own shipped modules early (LLE-first where guest code exists — nakagawa rule). `data/milestones.json` ratchet ledger (hst-decomp format).
+**Test cases:**
+- TC-6.1 HLE unit tests: threads/semaphores/eventflags/alarms/IO read paths.
+- TC-6.2 Bounded Linux boot of recompiled Gungnir passes module init + first `sceDisplay` set; captured trace lists zero silent NIDs (any unknown = counted failure).
+- TC-6.3 PRX overlay load→unload→reload preserves address space (no leaked function registrations).
+- TC-6.4 Thread-scheduling determinism: two bounded runs with the same inputs produce identical traces (or the divergence point is itemized).
+**Docs checkpoint:** `docs/HLE.md` (module/NID coverage table), `docs/BRINGUP.md` journal entries for every boot blocker.
+**Refs:** Yakumo (kernel + overlay swap), sp00nznet (hle/ module set), wizardengineer (bind-by-name syscall tables), snuri00 (kernel.cpp/modules.cpp), sal063 (hle.c 201-NID reference).
+**Gotchas:** §7C.6, §7D.
+
+### T7 — Vulkan GE renderer + post-processing chain
+**Depends on:** T4 (parallel with T5/T6)
+**Work:** `runtime/ge/` behind one backend interface: CPU front end (display-list decode, all PSP vertex formats, T&L with VFPU-accurate transforms, clipping) → **Vulkan 1.1 backend** (screen-space ubershader; GLSL in `assets/shaders/ge/` → embedded SPIR-V via `tools/embed_shaders.py`; pipeline cache keyed by blend/cull/z; texture cache keyed by state + content hash **including CLUT**; correct `bufw` handling; render-to-texture feedback invalidation). Software rasterizer retained as parity oracle (sal063/codepdbh pattern). VFPU: MIT implementations (sp00nznet `vfpu.c` + sal063 prefix model) + differential fuzz (TC-4.4); transcendental LUTs either adopted from PPSSPP under GPL attribution or computed-and-diffed. `runtime/post/`: composable passes (integer scale, bilinear + FSR-lite upscale, **LCD-grid/scanline presets**) selectable via user preset JSON (`assets/shaders/post/`), applied after GE compositing. On Android present via real swapchain — **not** the CPU-readback `ANativeWindow` path used by codepdbh (perf trap).
+**Test cases:**
+- TC-7.1 GE fixture suite via pixel-readback contract tests (azazel6 pattern): triangles, strips/fans, all texture formats incl. CLUT4/8/16/32, blend modes, scissor, depth, render-to-texture.
+- TC-7.2 Software-vs-Vulkan parity: fixture renders match within documented tolerance (integer paths exact).
+- TC-7.3 Post preset changes output in a pinned screenshot hash (our own fixture scene — no game frames in-repo).
+- TC-7.4 Feedback path (render to area containing texture) invalidates cache — targeted regression from Gungnir's PPSSPP quirk log.
+**Docs checkpoint:** `docs/RENDERER.md` (backend interface, texture cache keys, known approximations), `docs/SHADERS.md` (preset format, authoring rules).
+**Refs:** sal063 (`ge.c` + `gpu_sdl3vk` ubershader + CLUT- hash), codepdbh (Vulkan backend shape, present-path caution), wizardengineer (bufw bug class, SIGNAL gaps), Yakumo (`vulkan_renderer.cpp`), snuri00 (surfaces/stale-rects).
+**Gotchas:** §7D.2–D.4, §7E.5.
+
+### T8 — Texture pipeline: dump/replace + TPL decode + text upscaling
+**Depends on:** T3, T7
+**Work:** (1) TPL decoder (0x30 B header, per-texture `H/W/BW/bpp/data_off`, 4bpp swizzle, 8bpp+CLUT) documented abstractly in `docs/formats/TPL.md` — written from the user's local files, **no TPL bytes committed**; (2) dump mode: hash-keyed PNG export of every decoded texture (PPSSPP `textures.ini` semantics) to user storage; (3) replacement loader: user PNGs at any resolution take precedence (the upscaled-texture path); (4) `tools/textures/repack_font_atlas.py`: re-rasterize dialog font atlas at Nx from a user-supplied glyph source, regenerate ink-width advance table, repack with **round-trip byte-identical invariant** (writing the original back through our writer must reproduce the input — gungnir-ptbr proof #8). Two fronts because Gungnir text lives both in font atlases and baked into UI images (actname/tutorial/location TPLs) — image replacement covers the second.
+**Test cases:**
+- TC-8.1 Synthetic TPL fixtures (our authorship) decode→re-encode byte-identically.
+- TC-8.2 Dump→replace→reload in the Linux runtime with a test scene (no game assets in-repo).
+- TC-8.3 2x/4x font atlas renders a fixed test string without glyph collisions; width-table regen passes ink-width assertions.
+- TC-8.4 Swizzle edge cases: odd widths, multi-texture containers (`n_tex > 1`), `bpp=4` alpha ramp and `bpp=5` CLUT decode.
+**Docs checkpoint:** `docs/formats/TPL.md`, `docs/formats/DAR.md` (from T3 knowledge), `docs/TEXTURE_REPLACEMENT.md` (user guide: dump layout, naming, scaling rules).
+**Refs:** gungnir-ptbr (TPL/DAR/font metric facts, round-trip proof discipline), sal063 (`pgf.c` parser reference for future sceLibFont), psprism/Yakumo (texture-cache + replacement precedents).
+**Gotchas:** §7B.2–B.4, §7F (font width collision, baked-in text).
+
+### T9 — Android app shell + adb deployment
+**Depends on:** T4, T7
+**Work:** `android/` Kotlin-DSL Gradle (proven pins: AGP 8.10.1, Gradle 8.11.1 SHA-pinned wrapper, NDK 28.2.13676358 — installed on this host, CMake 3.22+, compileSdk 36, minSdk 26, targetSdk 35, `arm64-v8a`+`x86_64`, `c++_static`, C++20). One shared lib via `nk_add_title_runtime`-style CMake function (desktop/Android share sources — no runtime fork). SDL3 Activity shell (gamepad/hotplug/rumble/touch + Vulkan surface). Machine paths only via `-P` properties (never committed; no `local.properties`). Game data: SAF document-tree picker + `adb push` to `getExternalFilesDir()` (two documented paths); first-run asset unpack with version stamp; **runtime hash gate enforced** (not merely logged). Deploy scripts `scripts/android/{build,install,run,screenshot,logcat}.sh`. Force `-O2` on generated TUs even in debug + per-unit opt overrides for NDK-Clang-choking units; CPU affinity/priority tuning (pin after Vulkan device creation; SELinux-safe fallback).
+**Test cases:**
+- TC-9.1 `build.sh` produces an APK from a clean checkout (no machine-local paths required beyond `-P` flags).
+- TC-9.2 `adb install -r && run.sh` boots the synthetic-fixture runtime to a rendered Vulkan frame on device/emulator.
+- TC-9.3 Both game-data paths work (SAF pick and adb push) and the hash gate rejects a corrupted image.
+- TC-9.4 Lifecycle: background→foreground recovers rendering (swapchain recreation) and audio; rotation ignored (sensor-landscape lock).
+**Docs checkpoint:** `docs/ANDROID.md` (setup, adb/SAF flows, device storage layout, emulator notes).
+**Refs:** nakagawa-recomp (`android/` skeleton — primary template), codepdbh (proven pins, AAudio, affinity), Yakumo (SAF picker), azazel6 (probe-APK-first approach — validate shell on emulator before game code).
+**Gotchas:** §7E (Android platform traps).
+
+### T10 — Adreno custom Vulkan driver loader
+**Depends on:** T9
+**Work:** `runtime/platform/adreno/` + Android glue: user picks a driver `.zip` (Mesa Turnip-style Vulkan ICD package) in settings or drops it in a documented folder; extract to app-private storage; validate (entry `libvulkan.so`, ELF machine matches app ABI); load through a custom Vulkan loader that `dlopen`s the ICD instead of the system one (evaluate MIT-licensed libadrenotools vs a minimal own loader — record choice in provenance ledger). Per-driver selection + version display; "system driver" default; fail-closed fallback with a named error. Driver zips/blobs: **user-supplied, gitignored, never bundled** (repository_check excludes the driver directory).
+**Test cases:**
+- TC-10.1 Stock-driver boot unaffected on any device (loader bypass path).
+- TC-10.2 On an Adreno device, a user-supplied zip loads and reports its version via logcat.
+- TC-10.3 Malformed zip / wrong-ABI ELF fails closed with clear error, app still boots on system driver.
+- TC-10.4 `repository_check` rejects a `.zip`/`.so` committed under the driver paths.
+**Docs checkpoint:** `docs/ANDROID_DRIVERS.md` (what zips are, where to get them, risks, selection UI).
+**Refs:** libadrenotools (evaluate), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt).
+**Gotchas:** §7E.6–E.7.
+
+### T11 — Input + haptics
+**Depends on:** T9 (T6 for sceCtrl surface)
+**Work:** `runtime/input/` + `runtime/haptics/`: (1) touch overlay — floating analog stick, d-pad, face buttons, L/R, START/SELECT, editable drag/resize layout persisted as JSON (independent implementation; behavioral inspiration from reVC/Vita3K layouts only — **no GPL code**); (2) gamepad backend (SDL3 gamepad API, Android defaults + per-device profile JSON in `assets/input_profiles/` for Ayn/Ayaneo-class built-in controllers; remap UI; overlay hides while pad active); (3) keyboard/mouse for desktop dev; (4) haptics: SDL gamepad rumble + Android `Vibrator`/`VibrationEffect` (API 26+) fallback, driven by sceRumble-class events surfaced through HLE (Gungnir's actual rumble usage discovered during T6 bring-up).
+**Test cases:**
+- TC-11.1 Input unit tests: physical events → sceCtrl bitmask/analog mapping table.
+- TC-11.2 On-device: touch overlay navigates the synthetic fixture; paired gamepad navigates the same; overlay hides when pad active.
+- TC-11.3 Rumble test HLE call fires pad rumble and phone vibration on their respective paths.
+- TC-11.4 Profile round-trip: remap → save JSON → reload → identical binding.
+**Docs checkpoint:** `docs/INPUT.md` (overlay editor, profiles, key maps, haptics notes).
+**Refs:** codepdbh/alexandercorp (touch UX behaviors — reimplement), Yakumo (`touch_controls`/`touch_editor`), SDL3 docs (gamepad/rumble).
+**Gotchas:** §7E.8 (GPL-tainted UX lineage), §7F.6 (Gungnir rumble unknowns).
+
+### T12 — Audio + savedata + DAR asset support
+**Depends on:** T6
+**Work:** (1) `runtime/audio/`: sceSasCore 32-voice VAG/ADPCM synthesis (pitch/ADSR), sceAtrac3plus via LGPL `at3_standalone`-class decoder (notices + relink recipe), sceMp3, mixed to one 44.1 kHz stream → AAudio low-latency callback (Android) / SDL audio (desktop); (2) `runtime/savedata/`: virtual memstick `PSP/SAVEDATA/<title>/` with PARAM.SFO v1.1 (PSF) read/write, PPSSPP-compatible layout (saves interchangeable with emulator/hardware); KIRK save encryption **deferred**, documented honestly (hash-left-zero stance — never ship key material); (3) `tools/dar.py` for the asset pipeline (both DAR sides: read/list/extract + in-place rewrite rules; `stored_size==0` = uncompressed).
+**Test cases:**
+- TC-12.1 SAS voice unit tests (ADPCM decode, pitch, ADSR envelope shapes).
+- TC-12.2 Audio smoke: tone + VAG playback via AAudio on device, SDL on desktop; no underruns in a 60 s soak at 59.94 pacing.
+- TC-12.3 Save→load round-trip byte-stable; PARAM.SFO opens in PPSSPP.
+- TC-12.4 `dar.py` lists/extracts the user's `ini.dar`; a repack round-trips byte-identically; the `stored_size==0` entries survive.
+**Docs checkpoint:** `docs/AUDIO.md`, `docs/SAVEDATA.md`, `docs/formats/DAR.md` (extended from T3/T8).
+**Refs:** sp00nznet (sascore), sal063 (audio.c/savedata.c/PARAM.SFO), snuri00 (at3_standalone + SAS), codepdbh (AAudio path), gungnir-ptbr (DAR traps).
+**Gotchas:** §7B.1 (DAR `stored_size==0`), §7E.4 (AAudio underruns).
+
+### T13 — Milestone integration: title screen on device + CI/release hygiene
+**Depends on:** T5, T6, T7, T8, T9, T10, T11, T12
+**Work:** Wire the full chain: intake → AOT → APK → `adb install`/push → boot to Gungnir title screen with textures/text rendering (replacement path at 1x), touch + gamepad navigating the title menu, bounded-run logs clean of unknown NIDs, screenshot captured via `scripts/android/screenshot.sh`, hashed into a **gitignored** local milestone report (public `data/milestones.json` carries counts/criteria only — no game screenshots in-repo). CI: GitHub Actions building Linux runtime + Android cross-compile (synthetic fixtures only), `repository_check` + secret scan + license/notice gate + SPDX/REUSE lint, actions SHA-pinned, `exit 77` fail-closed skips for private-input tests. **Manual QA campaign (§8.3):** write `docs/QA.md` (standard + Gungnir-specific scripts), run the device matrix (≥1 Adreno + ≥1 non-Adreno/handheld + emulator), file dated reports under `docs/qa/`, and fix every finding red-first (reproducing test where host-testable). `docs/BUILDING.md` (from-scratch user workflow), `docs/ANDROID.md` finalized, `AGENTS.md` ratified.
+**Test cases:**
+- TC-13.1 From-scratch run of the documented pipeline on this machine reaches the title screen on the adb device (the milestone definition).
+- TC-13.2 CI green on a clean clone with zero game artifacts present (and `repository_check` proves it).
+- TC-13.3 Deliberate dummy-ELF/ISO commit attempt blocked locally and in CI.
+- TC-13.4 Milestone ledger updated: M4 recorded with measure + evidence pointers; regression drops are visible (never lowered silently).
+- TC-13.5 Manual QA matrix complete and signed off (§8.3): every device cell has a dated `docs/qa/` report; three consecutive cold boots pass per device; every QA finding has either a red-first regression test or a tracked open defect.
+- TC-13.6 Suspend/resume and 30-minute soak run clean on at least one physical device per session (recording hash evidence, no game frames in-repo).
+**Docs checkpoint:** `docs/BUILDING.md`, `docs/ANDROID.md`, `docs/QA.md` + `docs/qa/` session reports, `docs/PROGRESS.md` (public status — counts and criteria only), release checklist in `docs/RELEASE.md`.
+**Refs:** nakagawa (CI fail-closed + hygiene matrix), hst-decomp (milestones ratchet), azazel6 (evidence labels), Yakumo (nightly/release automation).
+**Gotchas:** §7A.4 (public claims vs tree), §7E.1.
+
+## 6. Milestones
+
+| ID | Name | Entry criteria | Exit criteria | Docs checkpoint |
+|---|---|---|---|---|
+| **M0** | Repo live, policy enforced | — | T1+T2 done: `repository_check` green, deps pinned+audited, license machine runs | `LEGAL.md`, `SOURCE_PROVENANCE.md`, `PROVENANCE.md`, `AGENTS.md` |
+| **M1** | Pipeline dry-run on synthetic fixtures | M0 | T4 done: synthetic fixtures trace-equal interpreter vs AOT on Linux; VFPU fuzz clean | `ARCHITECTURE.md`, `TESTING.md` |
+| **M2** | Game analyzed, AOT generated | M1 + T3 intake gates pass on the local disc | T5 done: census gates pass, chunked TUs compile, dispatch-coverage report clean | `ANALYSIS.md`, `BRINGUP.md` opened |
+| **M3** | Linux desktop bounded boot | M2 | T6+T7 done: bounded boot passes module init + first frame on Linux; GE fixtures pass on Vulkan | `HLE.md`, `RENDERER.md`, `SHADERS.md` |
+| **M4** | **Title screen on adb device (first milestone)** | M3 + T9–T12 done | TC-13.1: documented pipeline reaches title screen + menu input (touch + gamepad) on device; audio/saves may be stubbed; logs itemize all gaps; **manual QA report accepted for every device in the matrix (§8.3), incl. one Adreno device** | `BUILDING.md`, `ANDROID.md`, `INPUT.md`, `PROGRESS.md`, `QA.md` + `qa/` session reports |
+| **M5** | Hardening (post-milestone) | M4 | Audio complete (ATRAC/SAS), saves, perf ≥ full speed on target handheld, texture replacement + text upscaling polished, driver picker, shader presets shipped; **manual QA accepted incl. custom-driver session, rumble, suspend/resume, 30-min soak** | `AUDIO.md`, `SAVEDATA.md`, `TEXTURE_REPLACEMENT.md`, `ANDROID_DRIVERS.md`, `qa/` reports |
+
+Milestone discipline (hst-decomp ratchet): every milestone is *measured*, recorded in `data/milestones.json` with criterion + evidence, and a drop in any figure is **visible, never quietly lowered**. Additionally, **no device-facing milestone closes on automation alone** — the §8.3 QA matrix must be complete and signed off, and all red-first evidence (bug → reproducing test → fix) must be present for every defect found during the milestone.
+
+## 7. Gotchas register
+
+### A. IP / legal
+1. `game.chd` already sits in the workdir — it must remain untracked **before the first commit**; T1 is not done until this is mechanically enforced.
+2. Generated recomp C++ is a derivative of the copyrighted executable (PSPRecomp-family repos commit 108 MB of it — the anti-pattern we invert). Never committed, never in releases, never in screenshots of game output in-repo.
+3. "No game data" claims must match the tree exactly (codepdbh claims it while shipping translated code; alexandercorp links ready-made game files on Google Drive). Documentation claims are evidence-checked in review.
+4. EBOOT `expected_sha256` pins stay in gitignored `profiles/gungnir/local/`, not public TOML — pinning a dump hash publicly advertises a specific rip.
+5. NID name tables: PPSSPP-derived data is GPL-tainted (usable here with attribution — we are GPL-3.0); psprism's committed `ppsspp_niddb.xml` shows what *unattributed* reuse looks like. Prefer BSD pspsdk-header generation.
+6. Reject CC BY-NC-SA material entirely (PSPRecomp's CloudWorks clouds are the cautionary tale) — incompatible with GPL-3.0 and with any commercial future.
+7. Third-party **binaries** are never committed (sal063's `SDL3.dll`); build from pinned source; LGPL pieces (FFmpeg/ATRAC) need notices + relink path.
+
+### B. Gungnir formats
+1. DAR `stored_size == 0` means **stored uncompressed** (not empty) — the ptbr project zeroed 272 SFX missing this. Never trust `stored_size` alone.
+2. DAR in-place rewrite rules: untouched entries keep their `data_off` (internal absolute references); recompressed blobs must fit the original slot (vary zlib params to squeeze); safest = true in-place + zero-fill tail.
+3. Script `.bin` files contain absolute-address jumps and pointer tables; **never change file size** without remapping; floats impersonate pointers — only remap 4-aligned pointer-table runs, not "scanned pointers".
+4. ISO 9660 directory records carry sizes both-endian (LE field + BE field +4) — patch both or the mount breaks (relevant if we ever repack).
+5. Text slots in the EBOOT have real alignment padding; overruns land in relocated pointer words → "Bad Execution Address". The round-trip proof (original text through our writer = byte-identical image) is the writer's acceptance test.
+6. Absolute-offset tooling is revision-fragile: every tool runs the identity gate (size + CRC32 `183F3EDC`) first; JP/EU offsets differ entirely.
+
+### C. Static recompiler bug classes (the snuri00 10 + survey additions)
+1. Import stub loops: `jal` to a stub must terminate codegen (`break`, not `continue`) — unbounded generation was a real bug class.
+2. Data decoded as code: tolerate out-of-range VFPU register indices (read→0, write dropped) instead of build-failing on stripped binaries.
+3. Full ISA coverage: one missing opcode (e.g. `ADDI`) is a hard runtime stop — audit every Allegrex encoding up front.
+4. Scratchpad at `0x00010000` must be mapped from day one (16 KiB window) or games fault "outside RAM".
+5. Function discovery: prologue-after-return heuristics AND HI16/LO16 pair seeding are both required (Gungnir's relocs use types 5/6); mine R_MIPS_32 for stored pointers; seed init/fini arrays; code can live **outside `.text`** (ctors in `.data`).
+6. PRX tiers: `sceKernelLoadModule` loads code AOT never saw — per-module translation units + `unregister_functions(start,end)` + safe address reuse (Yakumo's overlay swap is the mature design).
+7. VFPU exactness: `vrnd*` PRNG sequence, `vi2us/vi2s/vi2uc/vi2c`, `vt4444/vt5551/vt5650`, prefix quirks (decode-rotation + matrix prefixes bit wizardengineer twice); pin semantics with differential fuzz.
+8. Backward local branches compiled as plain `goto` freeze the scheduler — counter-based forced dispatcher exit (~2048 transfers) keeps interrupts/heartbeat alive.
+9. Dynamic code is a permanent runtime tier: interpreter + content-hashed block cache with memcmp self-modifying-code checks — not scaffolding to be removed later.
+10. Delay-slot shapes differ subtly across engines (hoist+duplicate vs pending-target vs BIDS) — pick one model, test the foreign-owned-slot and branched-into-slot cases explicitly.
+11. Jump tables: `jr $reg` ≠ return; recover via DATA xrefs where possible, fall back to runtime dispatch — never guess a table silently.
+
+### D. Runtime / GE
+1. Unknown NIDs that silently return 0 mask gaps until they explode in-game (azazel6 bans this) — loud named traps only.
+2. Texture `bufw` handling (wizardengineer bug class) and CLUT-inclusive cache keys (sal063) are correctness-critical for Gungnir's 4bpp swizzled atlases.
+3. Gungnir's PPSSPP log shows "render to area containing texture" — feedback-path invalidation is a named regression (TC-7.4), not a surprise.
+4. Cooperative scheduling first (all surveyed repos converged); preemption is a designed-later phase — but never ship hidden stalls (yield counters + watchdogs).
+5. 59.94 Hz pacing: frame = 16,683 µs; a wrong pace desyncs audio and TAS-like determinism tests.
+
+### E. Android platform
+1. NDK Clang chokes on huge generated TUs — chunk generation (`FUNCS_PER_CHUNK`), force `-O2` even in debug APKs, per-unit `-O1` overrides, exclude generated corpus from LTO (codepdbh battle scars).
+2. `MANAGE_EXTERNAL_STORAGE` is a Play-policy liability — SAF + `getExternalFilesDir()` only. Never commit `local.properties` or personal toolchain paths (alexandercorp did both).
+3. CPU affinity/priority tuning: pin **after** Vulkan device creation (driver threads), with SELinux-safe `/sys`-read fallback (some devices block cpufreq reads).
+4. AAudio: underruns at unbounded target rates (codepdbh: 240 Hz target broke, 60 Hz clean); fade + error-callback restart; resampler on the game-thread-fed FIFO.
+5. Present path: do real swapchain presentation; codepdbh's per-frame GPU→CPU `ANativeWindow_lock` readback is the known perf trap.
+6. Adreno driver zips: ABI mismatch and malformed archives must fail closed; drivers live in app-private storage and are **user's third-party binaries** — never committed, never bundled in APKs.
+7. Lifecycle: background/foreground swapchain recreation is an explicit gap in the reference projects — it is a test case for us (TC-9.4), not an afterthought.
+8. Touch overlay UX lineage (reVC/reIII) is GPL-tainted — reimplement behavior descriptions, record inspiration as prose only.
+
+### F. Gungnir-specific unknowns
+1. `sceKernelLoadModule` usage (PPSSPP log) — which PRXs and when is discovered during T6; the overlay tier design must land before that, not after.
+2. Engine script bytecode with absolute jumps is data, not code — but if any VM self-modifies or computes code pointers, the interpreter tier covers it (TC-5.4 counts those hits).
+3. Dialog text = TPL font atlases with ink-width metrics (regenerating widths wrong causes collisions/clipping); UI text baked into TPL images needs image replacement, not font work — hence two-front text upscaling (T8).
+4. TPL `bpp=5` CLUT layout is unmapped even in the ptbr tooling (grayscale only) — expected to matter little for text but must be decoded for correctness.
+5. Audio decode quirk seen in PPSSPP logs (one reported error) — watch ATRAC edge cases in T12 soak tests.
+6. Rumble: Gungnir's actual sceRumble-class usage is unknown until bring-up; haptics plumbing lands generic in T11, Gungnir mapping in T13/M5.
+7. PPSSPP is the behavioral oracle (Perfect→Playable) — used for **diffing only, never linked or vendored** (sp00nznet's rule).
+
+## 8. Cross-cutting test strategy
+
+### 8.1 Red-first discipline (no regressions)
+
+Every behavioral change follows the same loop, without exception:
+
+1. **Red first.** The test (or fixture, gate, trace-assertion) lands *before* the implementation and is observed failing **for the expected reason** — a red run that fails for an unrelated error doesn't count. Commit the red test alongside the implementation it drives.
+2. **Reproductions before fixes.** A bug fix starts with a test that reproduces the bug against current code (red), then the fix turns it green. This applies to bring-up bugs too: every `docs/BRINGUP.md` root-cause entry ends with a regression test name.
+3. **No task closes red.** A task's test cases (TC-x.y) are its acceptance criteria; the task is done when they are green, and any test that must be disabled gets an itemized, time-boxed TODO — never a silent skip.
+4. **Mutation checks gate semantic changes** (hst-decomp rule): for codegen/HLE changes, deliberately break one instruction/NID semantic and confirm the suite dies *for that reason* — mutations only count as evidence when they kill the gate correctly.
+5. **Where red-first is not applicable:** pure research/spikes (e.g. Ghidra census tuning) and one-shot intake tooling (single known input) — but anything that touches runtime semantics, codegen, formats (DAR/TPL writers), or HLE behavior is red-first.
+
+### 8.2 Oracle hierarchy & fixtures
+
+1. **Oracle hierarchy:** our interpreter (in-repo truth) → synthetic golden traces (hand-computed expectations) → PPSSPP headless diff (optional, test-only) → on-device manual QA (see 8.3). Never link an emulator into the product.
+2. **Synthetic-first:** every subsystem (decode, codegen, HLE, GE, TPL, DAR, SFO, input) has fixtures of **our own authorship** committed to `tests/fixtures/`; private game tests exist locally and `exit 77` in CI.
+3. **Round-trip invariants:** every writer (DAR repack, TPL re-encode, font atlas repack, PARAM.SFO) must reproduce its input byte-identically before it may write anything new.
+4. **Bounded runs everywhere** (azazel6): dispatch + wall-clock limits on any guest execution; synthetic runs are never reported as game runs; evidence labels (VERIFIED/HYPOTHESIS) in `docs/BRINGUP.md`.
+5. **CI fail-closed:** tests needing game data skip with exit 77 (never pass silently); `repository_check` + secret scan + license gate are merge-blocking.
+
+### 8.3 Manual QA on adb devices (mandatory)
+
+Automated tests never close a device-facing milestone. Manual QA is a structured, recorded activity:
+
+- **QA matrix per device-facing milestone (M4/M5):** at minimum one **Adreno** device (for driver-loader validation) and one **non-Adreno or handheld** device (Ayn/Ayaneo-class where possible) + the x86_64 emulator. Each cell records: device model, Android version, GPU/driver (system or custom zip + version), build ID (git SHA), date, tester.
+- **Standard QA script** (`docs/QA.md`, kept current): cold boot to title; menu navigation via touch; menu navigation via gamepad (paired + built-in handheld controller); overlay hide-on-pad; suspend/resume (background/foreground) rendering recovery; rotation ignored; save/load if enabled; rumble feedback; audio smoke; 30-minute soak for crashes/thermal. T13 adds the Gungnir-specific script: title → menu → first gameplay transition.
+- **Red-first applies to QA findings too:** a device bug becomes a reproducible case (steps, build, device) and, wherever host-testable, a red test before the fix.
+- **Evidence:** QA reports live in `docs/qa/` (markdown, one file per session, dated) with **counts and pass/fail only** — no game screenshots in-repo; screenshot hashes recorded instead (images stay in gitignored `build/qa/`).
+- **Sign-off:** M4 and M5 close only with an accepted QA report per device in the matrix. "Works on my machine once" is not evidence; "CI is green" is not evidence; three consecutive cold boots on each device are.
+
+## 9. Documentation checkpoints (summary)
+
+| When | Documents |
+|---|---|
+| Before any code (T1) | `AGENTS.md`, `docs/LEGAL.md`, `docs/SOURCE_PROVENANCE.md` |
+| With deps (T2) | `docs/PROVENANCE.md` (per-subtree ledger) |
+| With intake (T3) | `docs/INTAKE.md` |
+| With core (T4) | `docs/ARCHITECTURE.md`, `docs/TESTING.md` |
+| With analysis (T5) | `docs/ANALYSIS.md`, `docs/BRINGUP.md` (living journal) |
+| With HLE (T6) | `docs/HLE.md` |
+| With renderer (T7) | `docs/RENDERER.md`, `docs/SHADERS.md` |
+| With assets (T8) | `docs/formats/{TPL,DAR}.md`, `docs/TEXTURE_REPLACEMENT.md` |
+| With Android (T9–T11) | `docs/ANDROID.md`, `docs/ANDROID_DRIVERS.md`, `docs/INPUT.md` |
+| With audio/saves (T12) | `docs/AUDIO.md`, `docs/SAVEDATA.md` |
+| At milestone (T13) | `docs/BUILDING.md`, `docs/QA.md` + `docs/qa/<date>-<device>.md` session reports, `docs/PROGRESS.md`, `docs/RELEASE.md` |
+
+Every document obeys §0: format facts and RE addresses yes; game content, dump hashes, and screenshots no.
+
+## 10. Execution order (dependency graph)
+
+```
+T1 ──► T2 ──► T4 ──┬──► T5 ──► T6 ──┬──► T12 ──┐
+     └─► T3 ──────┘         │       │          ├──► T13 (M4: title screen on device)
+              └─────────────┴──► T7 ─┼──► T8 ──┤
+                                     └──► T9 ──► T10 ──┤
+                                            └──► T11 ──┘
+```
+
+Start: **T1 (scaffolding + IP guardrails)** — nothing else may begin until `repository_check` is green and `game.chd` is mechanically untrackable.

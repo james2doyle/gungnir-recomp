@@ -87,3 +87,11 @@ local.properties
 # --- Tooling noise ---
 __pycache__/
 *.pyc
+
+# --- .dex/ is TRACKED in this project, overriding the global gitignore ---
+# The master plan (.dex/plan.md) is a repo document and the dex task store
+# (.dex/tasks.jsonl) is in-repo by explicit configuration (state travels
+# with the repository). Neither contains game data — they are covered by
+# the same gate as every other file.
+!.dex/
+!.dex/**
