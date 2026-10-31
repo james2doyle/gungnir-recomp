@@ -3,6 +3,9 @@
 
 #include "platform/adreno/loader.hpp"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -175,6 +178,72 @@ void total_failure_and_close() {
     check(closing.close_calls == 1, "double shutdown is harmless");
 }
 
+void selection_file() {
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path directory =
+        std::filesystem::temp_directory_path() / ("gungnir_selection_" + std::to_string(stamp));
+    std::error_code fs_error;
+    std::filesystem::remove_all(directory, fs_error);
+    std::filesystem::create_directories(directory);
+
+    VulkanDriverSelection selection;
+    std::string error;
+    check(read_driver_selection(directory / "missing", selection, error) && !selection.custom &&
+              error.empty(),
+          "missing selection file means system");
+
+    {
+        std::ofstream file(directory / "system.txt");
+        file << "custom=false\n";
+    }
+    check(read_driver_selection(directory / "system.txt", selection, error) && !selection.custom,
+          "system selection parses");
+
+    {
+        std::ofstream file(directory / "custom.txt");
+        file << "custom=true\n"
+             << "driver_dir=/data/user/0/com.gungnir.recomp/files/drivers/abc\n"
+             << "soname=vulkan.ad07XX.so\n"
+             << "hook_lib_dir=/data/app/lib/arm64\n"
+             << "tmp_lib_dir=/data/user/0/com.gungnir.recomp/cache\n";
+    }
+    check(read_driver_selection(directory / "custom.txt", selection, error),
+          "custom selection parses: " + error);
+    check(selection.custom && selection.custom_driver_name == "vulkan.ad07XX.so" &&
+              selection.hook_lib_dir == "/data/app/lib/arm64",
+          "custom selection fields are read");
+
+    {
+        std::ofstream file(directory / "malformed.txt");
+        file << "custom=true\nnot-a-pair\n";
+    }
+    check(!read_driver_selection(directory / "malformed.txt", selection, error),
+          "malformed selection is rejected");
+    check_equal(error, "driver_selection_invalid", "malformed selection is named");
+
+    {
+        std::ofstream file(directory / "incomplete.txt");
+        file << "custom=true\n"
+             << "driver_dir=/drivers/abc\n"
+             << "soname=vulkan.ad07XX.so\n";
+    }
+    check(!read_driver_selection(directory / "incomplete.txt", selection, error),
+          "incomplete selection is rejected");
+    check_equal(error, "driver_selection_invalid", "incomplete selection is named");
+
+    {
+        std::ofstream file(directory / "relative.txt");
+        file << "custom=true\n"
+             << "driver_dir=drivers/abc\n"
+             << "soname=vulkan.ad07XX.so\n"
+             << "hook_lib_dir=/data/app/lib/arm64\n";
+    }
+    check(!read_driver_selection(directory / "relative.txt", selection, error),
+          "relative driver directory is rejected");
+
+    std::filesystem::remove_all(directory, fs_error);
+}
+
 } // namespace
 
 int main() {
@@ -182,6 +251,7 @@ int main() {
         system_path();
         custom_path();
         total_failure_and_close();
+        selection_file();
         std::cout << "loader_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

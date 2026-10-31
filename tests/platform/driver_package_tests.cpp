@@ -227,6 +227,13 @@ void valid_meta_package() {
           "meta.json is extracted");
     check(read_file(installed.package.staged_dir / "vulkan.ad07XX.so") == make_elf(),
           "the ICD bytes round-trip");
+    const std::vector<std::uint8_t> property_bytes =
+        read_file(installed.package.staged_dir / "package.properties");
+    const std::string properties(property_bytes.begin(), property_bytes.end());
+    check(properties.find("id=" + package.id) != std::string::npos,
+          "package metadata records the id");
+    check(properties.find("soname=vulkan.ad07XX.so") != std::string::npos,
+          "package metadata records the soname");
 
     const DriverInspectResult again = install_driver_zip(zip, root);
     check(again.ok && again.package.id == package.id, "re-import is idempotent");

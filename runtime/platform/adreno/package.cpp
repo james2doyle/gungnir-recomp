@@ -87,10 +87,16 @@ bool path_is_safe(std::string_view name, const DriverLimits &limits, std::string
 }
 
 bool valid_soname(std::string_view soname, const DriverLimits &limits) {
-    return !soname.empty() && soname.size() <= limits.max_name_length &&
-           soname.find('/') == std::string_view::npos &&
-           soname.find('\\') == std::string_view::npos && soname != "." && soname != ".." &&
-           ends_with(soname, ".so");
+    if (soname.empty() || soname.size() > limits.max_name_length ||
+        soname.find('/') != std::string_view::npos ||
+        soname.find('\\') != std::string_view::npos || soname == "." || soname == ".." ||
+        !ends_with(soname, ".so")) {
+        return false;
+    }
+    for (char c : soname) {
+        if (static_cast<unsigned char>(c) < 0x20) return false;
+    }
+    return true;
 }
 
 struct OpenArchive {
@@ -235,6 +241,33 @@ struct FileEntry {
     std::string name;
     std::uint64_t size{0};
 };
+
+std::string property_value(std::string value) {
+    for (char &c : value) {
+        if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+    }
+    return value;
+}
+
+bool write_package_properties(const std::filesystem::path &directory,
+                              const DriverPackage &package, std::string &error) {
+    std::ofstream output(directory / "package.properties", std::ios::binary);
+    if (!output) {
+        error = "driver_storage_unavailable";
+        return false;
+    }
+    output << "id=" << package.id << "\n"
+           << "display_name=" << property_value(package.display_name) << "\n"
+           << "vendor=" << property_value(package.vendor) << "\n"
+           << "driver_version=" << property_value(package.driver_version) << "\n"
+           << "min_api=" << package.min_api << "\n"
+           << "soname=" << property_value(package.soname) << "\n";
+    if (!output) {
+        error = "driver_storage_unavailable";
+        return false;
+    }
+    return true;
+}
 
 struct Prepared {
     DriverPackage package;
@@ -469,6 +502,11 @@ DriverInspectResult install_driver_zip(const std::filesystem::path &zip_path,
         if (fs_error || !std::filesystem::is_directory(target, fs_error)) {
             return failure("driver_storage_unavailable");
         }
+        if (!std::filesystem::exists(target / "package.properties", fs_error)) {
+            if (!write_package_properties(target, prepared.package, error)) {
+                return failure(std::move(error));
+            }
+        }
         prepared.package.staged_dir = target;
         DriverInspectResult result;
         result.ok = true;
@@ -508,6 +546,11 @@ DriverInspectResult install_driver_zip(const std::filesystem::path &zip_path,
             std::filesystem::remove_all(staging, fs_error);
             return failure("driver_storage_unavailable");
         }
+    }
+
+    if (!write_package_properties(staging, prepared.package, error)) {
+        std::filesystem::remove_all(staging, fs_error);
+        return failure(std::move(error));
     }
 
     std::filesystem::rename(staging, target, fs_error);

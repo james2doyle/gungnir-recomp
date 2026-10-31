@@ -1,6 +1,10 @@
 #include "platform/adreno/loader.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <fstream>
 #include <utility>
+#include <vector>
 
 #if defined(__ANDROID__)
 #include <dlfcn.h>
@@ -163,6 +167,68 @@ VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selecti
 
 VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selection) {
     return initialize_vulkan_loader(selection, {});
+}
+
+bool read_driver_selection(const std::filesystem::path &path,
+                           VulkanDriverSelection &selection, std::string &error) {
+    selection = {};
+    error.clear();
+    std::ifstream input(path);
+    if (!input) return true;
+
+    std::vector<std::pair<std::string, std::string>> values;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line[first] == '#') continue;
+        const auto equals = line.find('=', first);
+        if (equals == std::string::npos) {
+            error = "driver_selection_invalid";
+            return false;
+        }
+        std::string key = line.substr(first, equals - first);
+        std::string value = line.substr(equals + 1);
+        const auto key_end = key.find_last_not_of(" \t");
+        key.erase(key_end == std::string::npos ? 0 : key_end + 1);
+        const auto value_first = value.find_first_not_of(" \t");
+        value.erase(0, value_first == std::string::npos ? value.size() : value_first);
+        const auto value_end = value.find_last_not_of(" \t");
+        value.erase(value_end == std::string::npos ? 0 : value_end + 1);
+        values.emplace_back(std::move(key), std::move(value));
+    }
+
+    auto lookup = [&](const std::string &key) -> std::string {
+        for (const auto &[candidate, value] : values) {
+            if (candidate == key) return value;
+        }
+        return {};
+    };
+    const std::string custom = lookup("custom");
+    if (custom == "false") {
+        selection.custom = false;
+        return true;
+    }
+    if (custom != "true") {
+        error = "driver_selection_invalid";
+        return false;
+    }
+
+    selection.custom = true;
+    selection.custom_driver_dir = lookup("driver_dir");
+    selection.custom_driver_name = lookup("soname");
+    selection.hook_lib_dir = lookup("hook_lib_dir");
+    selection.tmp_lib_dir = lookup("tmp_lib_dir");
+    const bool absolute = std::filesystem::path(selection.custom_driver_dir).is_absolute() &&
+                          std::filesystem::path(selection.hook_lib_dir).is_absolute() &&
+                          (selection.tmp_lib_dir.empty() ||
+                           std::filesystem::path(selection.tmp_lib_dir).is_absolute());
+    if (selection.custom_driver_dir.empty() || selection.custom_driver_name.empty() ||
+        selection.hook_lib_dir.empty() || !absolute) {
+        error = "driver_selection_invalid";
+        return false;
+    }
+    return true;
 }
 
 void shutdown_vulkan_loader() {

@@ -5,16 +5,19 @@
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include "platform/adreno/package.hpp"
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/game_data.hpp"
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -30,6 +33,9 @@
 #endif
 
 namespace {
+
+std::mutex g_driver_info_mutex;
+std::string g_driver_info;
 
 std::string read_asset(const char *name) {
     SDL_IOStream *stream = SDL_IOFromFile(name, "rb");
@@ -190,6 +196,53 @@ Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobj
     }
     return result.ok ? JNI_TRUE : JNI_FALSE;
 }
+
+std::string jstring_to_string(JNIEnv *env, jstring value) {
+    if (value == nullptr) return {};
+    const char *utf = env->GetStringUTFChars(value, nullptr);
+    if (utf == nullptr) return {};
+    std::string result(utf);
+    env->ReleaseStringUTFChars(value, utf);
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeImportDriver(JNIEnv *env, jobject, jstring zip_path,
+                                                           jstring drivers_root) {
+    const std::string zip = jstring_to_string(env, zip_path);
+    const std::string root = jstring_to_string(env, drivers_root);
+    if (zip.empty() || root.empty()) return env->NewStringUTF("driver_import_args");
+    const gungnir::platform::DriverInspectResult result =
+        gungnir::platform::install_driver_zip(zip, root);
+    if (result.ok) {
+        GUNGNIR_LOGI("driver_import_ok id=%s soname=%s\n", result.package.id.c_str(),
+                     result.package.soname.c_str());
+        return env->NewStringUTF("");
+    }
+    GUNGNIR_LOGE("driver_import_failed: %s\n", result.error.c_str());
+    return env->NewStringUTF(result.error.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeRemoveDriver(JNIEnv *env, jobject,
+                                                           jstring drivers_root, jstring id) {
+    const std::string root = jstring_to_string(env, drivers_root);
+    const std::string driver_id = jstring_to_string(env, id);
+    std::string error;
+    if (root.empty() || !gungnir::platform::remove_driver(root, driver_id, error)) {
+        if (error.empty()) error = "driver_storage_unavailable";
+        GUNGNIR_LOGE("driver_remove_failed: %s\n", error.c_str());
+        return env->NewStringUTF(error.c_str());
+    }
+    GUNGNIR_LOGI("driver_remove_ok id=%s\n", driver_id.c_str());
+    return env->NewStringUTF("");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeDriverInfo(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lock(g_driver_info_mutex);
+    return env->NewStringUTF(g_driver_info.c_str());
+}
 #endif
 
 int main(int, char **) {
@@ -218,11 +271,24 @@ int main(int, char **) {
         return 1;
     }
 
+    gungnir::platform::VulkanDriverSelection driver_selection;
+    if (internal != nullptr) {
+        std::string selection_error;
+        const std::filesystem::path selection_path =
+            std::filesystem::path(internal) / "drivers" / "selection.txt";
+        if (!gungnir::platform::read_driver_selection(selection_path, driver_selection,
+                                                      selection_error)) {
+            GUNGNIR_LOGE("driver_selection_invalid: %s\n", selection_error.c_str());
+            driver_selection = {};
+        }
+    }
+
     gungnir::ge::VulkanBackend backend;
     gungnir::ge::VulkanBackend::Config config;
     config.width = 1280;
     config.height = 720;
     config.headless = false;
+    config.driver = driver_selection;
     config.instance_extensions.assign(extensions, extensions + extension_count);
     config.create_surface = [window](VkInstance instance) -> VkSurfaceKHR {
         VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -247,6 +313,15 @@ int main(int, char **) {
                  driver.driver_info.c_str(), driver.api_version);
     if (driver.fell_back) {
         GUNGNIR_LOGE("driver_fallback: %s\n", driver.fallback_error.c_str());
+    }
+    {
+        char info[1024];
+        std::snprintf(info, sizeof(info),
+                      "active=%s\nname=%s\ninfo=%s\napi=%u\n",
+                      driver.custom ? "custom" : "system", driver.driver_name.c_str(),
+                      driver.driver_info.c_str(), driver.api_version);
+        std::lock_guard<std::mutex> lock(g_driver_info_mutex);
+        g_driver_info = info;
     }
 
     const gungnir::platform::CpuTuning tuning = gungnir::platform::tune_current_thread();

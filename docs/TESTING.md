@@ -127,6 +127,7 @@ python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
 python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pins
 python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
 python3 -m unittest tests.test_vulkan_loader -v     # T10c loader selection/fallback
+python3 -m unittest tests.test_driver_store -v      # T10d driver inventory/selection
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -254,3 +255,14 @@ system path was exercised on the x86_64 emulator, which logged
 `driver_active=system name=gfxstream (SwiftShader driver)` before the first
 frame. The arm64 phone was unavailable for this checkpoint; custom-driver
 device QA remains T10e.
+
+`tests/test_driver_store.py` compiles `DriverStore.java` and its plain-JVM
+harness, then checks the installed-driver listing from `package.properties`,
+the default system selection, selection-file contents (driver dir, soname,
+nativeLibraryDir hooks and tmp dir), system-selection deletion, invalid-id
+refusal, recursive delete and drop-folder discovery. The emulator UI was
+exercised over adb: the Drivers button opened the dialog, which reported
+`Custom drivers require arm64-v8a. This device uses the system driver.`,
+while logcat still showed `driver_active=system` and the first frame. The
+arm64 phone was unavailable for the UI checkpoint; custom-driver device QA is
+T10e.

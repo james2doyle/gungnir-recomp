@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -47,6 +48,9 @@ VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selecti
                                             const LoaderHooks &hooks);
 
 VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selection);
+
+bool read_driver_selection(const std::filesystem::path &path,
+                           VulkanDriverSelection &selection, std::string &error);
 
 void shutdown_vulkan_loader();
 

@@ -76,7 +76,9 @@ ADPKG is not accepted in T10.
 ### Inspector implementation (T10b)
 
 `runtime/platform/adreno/package.{hpp,cpp}` performs inspection and atomic
-install without loading code. The ZIP container is handled by miniz 3.1.2
+install without loading code. A successful install also writes
+`package.properties` into the private driver directory for the Java driver
+list; it is metadata, not a driver file. The ZIP container is handled by miniz 3.1.2
 (MIT); `meta.json` is parsed by nlohmann/json 3.12.0 (MIT); the content id uses
 the adopted yakumo SHA-256. Both libraries are pinned in `dependencies.json`
 and never hand-rolled. `inspect_driver_zip()` reads the whole archive into
@@ -124,8 +126,32 @@ does not package the hook libraries.
    private directory and falls back to system.
 5. **Report** — one startup logcat line names the active driver and the real
    Vulkan version obtained from `vkEnumerateInstanceVersion` and
-   `VK_KHR_driver_properties` (`driverName` / `driverInfo`). The UI shows the
-   same values.
+   `VK_KHR_driver_properties` (`driverName` / `driverInfo`). The Drivers
+   dialog asks the native side for the same values through
+   `nativeDriverInfo()`.
+
+On Android the **Drivers** button opens the selection dialog. It lists the
+system driver plus every directory with a native-written
+`package.properties` (`id`, `display_name`, `vendor`, `driver_version`,
+`min_api`, `soname`). **Import zip** uses SAF; a long press on a row confirms
+delete. Selection is written to `filesDir/drivers/selection.txt`:
+
+```text
+custom=true
+driver_dir=/data/user/0/com.gungnir.recomp/files/drivers/<id>
+soname=vulkan.ad07XX.so
+hook_lib_dir=/data/app/.../lib/arm64
+tmp_lib_dir=/data/user/0/com.gungnir.recomp/cache
+```
+
+`custom=false` (or no file) means system. A driver whose `minApi` is newer
+than the device is listed but cannot be selected. The native side reads the
+file before creating any Vulkan object; a malformed file logs
+`driver_selection_invalid` and falls back to system. Selection takes effect on
+the next start. The drop folder `getExternalFilesDir()/drivers/` is scanned on
+startup and imported through the same native installer; the zip is never
+loaded from external storage. On x86_64 builds the dialog reports
+`Custom drivers require arm64-v8a` and never imports.
 
 The default path never calls libadrenotools. A driver that fails to open
 produces a named error, the app boots on the system driver, and no partial
@@ -213,6 +239,12 @@ are covered by the ordinary build-output rules.
   a different layout may be rejected.
 - No driver auto-update, repository browser or signature verification.
 - File redirect and BCn toggles are not exposed.
+- Selecting a driver requires restarting the app; the current session keeps
+  its already-created instance.
+- Drop-folder imports are scanned at startup only, not while the dialog is
+  open.
+- The arm64 phone was not available for the T10d UI checkpoint; the x86_64
+  emulator exercised the system-only dialog. Custom-driver device QA is T10e.
 
 ## References
 

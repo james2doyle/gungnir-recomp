@@ -78,6 +78,19 @@ The app unpacks `assets/runtime/version.txt` into
 `getFilesDir()/runtime/version.txt` on first run and rewrites it only when the
 packaged version changes.
 
+## Drivers
+
+The **Drivers** button (top-right) lists the system driver plus imported
+arm64 driver packages. **Import zip** uses the system document picker; the zip
+is copied into app-private storage, validated by the native inspector and
+installed under `filesDir/drivers/<id>/`. A long press on a row confirms
+delete. Selection is written to `filesDir/drivers/selection.txt` and takes
+effect on the next start; **Driver info** shows the active driver and Vulkan
+version reported by the running session. Zips dropped in
+`getExternalFilesDir()/drivers/` are imported at startup. On x86_64 the dialog
+reports that custom drivers require arm64 and keeps the system driver. See
+[`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the package contract.
+
 ## Lifecycle and orientation
 
 The Activity is fixed to landscape (`LandscapeLeft`), so user rotation locks
@@ -107,6 +120,9 @@ frames are 640x320 in the current AVD; the phone renders 3063x1335.
 | `audio_unavailable` | no audio device; the probe continues silently |
 | `surface_recreate_failed` | swapchain surface could not be rebuilt; retried |
 | `driver_fallback: <reason>` | a selected custom driver failed; the system driver is used |
+| `driver_selection_invalid` | the persisted selection file is malformed; system is used |
+| `driver_import_failed: <reason>` | a driver zip was rejected; no selection change |
+| `driver_remove_failed: <reason>` | a driver directory could not be removed |
 | `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `render_failed` | render failed; retried up to three times |
 
@@ -124,8 +140,8 @@ Each mutation was applied locally and the named gate failed for that reason:
 
 - No game rendering yet; the title screen is T13.
 - Audio is a lifecycle tone, not game audio (T12).
-- Custom Adreno driver selection is T10; the package contract and loader
-  decision are in [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md).
+- Custom Adreno driver selection lands with T10; the package contract, loader
+  and selection UI are in [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md).
 - The affinity heuristic uses the highest allowed CPU, not topology/frequency.
 - Debug APK only; release signing is not configured.
 
