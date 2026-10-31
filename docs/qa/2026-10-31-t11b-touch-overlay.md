@@ -7,6 +7,11 @@ Sign-off: **PASS for the T11b on-device cases.** Haptics (T11c), gamepad
 hiding (T11d) and the consolidated sprint gate (T11e) are not part of this
 report.
 
+UI note (added after the run): the loose Controls/Drivers buttons were
+consolidated into the `Menu` settings overlay. The layout workflow is
+unchanged: open **Menu > Edit touch layout** and **Menu > Finish touch
+layout**; reset is **Menu > Reset touch layout**.
+
 ## Devices
 
 | Device | SoC / GPU | ABI | Android | Role |

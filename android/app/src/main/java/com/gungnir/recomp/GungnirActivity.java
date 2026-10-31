@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -28,9 +29,8 @@ public final class GungnirActivity extends SDLActivity {
     private static final int PICK_GAME_DATA = 0x6771;
     private static final int PICK_DRIVER = 0x6772;
 
-    private Button pickerButton;
-    private Button driversButton;
-    private Button layoutButton;
+    private Button settingsButton;
+    private SettingsOverlayView settingsOverlay;
     private TouchOverlayView touchOverlay;
     private DriverStore driverStore;
     private boolean customDriversSupported;
@@ -57,6 +57,55 @@ public final class GungnirActivity extends SDLActivity {
         addContentView(touchOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        settingsOverlay = new SettingsOverlayView(this, new SettingsOverlayView.Listener() {
+            @Override
+            public void onToggleLayout() {
+                boolean editing = !touchOverlay.isEditing();
+                closeSettings();
+                touchOverlay.setEditing(editing);
+                Toast.makeText(GungnirActivity.this, editing
+                        ? "Drag controls; the corner handle resizes"
+                        : "Touch layout saved", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onResetLayout() {
+                confirmResetLayout();
+            }
+
+            @Override
+            public void onDrivers() {
+                closeSettings();
+                showDriversDialog();
+            }
+
+            @Override
+            public void onGameData() {
+                closeSettings();
+                openGameDataPicker();
+            }
+
+            @Override
+            public void onClose() {
+                closeSettings();
+            }
+        });
+        addContentView(settingsOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        settingsButton = new Button(this);
+        settingsButton.setText("Menu");
+        settingsButton.setOnClickListener(view -> {
+            if (settingsOverlay.isOpen()) closeSettings();
+            else showSettings();
+        });
+        FrameLayout.LayoutParams settingsParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        settingsParams.gravity = Gravity.BOTTOM | Gravity.END;
+        settingsParams.bottomMargin = 16;
+        settingsParams.rightMargin = 16;
+        addContentView(settingsButton, settingsParams);
+
         SharedPreferences preferences = getSharedPreferences("gungnir", MODE_PRIVATE);
         driverStore = new DriverStore(getFilesDir(), new DriverStore.Preferences() {
             @Override
@@ -77,43 +126,53 @@ public final class GungnirActivity extends SDLActivity {
         customDriversSupported = Build.SUPPORTED_ABIS.length > 0
                 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0]);
 
-        driversButton = new Button(this);
-        driversButton.setText("Drivers");
-        driversButton.setOnClickListener(view -> showDriversDialog());
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.gravity = Gravity.BOTTOM | Gravity.END;
-        params.bottomMargin = 24;
-        params.rightMargin = 24;
-        addContentView(driversButton, params);
-
-        layoutButton = new Button(this);
-        layoutButton.setText("Controls");
-        layoutButton.setOnClickListener(view -> toggleLayoutEditing());
-        layoutButton.setOnLongClickListener(view -> {
-            touchOverlay.resetLayout();
-            Toast.makeText(this, "Touch layout reset", Toast.LENGTH_SHORT).show();
-            return true;
-        });
-        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        layoutParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-        layoutParams.bottomMargin = 24;
-        addContentView(layoutButton, layoutParams);
-
         if (customDriversSupported) {
             new Thread(this::importDropFolder, "driver-drop-import").start();
         }
     }
 
-    private void toggleLayoutEditing() {
-        if (touchOverlay == null) return;
-        boolean editing = !touchOverlay.isEditing();
-        touchOverlay.setEditing(editing);
-        layoutButton.setText(editing ? "Done" : "Controls");
-        Toast.makeText(this, editing
-                ? "Drag controls; the corner handle resizes"
-                : "Touch layout saved", Toast.LENGTH_SHORT).show();
+    private void showSettings() {
+        if (settingsOverlay == null) return;
+        if (touchOverlay != null) {
+            touchOverlay.releaseAll();
+            touchOverlay.setVisibility(View.INVISIBLE);
+        }
+        settingsButton.setVisibility(View.GONE);
+        settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
+    }
+
+    private void closeSettings() {
+        if (settingsOverlay == null) return;
+        settingsOverlay.hide();
+        if (touchOverlay != null) touchOverlay.setVisibility(View.VISIBLE);
+        if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
+    }
+
+    private void confirmResetLayout() {
+        new AlertDialog.Builder(this)
+                .setTitle("Reset touch layout")
+                .setMessage("Restore the default positions and sizes?")
+                .setPositiveButton("Reset", (dialog, which) -> {
+                    touchOverlay.resetLayout();
+                    Toast.makeText(this, "Touch layout reset", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (settingsOverlay != null && settingsOverlay.isOpen()) {
+            closeSettings();
+            return;
+        }
+        if (touchOverlay != null && touchOverlay.isEditing()) {
+            touchOverlay.setEditing(false);
+            Toast.makeText(this, "Touch layout saved", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override
@@ -127,13 +186,8 @@ public final class GungnirActivity extends SDLActivity {
 
     public void showGameDataPicker() {
         runOnUiThread(() -> {
-            if (pickerButton != null) return;
-            pickerButton = new Button(this);
-            pickerButton.setText("Select Gungnir ISO");
-            pickerButton.setOnClickListener(view -> openGameDataPicker());
-            addContentView(pickerButton, new ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            showSettings();
+            Toast.makeText(this, "Choose Game data in Settings", Toast.LENGTH_LONG).show();
         });
     }
 
@@ -355,7 +409,7 @@ public final class GungnirActivity extends SDLActivity {
                 final boolean valid = nativeGameDataImported(target.getAbsolutePath());
                 runOnUiThread(() -> {
                     if (valid) {
-                        removePicker();
+                        if (settingsOverlay != null) settingsOverlay.setStatus("Game data verified");
                         Toast.makeText(this, "Gungnir ISO verified", Toast.LENGTH_LONG).show();
                     } else {
                         Toast.makeText(this, "ISO rejected: identity mismatch",
@@ -369,10 +423,4 @@ public final class GungnirActivity extends SDLActivity {
         }, "game-data-import").start();
     }
 
-    private void removePicker() {
-        if (pickerButton == null) return;
-        ViewGroup parent = (ViewGroup) pickerButton.getParent();
-        if (parent != null) parent.removeView(pickerButton);
-        pickerButton = null;
-    }
 }
