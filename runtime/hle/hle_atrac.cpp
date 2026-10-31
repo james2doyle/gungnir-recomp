@@ -24,7 +24,10 @@ constexpr std::uint32_t kBadAtracId = 0x80630005u;
 constexpr std::uint32_t kUnknownFormat = 0x80630006u;
 constexpr std::uint32_t kWrongCodecType = 0x80630007u;
 constexpr std::uint32_t kNoFreeId = 0x80630003u;
+constexpr std::uint32_t kAllDataLoaded = 0x80630009u;
 constexpr std::uint32_t kSizeTooSmall = 0x80630011u;
+constexpr std::uint32_t kAddDataTooBig = 0x80630018u;
+constexpr std::uint32_t kBufferEmpty = 0x80630023u;
 constexpr std::uint32_t kBadAlignment = 0x80630014u;
 constexpr std::uint32_t kAllDataDecoded = 0x80630024u;
 constexpr std::uint32_t kRemainOnMemory = 0xFFFFFFFFu;
@@ -40,6 +43,10 @@ struct Slot {
     std::uint32_t loop_end{};
     bool has_loop{};
     int loops_left{};
+    bool streaming{};
+    std::uint32_t stream_buffer{};
+    std::uint32_t stream_buffer_size{};
+    std::uint32_t stream_offset{};
 };
 
 std::array<Slot, kMaxTracks> g_slots{};
@@ -114,6 +121,10 @@ std::uint32_t load_track(Runtime &rt, Slot &target, std::uint32_t address, std::
     target.position = 0u;
     target.loops_left = 0;
     target.has_loop = false;
+    target.streaming = false;
+    target.stream_buffer = 0u;
+    target.stream_buffer_size = 0u;
+    target.stream_offset = 0u;
     set_loop_bounds(target);
     return 0u;
 }
@@ -162,6 +173,13 @@ void set_data(AllegrexContext &ctx) {
     finish(ctx, result);
 }
 
+void mark_streaming(Slot &target, std::uint32_t buffer, std::uint32_t buffer_size, std::uint32_t read_size) {
+    target.streaming = true;
+    target.stream_buffer = buffer;
+    target.stream_buffer_size = buffer_size;
+    target.stream_offset = read_size;
+}
+
 void set_halfway_buffer(AllegrexContext &ctx) {
     Slot *target = slot(arg(ctx, 0));
     if (target == nullptr) {
@@ -173,7 +191,9 @@ void set_halfway_buffer(AllegrexContext &ctx) {
         finish(ctx, kSizeTooSmall);
         return;
     }
-    finish(ctx, load_track(kernel().runtime(), *target, arg(ctx, 1), read_size));
+    const std::uint32_t result = load_track(kernel().runtime(), *target, arg(ctx, 1), read_size);
+    if (result == 0u) mark_streaming(*target, arg(ctx, 1), arg(ctx, 3), read_size);
+    finish(ctx, result);
 }
 
 void set_halfway_buffer_and_get_id(AllegrexContext &ctx) {
@@ -193,6 +213,7 @@ void set_halfway_buffer_and_get_id(AllegrexContext &ctx) {
         finish(ctx, result);
         return;
     }
+    mark_streaming(*target, arg(ctx, 0), arg(ctx, 2), read_size);
     finish(ctx, id_of(target));
 }
 
@@ -251,10 +272,11 @@ void get_remain_frame(AllegrexContext &ctx) {
         finish(ctx, kBadAtracId);
         return;
     }
-    const std::uint32_t frame = target->track->info().samples_per_frame();
+    const auto &info = target->track->info();
+    const std::uint32_t frame = info.samples_per_frame();
+    const std::uint32_t frame_index = (target->position + info.delay) / frame;
     std::uint32_t remain = 0u;
-    if (target->position <= target->end_sample)
-        remain = (target->end_sample - target->position + frame) / frame;
+    if (frame_index < info.available_frames()) remain = info.available_frames() - frame_index;
     if (!write32(kernel().runtime(), arg(ctx, 1), remain)) {
         finish(ctx, kSizeTooSmall);
         return;
@@ -373,6 +395,11 @@ void decode_data(AllegrexContext &ctx) {
         finish(ctx, kAllDataDecoded);
         return;
     }
+    if (frame_index >= info.available_frames()) {
+        write(0u, false);
+        finish(ctx, kBufferEmpty);
+        return;
+    }
     const bool looping = target->has_loop && target->loops_left != 0 && target->position <= target->loop_end;
     const std::uint32_t limit = looping ? target->loop_end : target->end_sample;
     const std::uint32_t count = std::min(frame_samples - raw % frame_samples, limit - target->position + 1u);
@@ -411,6 +438,65 @@ void decode_data(AllegrexContext &ctx) {
         if (target->loops_left > 0) --target->loops_left;
     }
     write(count, target->position > target->end_sample);
+    finish(ctx, 0u);
+}
+
+void get_stream_data_info(AllegrexContext &ctx) {
+    Slot *target = slot(arg(ctx, 0));
+    if (target == nullptr || target->track == nullptr) {
+        finish(ctx, kBadAtracId);
+        return;
+    }
+    auto &rt = kernel().runtime();
+    std::uint32_t write_pointer = 0u;
+    std::uint32_t writable = 0u;
+    std::uint32_t read_offset = 0u;
+    if (target->streaming) {
+        write_pointer = target->stream_buffer;
+        writable = target->stream_buffer_size;
+        read_offset = target->stream_offset;
+    }
+    write32(rt, arg(ctx, 1), write_pointer);
+    write32(rt, arg(ctx, 2), writable);
+    write32(rt, arg(ctx, 3), read_offset);
+    finish(ctx, 0u);
+}
+
+void add_stream_data(AllegrexContext &ctx) {
+    Slot *target = slot(arg(ctx, 0));
+    if (target == nullptr || target->track == nullptr) {
+        finish(ctx, kBadAtracId);
+        return;
+    }
+    const std::uint32_t bytes = arg(ctx, 1);
+    if (!target->streaming) {
+        finish(ctx, bytes == 0u ? 0u : kAllDataLoaded);
+        return;
+    }
+    if (bytes == 0u) {
+        finish(ctx, 0u);
+        return;
+    }
+    if (bytes > target->stream_buffer_size) {
+        finish(ctx, kAddDataTooBig);
+        return;
+    }
+    auto &rt = kernel().runtime();
+    if (!rt.memory().contains(target->stream_buffer, bytes)) {
+        finish(ctx, kSizeTooSmall);
+        return;
+    }
+    const std::uint8_t *source = rt.memory().raw_pointer(target->stream_buffer, bytes);
+    if (source == nullptr) {
+        finish(ctx, kSizeTooSmall);
+        return;
+    }
+    std::string error;
+    if (!target->track->append(std::span<const std::uint8_t>(source, bytes), error)) {
+        finish(ctx, kAddDataTooBig);
+        return;
+    }
+    target->stream_offset += bytes;
     finish(ctx, 0u);
 }
 
@@ -464,6 +550,10 @@ void register_atrac(HleRegistrar &hle) {
     hle.add("sceAtrac3plus", "sceAtracDecodeData", [](Runtime &, AllegrexContext &ctx) { decode_data(ctx); });
     hle.add("sceAtrac3plus", "sceAtracGetInternalErrorInfo",
         [](Runtime &, AllegrexContext &ctx) { get_internal_error(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracGetStreamDataInfo",
+        [](Runtime &, AllegrexContext &ctx) { get_stream_data_info(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracAddStreamData",
+        [](Runtime &, AllegrexContext &ctx) { add_stream_data(ctx); });
 }
 
 } // namespace gungnir::hle

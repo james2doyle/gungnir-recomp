@@ -99,6 +99,24 @@ void contracts() {
         check(!track->decode_frame(1u, pcm, error), "out-of-range frame is rejected");
     }
 
+    const auto stream_file = make_atrac3plus_riff(2u, 4096u, 0u);
+    const std::size_t first_frame_end = stream_file.size() - 1536u;
+    const auto first_chunk = std::span<const std::uint8_t>(stream_file.data(), first_frame_end);
+    auto stream_track = gungnir::audio::AtracTrack::open(first_chunk, error);
+    check(stream_track != nullptr, "partial stream opens");
+    if (stream_track) {
+        check(stream_track->info().frames() == 2u, "declared stream length is kept");
+        check(stream_track->info().available_frames() == 1u, "only the first frame is available");
+        std::vector<std::int16_t> pcm;
+        check(stream_track->decode_frame(0u, pcm, error), "first stream frame decodes");
+        check(!stream_track->decode_frame(1u, pcm, error), "second stream frame is not available yet");
+        const auto second = std::span<const std::uint8_t>(stream_file.data() + first_frame_end, 1536u);
+        check(stream_track->append(second, error), "second frame appends");
+        check(stream_track->info().available_frames() == 2u, "both frames are available");
+        check(stream_track->decode_frame(1u, pcm, error), "second stream frame decodes");
+        check(!stream_track->append(second, error), "append past the declared data is rejected");
+    }
+
     const auto truncated = std::vector<std::uint8_t>(file.begin(), file.begin() + 20);
     check(!gungnir::audio::parse_atrac_riff(truncated).has_value(), "truncated RIFF is rejected");
     std::vector<std::uint8_t> garbage(64u, 0xABu);

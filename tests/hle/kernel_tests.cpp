@@ -7,6 +7,7 @@
 #include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
+#include "audio/atrac_file.hpp"
 #include "hle/hle_utility.hpp"
 #include "hle/kernel.hpp"
 #include "savedata/save_store.hpp"
@@ -707,11 +708,11 @@ void sas_contracts() {
     check(mem.load16(out) == 1123u && mem.load16(out + 2u) == 1123u, "mix adds the hand-computed voice");
 }
 
-std::vector<std::uint8_t> atrac_riff() {
+std::vector<std::uint8_t> atrac_riff(std::uint32_t frames = 1u, std::uint32_t total_samples = 2048u) {
     constexpr std::uint16_t kBlockAlign = 1536u;
     constexpr std::uint16_t kCodecParams = 0x00BFu;
-    std::vector<std::uint8_t> data(kBlockAlign, 0u);
-    data[0] = 0x60u;
+    std::vector<std::uint8_t> data(static_cast<std::size_t>(frames) * kBlockAlign, 0u);
+    for (std::uint32_t frame = 0; frame < frames; ++frame) data[frame * kBlockAlign] = 0x60u;
     std::vector<std::uint8_t> out;
     const auto tag = [&out](const char *value) { out.insert(out.end(), value, value + 4); };
     const auto u16 = [&out](std::uint16_t value) {
@@ -743,7 +744,7 @@ std::vector<std::uint8_t> atrac_riff() {
     out.insert(out.end(), extra, extra + 12);
     tag("fact");
     u32(8u);
-    u32(2048u);
+    u32(total_samples);
     u32(0u);
     tag("data");
     u32(static_cast<std::uint32_t>(data.size()));
@@ -799,6 +800,42 @@ void atrac_contracts() {
     check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u,
         "ATRAC decodes again after reset");
     check(atrac("sceAtracReleaseAtracID", {id}) == 0u, "ATRAC data ID released");
+
+    const auto stream_file = atrac_riff(2u, 4096u);
+    const auto stream_info = gungnir::audio::parse_atrac_riff(stream_file);
+    check(stream_info.has_value() && stream_info->data_offset + 1536u < stream_file.size(),
+        "stream fixture has a second frame");
+    if (stream_info) {
+        const std::uint32_t first_chunk = stream_info->data_offset + 1536u;
+        for (std::size_t i = 0; i < stream_file.size(); ++i)
+            mem.store8(kRiff + static_cast<std::uint32_t>(i), stream_file[i]);
+        const std::uint32_t stream_id = atrac("sceAtracSetHalfwayBufferAndGetID",
+            {kRiff, first_chunk, first_chunk + 1536u});
+        check(stream_id > 0u, "streaming ATRAC opens");
+        constexpr std::uint32_t kStreamInfo = Fixture::kOutput + 0x80u;
+        check(atrac("sceAtracGetStreamDataInfo",
+                  {stream_id, kStreamInfo, kStreamInfo + 4u, kStreamInfo + 8u}) == 0u,
+            "stream data info available");
+        const std::uint32_t write_pointer = mem.load32(kStreamInfo);
+        check(write_pointer == kRiff, "stream write pointer is the guest buffer");
+        check(mem.load32(kStreamInfo + 4u) == first_chunk + 1536u, "stream writable bytes");
+        check(mem.load32(kStreamInfo + 8u) == first_chunk, "stream read offset");
+        for (std::uint32_t i = 0u; i < 1536u; ++i)
+            mem.store8(write_pointer + i, stream_file[first_chunk + i]);
+        check(atrac("sceAtracAddStreamData", {stream_id, 1536u}) == 0u, "stream data appended");
+        check(atrac("sceAtracGetRemainFrame", {stream_id, kStreamInfo}) == 0u &&
+                  mem.load32(kStreamInfo) == 2u,
+            "stream reports two remaining frames");
+        check(atrac("sceAtracDecodeData", {stream_id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u &&
+                  mem.load32(kValue) == 2048u && mem.load32(kValue + 4u) == 0u,
+            "first stream frame decodes");
+        check(atrac("sceAtracDecodeData", {stream_id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u &&
+                  mem.load32(kValue) == 2048u && mem.load32(kValue + 4u) == 1u,
+            "second stream frame ends the stream");
+        check(atrac("sceAtracAddStreamData", {stream_id, first_chunk + 1536u}) == 0x80630018u,
+            "oversized stream append is rejected");
+        check(atrac("sceAtracReleaseAtracID", {stream_id}) == 0u, "streaming ID released");
+    }
 }
 
 void io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {

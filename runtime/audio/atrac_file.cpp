@@ -72,7 +72,8 @@ std::optional<AtracTrackInfo> parse_atrac_riff(std::span<const std::uint8_t> dat
             }
         } else if (tag_is(data, offset, "data") && body <= data.size()) {
             info.data_offset = static_cast<std::uint32_t>(body);
-            info.data_size = static_cast<std::uint32_t>(std::min<std::size_t>(size, data.size() - body));
+            info.data_size = size;
+            info.data_available = static_cast<std::uint32_t>(std::min<std::size_t>(size, data.size() - body));
             have_data = true;
             break;
         }
@@ -138,6 +139,10 @@ bool AtracTrack::decode_frame(std::uint32_t frame, std::vector<std::int16_t> &pc
         error = "atrac_frame_out_of_range";
         return false;
     }
+    if (frame >= impl_->info.available_frames()) {
+        error = "atrac_frame_not_available";
+        return false;
+    }
     const std::uint32_t samples_per_frame = impl_->info.samples_per_frame();
     const std::size_t channels = static_cast<std::size_t>(impl_->info.channels);
     pcm.assign(channels * samples_per_frame, 0);
@@ -154,6 +159,20 @@ bool AtracTrack::decode_frame(std::uint32_t frame, std::vector<std::int16_t> &pc
         error = "atrac_decode_failed";
         return false;
     }
+    return true;
+}
+
+bool AtracTrack::append(std::span<const std::uint8_t> bytes, std::string &error) {
+    error.clear();
+    if (!impl_ || bytes.empty()) return true;
+    const std::uint64_t end = static_cast<std::uint64_t>(impl_->info.data_offset) + impl_->info.data_size;
+    const std::uint64_t current = static_cast<std::uint64_t>(impl_->info.data_offset) + impl_->info.data_available;
+    if (current + bytes.size() > end) {
+        error = "atrac_append_overflow";
+        return false;
+    }
+    impl_->file.insert(impl_->file.end(), bytes.begin(), bytes.end());
+    impl_->info.data_available += static_cast<std::uint32_t>(bytes.size());
     return true;
 }
 

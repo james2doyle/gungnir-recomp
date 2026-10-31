@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -26,6 +27,7 @@ struct AtracTrackInfo {
     std::uint32_t delay{};
     std::uint32_t data_offset{};
     std::uint32_t data_size{};
+    std::uint32_t data_available{};
     std::vector<AtracLoop> loops;
     std::vector<std::uint8_t> codec_extra;
 
@@ -34,6 +36,9 @@ struct AtracTrackInfo {
     }
     [[nodiscard]] std::uint32_t frames() const {
         return block_align != 0u ? data_size / block_align : 0u;
+    }
+    [[nodiscard]] std::uint32_t available_frames() const {
+        return block_align != 0u ? std::min(data_available, data_size) / block_align : 0u;
     }
 };
 
@@ -50,6 +55,7 @@ public:
     [[nodiscard]] const AtracTrackInfo &info() const noexcept;
     [[nodiscard]] std::uint32_t frames() const noexcept;
     bool decode_frame(std::uint32_t frame, std::vector<std::int16_t> &pcm, std::string &error);
+    bool append(std::span<const std::uint8_t> bytes, std::string &error);
 
 private:
     struct Impl;

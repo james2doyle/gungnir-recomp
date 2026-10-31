@@ -59,15 +59,18 @@ drives the vendored decoder. The HLE implements the memory-buffer track set:
 GetAtracID, SetData/SetDataAndGetID, SetHalfwayBuffer(AndGetID), Release,
 GetSoundSample, GetChannel, GetMaxSample, GetRemainFrame, GetNextSample,
 GetNextDecodePosition, GetBitrate, GetLoopStatus, SetLoopNum,
-ResetPlayPosition, DecodeData and GetInternalErrorInfo. DecodeData copies
+ResetPlayPosition, DecodeData, GetStreamDataInfo, AddStreamData and
+GetInternalErrorInfo. DecodeData copies
 guest PCM one codec frame at a time, respects loop/end positions and returns
 `0x80630024` after the last frame; a malformed RIFF or failed decode is a
 named error, never fake silence.
 
-Streaming calls remain counted gaps: GetStreamDataInfo, AddStreamData,
-SetSecondBuffer/GetSecondBufferInfo, GetBufferInfoForReseting, StartEntry and
-EndEntry are not registered, so a title that needs them stops with a named
-NID instead of receiving silent PCM. `tests/audio/atrac_track_tests.cpp`
+Single-buffer streaming works: SetHalfwayBuffer supplies the initial header
+and frame data, GetStreamDataInfo returns the staging pointer/capacity/file
+offset, and AddStreamData appends the next chunk. Double buffering remains a
+counted gap: SetSecondBuffer/GetSecondBufferInfo, GetBufferInfoForReseting,
+StartEntry and EndEntry are not registered, so a title that needs them stops
+with a named NID instead of receiving silent PCM. `tests/audio/atrac_track_tests.cpp`
 covers the parser and decoder with a synthetic ATRAC3+ RIFF; the HLE path is
 covered in `tests/hle/kernel_tests.cpp`.
 
@@ -103,9 +106,9 @@ python3 -m unittest tests.test_hle -v          # sceAudio + SAS contracts
 
 ## Named gaps
 
-- ATRAC streaming (GetStreamDataInfo/AddStreamData/second buffer/reset-buffer
-  info/start-end entry) and `sceMp3` are not implemented; those calls stop
-  with a named NID rather than fake PCM.
+- ATRAC double buffering (second buffer/reset-buffer info/start-end entry)
+  and `sceMp3` are not implemented; those calls stop with a named NID rather
+  than fake PCM.
 - The 60 s AAudio soak is clean, but it runs on the audio clock rather than
   the 59.94 Hz guest loop; that pacing and game audio are T13 work.
 - The VAG fixture is synthetic (constant nibble), so it proves the
