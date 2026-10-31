@@ -38,6 +38,32 @@
       "note": "standalone FFmpeg n4.4 ATRAC3/ATRAC3+ decoder subset (LGPL-2.1-or-later) plus authored API; FFmpeg tag/blob pins and local deltas in provenance"
     },
     {
+      "name": "miniz",
+      "type": "vendored",
+      "upstream": "https://github.com/richgel999/miniz",
+      "commit": "77d0dce8627735138c51770d1799a1ef48f2117d",
+      "version": "3.1.2",
+      "license": "MIT",
+      "license_file": "third_party/miniz/LICENSE",
+      "path": "third_party/miniz",
+      "digest": "3640824e04347d6ebf88cb00c69c6ba2f5ee865f59d74dc62c9399639ea6ef50",
+      "provenance": "third_party/miniz/PROVENANCE.md",
+      "note": "ZIP reader/writer for the driver package inspector; vendored byte-identical from the 3.1.2 release archive"
+    },
+    {
+      "name": "nlohmann-json",
+      "type": "vendored",
+      "upstream": "https://github.com/nlohmann/json",
+      "commit": "55f93686c01528224f448c19128836e7df245f72",
+      "version": "3.12.0",
+      "license": "MIT",
+      "license_file": "third_party/nlohmann-json/LICENSE",
+      "path": "third_party/nlohmann-json",
+      "digest": "299e42ca231e5fec3c92bb1a3efcafad84f543643481a7c8ef3895701f2fd7a3",
+      "provenance": "third_party/nlohmann-json/PROVENANCE.md",
+      "note": "single-header JSON parser for untrusted driver meta.json; vendored byte-identical from the v3.12.0 release asset"
+    },
+    {
       "name": "sdl3",
       "type": "fetch",
       "upstream": "https://github.com/libsdl-org/SDL",

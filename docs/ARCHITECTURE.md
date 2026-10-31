@@ -22,6 +22,7 @@ runtime/ge/            display lists, vertex/T&L, software oracle, textures,
 runtime/post/          composable post passes and preset JSON
 runtime/tex/           TPL decode/write, content-keyed dump, PNG replacements
 runtime/platform/android/  game-data identity gate, asset stamps, thread tuning (T9c/T9e)
+runtime/platform/adreno/   untrusted driver zip inspector, atomic install (T10b)
 android/               Gradle + SDL3 Activity shell and JNI entry (T9)
 tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
                        (our authorship; .mips text sources, ELF built into build/)

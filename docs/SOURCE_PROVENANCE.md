@@ -101,6 +101,17 @@ reimplemented (hard limit #0). Record:
 | Per-subtree detail | `third_party/libadrenotools/PROVENANCE.md`, `third_party/liblinkernsbypass/PROVENANCE.md` |
 | Driver-package contract | [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) |
 
+### Driver package libraries (T10b)
+
+| Library | Commit | License | Use |
+|---|---|---|---|
+| `miniz` 3.1.2 | `77d0dce8627735138c51770d1799a1ef48f2117d` | MIT | ZIP container reader/writer; we never parse ZIP by hand |
+| `nlohmann/json` 3.12.0 (single header) | `55f93686c01528224f448c19128836e7df245f72` | MIT | strict `meta.json` parsing; parser exceptions are mapped to named errors |
+
+Both are vendored byte-identical, pinned in `dependencies.json`, and recorded
+in the per-subtree notes under `third_party/`. They are compiled from source
+on host and Android; no binary is committed.
+
 No upstream source, object or driver binary is committed. The fetched archives
 are verified before extraction under `build/android-deps/`; driver packages
 supplied by users remain app-private and are never bundled.

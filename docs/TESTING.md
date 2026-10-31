@@ -125,6 +125,7 @@ python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity 
 python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
 python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
 python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pins
+python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -227,3 +228,15 @@ license, path), their license/provenance files, and the driver contract in
 `meta.json` fields, private-storage and packaging constraints, the named-error
 table, and the no-bundling policy. No driver archive is downloaded or
 committed by the test.
+
+`tests/test_driver_package.py` runs `driver_package_tests`, which synthesizes
+zips with miniz and synthetic ELF64 headers (no driver binary). It covers
+stored and deflated entries, Turnip `meta.json` and bare `libvulkan.so`
+packages, idempotent install/remove, zip-slip (including a patched absolute
+name), duplicates, overlong names, entry/archive budgets, encrypted and
+unsupported-compression entries, schema/name/library/minApi failures, wrong
+ELF class/machine/type, truncated ELF, empty `.dynsym`, drop-folder scanning,
+and atomic failure (no staging directory left behind). Mutation checks:
+disabling the encryption guard returns a different named error for the
+encrypted fixture, and disabling the path guard accepts the zip-slip fixture;
+both make the suite die for the intended case.

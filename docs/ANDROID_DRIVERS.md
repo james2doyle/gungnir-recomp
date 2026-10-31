@@ -73,6 +73,20 @@ ADPKG is not accepted in T10.
   non-empty `.dynsym`; 32-bit, `EM_X86_64`, `ET_REL`/`ET_EXEC`, and truncated
   files are rejected before extraction.
 
+### Inspector implementation (T10b)
+
+`runtime/platform/adreno/package.{hpp,cpp}` performs inspection and atomic
+install without loading code. The ZIP container is handled by miniz 3.1.2
+(MIT); `meta.json` is parsed by nlohmann/json 3.12.0 (MIT); the content id uses
+the adopted yakumo SHA-256. Both libraries are pinned in `dependencies.json`
+and never hand-rolled. `inspect_driver_zip()` reads the whole archive into
+memory, so the id and the validated bytes are the same snapshot;
+`install_driver_zip()` extracts that snapshot into
+`filesDir/drivers/.staging-<id>/` and renames it to `filesDir/drivers/<id>/`
+only after every entry was written. A failure leaves neither a staged nor a
+partially installed driver. `scan_drop_folder()` returns valid packages and
+named per-file errors instead of silently skipping bad zips.
+
 ## Install and selection flow
 
 1. **Import** — the user picks a zip with SAF (`ACTION_OPEN_DOCUMENT`) or
@@ -125,10 +139,11 @@ a failed load never leaves a half-initialized instance.
 | Error | Meaning |
 |---|---|
 | `driver_zip_missing` | selected file or drop-folder entry not readable |
-| `driver_zip_unsupported` | not a zip, encrypted archive, or unsupported method |
+| `driver_zip_unsupported` | not a zip, or an unsupported compression method |
 | `driver_zip_slip` | absolute path or `..` component in an entry |
 | `driver_entry_duplicate` | two entries share a path |
 | `driver_entry_oversize` | entry count or size budget exceeded |
+| `driver_entry_name` | empty, overlong or control-character entry name |
 | `driver_entry_encrypted` | encrypted zip entry |
 | `driver_meta_invalid` | `meta.json` is not valid JSON or has wrong field types |
 | `driver_meta_schema` | missing/unknown `schemaVersion` |
@@ -143,6 +158,7 @@ a failed load never leaves a half-initialized instance.
 | `driver_min_api` | package requires a newer Android API |
 | `driver_abi_unsupported` | device ABI is not `arm64-v8a` |
 | `driver_storage_unavailable` | private driver directory cannot be created |
+| `driver_id_invalid` | a driver id is not a 16-character lowercase hash |
 | `driver_load_failed` | libadrenotools returned null for a valid package |
 
 ## No-bundling policy
