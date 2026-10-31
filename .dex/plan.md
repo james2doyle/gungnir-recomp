@@ -258,15 +258,27 @@ records what it used.
 
 ### T12 — Audio + savedata + DAR asset support
 **Depends on:** T6
-**Work:** (1) `runtime/audio/`: sceSasCore 32-voice VAG/ADPCM synthesis (pitch/ADSR), sceAtrac3plus via LGPL `at3_standalone`-class decoder (notices + relink recipe), sceMp3, mixed to one 44.1 kHz stream → AAudio low-latency callback (Android) / SDL audio (desktop); (2) `runtime/savedata/`: virtual memstick `PSP/SAVEDATA/<title>/` with PARAM.SFO v1.1 (PSF) read/write, PPSSPP-compatible layout (saves interchangeable with emulator/hardware); KIRK save encryption **deferred**, documented honestly (hash-left-zero stance — never ship key material); (3) `tools/dar.py` for the asset pipeline (both DAR sides: read/list/extract + in-place rewrite rules; `stored_size==0` = uncompressed).
+**Tracking:** split in dex into T12a (audio) and T12b (savedata + DAR assets); the parent closes when both are complete and T13 stays blocked until then.
+
+#### T12a — Audio: SAS/ATRAC/MP3 synthesis and device output
+**Depends on:** T6 (T6h ATRAC decoder, T6g/T6m SAS slice, T6f sceAudio channels already landed)
+**Work:** `runtime/audio/`: finish sceSasCore 32-voice VAG/ADPCM synthesis (pitch/ADSR; close the remaining voice/effect calls the title executes), complete the sceAtrac3plus track calls over the vendored FFmpeg n4.4 decoder (T6l left six track calls as a counted gap; never fake PCM), sceMp3 (adopted decoder or a named counted gap), mixed to one 44.1 kHz stream → AAudio low-latency callback (Android) / SDL audio (desktop). Ring buffer, fade and error-callback restart; underrun accounting.
 **Test cases:**
 - TC-12.1 SAS voice unit tests (ADPCM decode, pitch, ADSR envelope shapes).
 - TC-12.2 Audio smoke: tone + VAG playback via AAudio on device, SDL on desktop; no underruns in a 60 s soak at 59.94 pacing.
+**Docs checkpoint:** `docs/AUDIO.md` (voice model, codec coverage, sink contract, underrun policy, counted gaps).
+**Refs:** sp00nznet (sascore), sal063 (audio.c), snuri00 (at3_standalone + SAS), codepdbh (AAudio path), FFmpeg n4.4 (vendored decoder; LGPL notices/relink), psprecore (SAS envelopes, ATRAC/MPEG — MIT; no runtime ATRAC decode, it cooks offline).
+**Gotchas:** §7E.4 (AAudio underruns), §7F.5 (ATRAC edge-case decode quirk).
+
+#### T12b — Savedata and DAR asset support
+**Depends on:** T6 (T6k savedata SIZES/dialog state machine already landed)
+**Work:** (1) `runtime/savedata/`: virtual memstick `PSP/SAVEDATA/<title>/` with PARAM.SFO v1.1 (PSF) read/write and a PPSSPP-compatible layout (saves interchangeable with emulator/hardware); complete the savedata modes the title executes beyond the T6k SIZES slice; KIRK save encryption **deferred**, documented honestly (hash-left-zero stance — never ship key material); (2) `tools/dar.py` for the asset pipeline (both DAR sides: read/list/extract + in-place rewrite rules; `stored_size==0` = uncompressed); size-preserving in-place rewrite with a zero-filled tail and named errors.
+**Test cases:**
 - TC-12.3 Save→load round-trip byte-stable; PARAM.SFO opens in PPSSPP.
 - TC-12.4 `dar.py` lists/extracts the user's `ini.dar`; a repack round-trips byte-identically; the `stored_size==0` entries survive.
-**Docs checkpoint:** `docs/AUDIO.md`, `docs/SAVEDATA.md`, `docs/formats/DAR.md` (extended from T3/T8).
-**Refs:** sp00nznet (sascore), sal063 (audio.c/savedata.c/PARAM.SFO), snuri00 (at3_standalone + SAS), codepdbh (AAudio path), gungnir-ptbr (DAR traps), psprecore (savedata modes/focus/status, SAS envelopes, ATRAC/MPEG formats — MIT; no runtime ATRAC decode, it cooks offline).
-**Gotchas:** §7B.1 (DAR `stored_size==0`), §7E.4 (AAudio underruns).
+**Docs checkpoint:** `docs/SAVEDATA.md`, `docs/formats/DAR.md` (extended from T3/T8).
+**Refs:** sal063 (savedata.c/PARAM.SFO), gungnir-ptbr (DAR traps), psprecore (savedata modes/focus/status — MIT; its save layout omits the `PSP/` prefix), PPSSPP (PARAM.SFO/save-layout oracle, behavioral only — no code).
+**Gotchas:** §7B.1 (DAR `stored_size==0`), §7B.2 (in-place rewrite), §7B.3 (script `.bin` sizes), §7B.4 (both-endian ISO sizes).
 
 ### T13 — Milestone integration: title screen on device + CI/release hygiene
 **Depends on:** T5, T6, T7, T8, T9, T10, T11, T12
