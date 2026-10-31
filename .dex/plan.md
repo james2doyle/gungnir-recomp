@@ -24,6 +24,7 @@
 | Project license | **GPL-3.0-or-later** (max reuse freedom: MIT + BSD + LGPL-dynamic + GPL-2.0-or-later + GPL-3.0 sources; rejects CC BY-NC-SA and unattributed code) |
 | Android baseline | **minSdk 26, Vulkan 1.1 required**, AAudio available; ABIs `arm64-v8a` + `x86_64` (emulator) |
 | Renderer | **Vulkan-only** (no GL ES fallback); software rasterizer kept as parity oracle; post-processing chain (upscale + LCD/scanline shaders) after GE compositing |
+| Renderer build-vs-adopt | Keep the validated T5/T6 stack. Use **psprecore** (MIT) as the primary behavioral reference and targeted port source for T7a–T7d (GE walker, vertex pipeline, software rasterizer, texture sampler) and as a cross-check for T7e/T7f; use **ff7ccrecomp** for Android packaging patterns. A wholesale fork is reconsidered only if `nx-foundation` gains a compatible license **and** a 3–5 day spike boots Gungnir to the T6 gate (200k dispatches, no missing import, main-loop threads). Until then, no vendoring of psprecore or its submodules |
 | Audio | AAudio (Android) / SDL audio (desktop); ATRAC3(+) via LGPL `at3_standalone`-class decoder with notices |
 | Game data on device | SAF document-tree picker **or** `adb push` to `getExternalFilesDir()`. **No** `MANAGE_EXTERNAL_STORAGE` |
 | Adreno drivers | User-supplied `.zip` ICDs (Mesa Turnip / Qualcomm-style) loaded via custom Vulkan loader; per-driver selection; fail-closed fallback to system driver |
@@ -173,7 +174,7 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-5.3 Mutation gate: breaking one instruction semantics kills the synthetic-fixture gate (mutations count only when they kill for the right reason — hst-decomp rule).
 - TC-5.4 Dispatch-coverage report from a bounded run: every executed address maps to a translated function or an explicit interpreter fallback (counted, not silent).
 **Docs checkpoint:** `docs/ANALYSIS.md` (discovery seeds, coverage numbers), `docs/BRINGUP.md` **journal opened** (symptom→falsification→root-cause entries with retractions logged, sp00nznet/hst style).
-**Refs:** wizardengineer (analysis.json + jump tables + census gates), wtf-psp-recomp (reloc mining), hst-decomp (function list formats, blocked-functions ledger), azazel6 (bounded runs, sectionless ELF), gungnir-ptbr (EBOOT reloc types 5/6 facts).
+**Refs:** wizardengineer (analysis.json + jump tables + census gates), wtf-psp-recomp (reloc mining), hst-decomp (function list formats, blocked-functions ledger), azazel6 (bounded runs, sectionless ELF), gungnir-ptbr (EBOOT reloc types 5/6 facts), psprecore (C17 codegen, jump-table recovery, PRX load — cross-check only; MIT).
 **Gotchas:** §7C.3–C.8.
 
 ### T6 — HLE kernel bring-up (Linux desktop)
@@ -185,7 +186,7 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-6.3 PRX overlay load→unload→reload preserves address space (no leaked function registrations).
 - TC-6.4 Thread-scheduling determinism: two bounded runs with the same inputs produce identical traces (or the divergence point is itemized).
 **Docs checkpoint:** `docs/HLE.md` (module/NID coverage table), `docs/BRINGUP.md` journal entries for every boot blocker.
-**Refs:** Yakumo (kernel + overlay swap), sp00nznet (hle/ module set), wizardengineer (bind-by-name syscall tables), snuri00 (kernel.cpp/modules.cpp), sal063 (hle.c 201-NID reference).
+**Refs:** Yakumo (kernel + overlay swap), sp00nznet (hle/ module set), wizardengineer (bind-by-name syscall tables), snuri00 (kernel.cpp/modules.cpp), sal063 (hle.c 201-NID reference), psprecore (kernel, savedata, SAS/ATRAC, MPEG semantics — MIT; its save layout omits our `PSP/` prefix).
 **Gotchas:** §7C.6, §7D.
 
 ### T7 — Vulkan GE renderer + post-processing chain
@@ -197,7 +198,7 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-7.3 Post preset changes output in a pinned screenshot hash (our own fixture scene — no game frames in-repo).
 - TC-7.4 Feedback path (render to area containing texture) invalidates cache — targeted regression from Gungnir's PPSSPP quirk log.
 **Docs checkpoint:** `docs/RENDERER.md` (backend interface, texture cache keys, known approximations), `docs/SHADERS.md` (preset format, authoring rules).
-**Refs:** sal063 (`ge.c` + `gpu_sdl3vk` ubershader + CLUT- hash), codepdbh (Vulkan backend shape, present-path caution), wizardengineer (bufw bug class, SIGNAL gaps), Yakumo (`vulkan_renderer.cpp`), snuri00 (surfaces/stale-rects).
+**Refs:** sal063 (`ge.c` + `gpu_sdl3vk` ubershader + CLUT- hash), codepdbh (Vulkan backend shape, present-path caution), wizardengineer (bufw bug class, SIGNAL gaps), Yakumo (`vulkan_renderer.cpp`), snuri00 (surfaces/stale-rects), **psprecore** (MIT: `runtime/src/ge.cpp` walker, vertex pipeline, `soft_renderer.cpp`, `texture.cpp`, `gpu_vulkan.cpp` — primary T7 behavioral/port reference), **ff7ccrecomp** (MIT: shipped Android Vulkan app/package shape).
 **Tracking:** work is decomposed in dex into T7a–T7h (decoder, vertex/clip,
 software oracle, textures, Vulkan first triangle, draw path, post, closure).
 Each starts with the repository code-search/issue-search reference step and
@@ -213,7 +214,7 @@ records what it used.
 - TC-8.3 2x/4x font atlas renders a fixed test string without glyph collisions; width-table regen passes ink-width assertions.
 - TC-8.4 Swizzle edge cases: odd widths, multi-texture containers (`n_tex > 1`), `bpp=4` alpha ramp and `bpp=5` CLUT decode.
 **Docs checkpoint:** `docs/formats/TPL.md`, `docs/formats/DAR.md` (from T3 knowledge), `docs/TEXTURE_REPLACEMENT.md` (user guide: dump layout, naming, scaling rules).
-**Refs:** gungnir-ptbr (TPL/DAR/font metric facts, round-trip proof discipline), sal063 (`pgf.c` parser reference for future sceLibFont), psprism/Yakumo (texture-cache + replacement precedents).
+**Refs:** gungnir-ptbr (TPL/DAR/font metric facts, round-trip proof discipline), sal063 (`pgf.c` parser reference for future sceLibFont), psprism/Yakumo (texture-cache + replacement precedents), psprecore (texture collection/replacement matching and HD layering — MIT).
 **Gotchas:** §7B.2–B.4, §7F (font width collision, baked-in text).
 
 ### T9 — Android app shell + adb deployment
@@ -225,7 +226,7 @@ records what it used.
 - TC-9.3 Both game-data paths work (SAF pick and adb push) and the hash gate rejects a corrupted image.
 - TC-9.4 Lifecycle: background→foreground recovers rendering (swapchain recreation) and audio; rotation ignored (sensor-landscape lock).
 **Docs checkpoint:** `docs/ANDROID.md` (setup, adb/SAF flows, device storage layout, emulator notes).
-**Refs:** nakagawa-recomp (`android/` skeleton — primary template), codepdbh (proven pins, AAudio, affinity), Yakumo (SAF picker), azazel6 (probe-APK-first approach — validate shell on emulator before game code).
+**Refs:** nakagawa-recomp (`android/` skeleton — primary template), codepdbh (proven pins, AAudio, affinity), Yakumo (SAF picker), azazel6 (probe-APK-first approach — validate shell on emulator before game code), ff7ccrecomp (shipped psprecore Android app: `minSdk 29`, NDK 29, SDL3 Java, `useLegacyPackaging`).
 **Gotchas:** §7E (Android platform traps).
 
 ### T10 — Adreno custom Vulkan driver loader
@@ -237,7 +238,7 @@ records what it used.
 - TC-10.3 Malformed zip / wrong-ABI ELF fails closed with clear error, app still boots on system driver.
 - TC-10.4 `repository_check` rejects a `.zip`/`.so` committed under the driver paths.
 **Docs checkpoint:** `docs/ANDROID_DRIVERS.md` (what zips are, where to get them, risks, selection UI).
-**Refs:** libadrenotools (evaluate), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt).
+**Refs:** libadrenotools (evaluate), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt), ff7ccrecomp (`useLegacyPackaging` and libadrenotools native-library loading).
 **Gotchas:** §7E.6–E.7.
 
 ### T11 — Input + haptics
@@ -261,7 +262,7 @@ records what it used.
 - TC-12.3 Save→load round-trip byte-stable; PARAM.SFO opens in PPSSPP.
 - TC-12.4 `dar.py` lists/extracts the user's `ini.dar`; a repack round-trips byte-identically; the `stored_size==0` entries survive.
 **Docs checkpoint:** `docs/AUDIO.md`, `docs/SAVEDATA.md`, `docs/formats/DAR.md` (extended from T3/T8).
-**Refs:** sp00nznet (sascore), sal063 (audio.c/savedata.c/PARAM.SFO), snuri00 (at3_standalone + SAS), codepdbh (AAudio path), gungnir-ptbr (DAR traps).
+**Refs:** sp00nznet (sascore), sal063 (audio.c/savedata.c/PARAM.SFO), snuri00 (at3_standalone + SAS), codepdbh (AAudio path), gungnir-ptbr (DAR traps), psprecore (savedata modes/focus/status, SAS envelopes, ATRAC/MPEG formats — MIT; no runtime ATRAC decode, it cooks offline).
 **Gotchas:** §7B.1 (DAR `stored_size==0`), §7E.4 (AAudio underruns).
 
 ### T13 — Milestone integration: title screen on device + CI/release hygiene
@@ -275,7 +276,7 @@ records what it used.
 - TC-13.5 Manual QA matrix complete and signed off (§8.3): every device cell has a dated `docs/qa/` report; three consecutive cold boots pass per device; every QA finding has either a red-first regression test or a tracked open defect.
 - TC-13.6 Suspend/resume and 30-minute soak run clean on at least one physical device per session (recording hash evidence, no game frames in-repo).
 **Docs checkpoint:** `docs/BUILDING.md`, `docs/ANDROID.md`, `docs/QA.md` + `docs/qa/` session reports, `docs/PROGRESS.md` (public status — counts and criteria only), release checklist in `docs/RELEASE.md`.
-**Refs:** nakagawa (CI fail-closed + hygiene matrix), hst-decomp (milestones ratchet), azazel6 (evidence labels), Yakumo (nightly/release automation).
+**Refs:** nakagawa (CI fail-closed + hygiene matrix), hst-decomp (milestones ratchet), azazel6 (evidence labels), Yakumo (nightly/release automation), ff7ccrecomp (frontend, recordings/replays, regression-script shape — MIT).
 **Gotchas:** §7A.4 (public claims vs tree), §7E.1.
 
 ## 6. Milestones
@@ -301,6 +302,7 @@ Milestone discipline (hst-decomp ratchet): every milestone is *measured*, record
 5. NID name tables: PPSSPP-derived data is GPL-tainted (usable here with attribution — we are GPL-3.0); psprism's committed `ppsspp_niddb.xml` shows what *unattributed* reuse looks like. Prefer BSD pspsdk-header generation.
 6. Reject CC BY-NC-SA material entirely (PSPRecomp's CloudWorks clouds are the cautionary tale) — incompatible with GPL-3.0 and with any commercial future.
 7. Third-party **binaries** are never committed (sal063's `SDL3.dll`); build from pinned source; LGPL pieces (FFmpeg/ATRAC) need notices + relink path.
+8. `AdamFull/psprecore` is MIT, but its `nx-foundation` submodule has **no LICENSE** at `281fc91b`. Do not vendor, submodule or ship it; adapt psprecore code to std types instead. Revisit only if nx-foundation gains a GPL-3.0-compatible license and the provenance ledger is updated.
 
 ### B. Gungnir formats
 1. DAR `stored_size == 0` means **stored uncompressed** (not empty) — the ptbr project zeroed 272 SFX missing this. Never trust `stored_size` alone.
