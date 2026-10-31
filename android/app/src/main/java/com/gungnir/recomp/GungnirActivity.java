@@ -127,9 +127,18 @@ public final class GungnirActivity extends SDLActivity {
                     + entry.driverVersion + " (API " + entry.minApi + ", "
                     + formatSize(driverStore.driverSize(entry.id)) + ")";
         }
+        String active = driverStore.selectedId();
+        int checked = 0;
+        String activeLabel = "system";
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).id.equals(active)) {
+                checked = i + 1;
+                activeLabel = entries.get(i).displayName;
+            }
+        }
         AlertDialog.Builder builder = new AlertDialog.Builder(this)
-                .setTitle("Vulkan driver")
-                .setItems(labels, (dialog, which) -> {
+                .setTitle("Vulkan driver - selected: " + activeLabel)
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     if (which == 0) {
                         selectDriver(DriverStore.SYSTEM);
                     } else {
@@ -139,13 +148,6 @@ public final class GungnirActivity extends SDLActivity {
                 .setPositiveButton("Import zip", (dialog, which) -> openDriverPicker())
                 .setNeutralButton("Driver info", (dialog, which) -> showDriverInfo())
                 .setNegativeButton("Close", null);
-        String active = driverStore.selectedId();
-        if (!active.equals(DriverStore.SYSTEM)) {
-            DriverStore.Entry entry = driverStore.find(active);
-            if (entry != null) builder.setMessage("Active: " + entry.displayName);
-        } else {
-            builder.setMessage("Active: system driver");
-        }
         AlertDialog dialog = builder.show();
         dialog.getListView().setOnItemLongClickListener((parent, view, position, id) -> {
             if (position == 0) return true;
