@@ -91,6 +91,61 @@ target_link_libraries(ge_software_tests PRIVATE gungnir_ge)
 set_target_properties(ge_software_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
+# --- Vulkan GE backend (T7e) ----------------------------------------------
+find_package(Python3 COMPONENTS Interpreter)
+find_package(Vulkan QUIET)
+find_program(GLSL_COMPILER NAMES glslc)
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SDL3 QUIET IMPORTED_TARGET sdl3)
+endif()
+
+if(Vulkan_FOUND AND GLSL_COMPILER)
+    set(GE_SHADER_DIR ${CMAKE_BINARY_DIR}/shaders/ge)
+    set(GE_SHADER_GEN_DIR ${CMAKE_BINARY_DIR}/generated/ge)
+    set(GE_TRIANGLE_VERT_SPV ${GE_SHADER_DIR}/triangle.vert.spv)
+    set(GE_TRIANGLE_FRAG_SPV ${GE_SHADER_DIR}/triangle.frag.spv)
+    add_custom_command(
+        OUTPUT ${GE_TRIANGLE_VERT_SPV}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${GE_SHADER_DIR}
+        COMMAND ${GLSL_COMPILER} --target-env=vulkan1.1
+                ${CMAKE_SOURCE_DIR}/assets/shaders/ge/triangle.vert -o ${GE_TRIANGLE_VERT_SPV}
+        DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/ge/triangle.vert
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${GE_TRIANGLE_FRAG_SPV}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${GE_SHADER_DIR}
+        COMMAND ${GLSL_COMPILER} --target-env=vulkan1.1
+                ${CMAKE_SOURCE_DIR}/assets/shaders/ge/triangle.frag -o ${GE_TRIANGLE_FRAG_SPV}
+        DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/ge/triangle.frag
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${GE_SHADER_GEN_DIR}/vulkan_shaders.cpp ${GE_SHADER_GEN_DIR}/vulkan_shaders.hpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/embed_shaders.py
+                ${GE_SHADER_GEN_DIR}/vulkan_shaders.cpp ${GE_SHADER_GEN_DIR}/vulkan_shaders.hpp
+                triangle_vert=${GE_TRIANGLE_VERT_SPV}
+                triangle_frag=${GE_TRIANGLE_FRAG_SPV}
+        DEPENDS ${GE_TRIANGLE_VERT_SPV} ${GE_TRIANGLE_FRAG_SPV}
+                ${CMAKE_SOURCE_DIR}/tools/embed_shaders.py
+        VERBATIM)
+
+    add_library(gungnir_ge_vulkan STATIC
+        runtime/ge/vulkan_backend.cpp
+        ${GE_SHADER_GEN_DIR}/vulkan_shaders.cpp)
+    target_include_directories(gungnir_ge_vulkan PUBLIC runtime ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(gungnir_ge_vulkan PUBLIC gungnir_ge Vulkan::Vulkan)
+
+    add_executable(ge_vulkan_tests tests/ge/vulkan_tests.cpp)
+    target_link_libraries(ge_vulkan_tests PRIVATE gungnir_ge_vulkan)
+    if(SDL3_FOUND)
+        target_link_libraries(ge_vulkan_tests PRIVATE PkgConfig::SDL3)
+        target_compile_definitions(gungnir_ge_vulkan PUBLIC GUNGNIR_HAVE_SDL3=1)
+        target_compile_definitions(ge_vulkan_tests PRIVATE GUNGNIR_HAVE_SDL3=1)
+    endif()
+    set_target_properties(ge_vulkan_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+endif()
+
 # --- ATRAC3/3+ decoder (FFmpeg n4.4 subset, vendored via Nakagawa) ----------
 add_library(atrac3p STATIC
     third_party/atrac3p/atrac3p_api.c
