@@ -118,14 +118,14 @@ still stops with `Missing HLE import …`. They are grouped as follows.
 | IoFileMgr `sceIoDread`/`sceIoIoctl` | 2 | implement with the first directory-scan/device-control use |
 | Kernel/ThreadMan/Utils/UMD small calls | 8 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI, UMD medium/waits |
 | sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); savedata SIZES is implemented |
-| ATRAC track | 6 | decoder vendored and self-tested; handlers wait for the first decode |
+| ATRAC track | 6 | whole-file set (SetData/DecodeData/remain/loop) implemented in T12a; streaming calls remain counted gaps |
 | SAS controls | 8 | ADSR/noise/reverb; wait for the first non-default control use |
 | sceMpeg | 24 | no movie at boot depth; decision-gated for M5/T12 |
 
 Other savedata modes (LOAD/SAVE/LIST/...) are modes of the four bound
-savedata imports; they currently return a named error rather than fake
-success and move to T12/M5 with the first non-SIZES use. T6 closes on this
-audit; T7 remains required for M3 because no GE frame is rendered yet.
+savedata imports; LOAD and SAVE are implemented in T12b, while list/delete
+and the save picker remain named gaps. T6 closes on this audit; T7 remains
+required for M3 because no GE frame is rendered yet.
 
 ## Module registry (T6d, VERIFIED)
 
