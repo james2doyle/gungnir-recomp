@@ -62,6 +62,7 @@ set_target_properties(gamepad_tests PROPERTIES
 
 # --- HLE runtime (T6) -------------------------------------------------------
 add_library(gungnir_hle STATIC
+    runtime/audio/audio_mixer.cpp
     runtime/audio/audio_sink.cpp
     runtime/audio/sas_core.cpp
     runtime/hle/hle_common.cpp
@@ -353,6 +354,11 @@ target_compile_options(atrac3p PRIVATE -fno-strict-aliasing)
 add_executable(atrac3p_selftest tests/audio/atrac3p_selftest.cpp)
 target_link_libraries(atrac3p_selftest PRIVATE atrac3p)
 set_target_properties(atrac3p_selftest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
+
+add_executable(audio_mixer_tests tests/audio/mixer_tests.cpp)
+target_link_libraries(audio_mixer_tests PRIVATE gungnir_hle)
+set_target_properties(audio_mixer_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
 
 # --- Analysis / codegen tooling (T4, T5) -----------------------------------
