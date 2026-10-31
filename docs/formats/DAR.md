@@ -1,6 +1,6 @@
 # DAR — Gungnir asset archives
 
-Status: format facts for T8/T12. DAR extraction/repack tooling is T12; no DAR
+Status: format facts for T8/T12 and the `tools/dar.py` reader/rewriter. No DAR
 bytes or extracted assets are committed. This document is written from the T3
 intake knowledge and the user's local files at layout level only.
 
@@ -14,7 +14,7 @@ Gungnir stores assets in `PSP_GAME/USRDIR/{INI,DATA,VOICE}.DAR` (plus
 0x04  u32  data_start
 0x08  u32  names_off
 0x0C  u32  table_off
-      names: NUL-terminated ASCII, addressed by name_off
+      names: NUL-terminated ASCII paths, addressed by name_off
       table: nfiles entries of 16 bytes
       data:  entry payloads, zlib-compressed or stored
 ```
@@ -58,10 +58,48 @@ rules:
 
 ## Compression
 
-Payloads use zlib. `stored_size == decompressed_size` is stored data;
+Payloads use zlib. `stored_size == 0` is stored data with the length in
+`decompressed_size`; `stored_size == decompressed_size` is stored data;
 `decompressed_size > stored_size` is a zlib stream. A payload that fails to
 inflate, a `data_off` outside the archive, or a name offset without a NUL
 terminator is an error with a named code, never a silent skip.
+
+Names are relative paths (for example `dir/name.ext`) and may contain `/`. Absolute
+paths, `..`, `.`, empty components and backslashes are rejected on read and
+extract, so an archive cannot escape the extraction directory. Extraction
+creates parent directories.
+
+A zlib slot can only carry a replacement whose uncompressed size is larger
+than the slot; otherwise the format's only compressed/stored discriminator
+(`decompressed_size > stored_size`) would classify it as stored and the
+reader would see the compressed bytes. `dar.py` rejects that with
+`DAR_COMPRESSED_SLOT_TOO_SMALL` rather than writing an unreadable entry.
+
+## Tool
+
+```sh
+python3 tools/dar.py list ARCHIVE
+python3 tools/dar.py info ARCHIVE
+python3 tools/dar.py extract ARCHIVE --out DIR
+python3 tools/dar.py repack ARCHIVE --from DIR
+```
+
+`extract` refuses to overwrite an existing file unless `--force`. `repack`
+requires the extracted source directory, compares every payload with the
+original, leaves unchanged entries untouched and recompresses only changed
+zlib entries (levels 9..1 until the blob fits). It patches payload slots and
+the entry's `decompressed_size` in place; every `data_off` and the archive
+size stay fixed, and unused compressed tail bytes are zero-filled. A missing
+source file, a size change in a stored slot, an oversized zlib blob or a
+failed write is a named error. The tool writes through a sibling temporary
+file and `os.replace`, so a failed rewrite does not leave a torn archive.
+
+Verification: `tests/test_dar.py` builds synthetic archives (stored-zero,
+stored and zlib entries) for list/extract/repack, byte-identical untouched
+round-trips, both rewrite paths, traversal rejection and the named failure
+codes. The user's `INI.DAR` is copied to a temporary directory, extracted and
+repacked with no edits; the hash must be unchanged. The real-archive case
+skips with `dar_fixture_missing` when the private ISO extraction is absent.
 
 ## Relationship to T8
 
