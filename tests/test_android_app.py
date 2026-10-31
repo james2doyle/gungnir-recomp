@@ -99,6 +99,16 @@ class TestAndroidScripts(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("--offline", proc.stdout)
 
+    def test_android_agents_is_scoped_and_lean(self):
+        text = (REPO / "android" / "AGENTS.md").read_text()
+        self.assertIn("Root `AGENTS.md` is authoritative", text)
+        self.assertIn("scripts/android/emulator.sh", text)
+        self.assertIn("-wipe-data", text)
+        self.assertIn("physical arm64", text)
+        self.assertIn("docs/ANDROID_DRIVERS.md", text)
+        root = (REPO / "AGENTS.md").read_text()
+        self.assertIn("`android/AGENTS.md`", root)
+
     def test_emulator_script_is_reproducible(self):
         script = (REPO / "scripts" / "android" / "emulator.sh").read_text()
         for flag in ("-avd", "-port", "-no-window", "-no-audio", "-no-boot-anim",
