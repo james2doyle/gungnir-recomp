@@ -6,8 +6,8 @@ voices into guest memory and `sceAtrac3plus` decodes compressed tracks.
 
 Status: T12a is in progress. The SAS voice core, the sceAudio channel HLE,
 the 44.1 kHz mixer, the SDL3 desktop backend, the AAudio backend and the
-ATRAC3/3+ decoder are in the tree. The ATRAC track HLE, MP3 and the 60 s
-no-underrun soak are not finished.
+ATRAC3/3+ decoder are in the tree. The 60 s AAudio soak passes on the phone;
+the ATRAC track HLE, MP3 and game-loop pacing are not finished.
 
 ## Output contract
 
@@ -77,9 +77,10 @@ Android uses `runtime/platform/android/aaudio_out.*`: an AAudio low-latency
 pause/resume, an error callback and xrun reporting. Starting the Activity with
 `--ez audio_smoke true` runs a short smoke that submits a tone and a synthetic
 VAG (rendered by `SasCore`) and logs `audio_smoke ok=... vag=... pulled=...
-underrun=... xruns=...`. A normal launch keeps the SDL lifecycle tone and
-first frame. Game audio is wired during T13; the partial phone evidence is in
-`docs/qa/2026-10-31-t12a-audio.md`.
+underrun=... xruns=...`. The duration is `--ei audio_smoke_ms <ms>` (default
+500). A normal launch keeps the SDL lifecycle tone and first frame. A 60 s
+run pulled 2,647,610 frames with underrun=0 and xruns=0; game-loop pacing and
+game audio are wired during T13. See `docs/qa/2026-10-31-t12a-audio.md`.
 
 ## Tests
 
@@ -95,8 +96,8 @@ python3 -m unittest tests.test_hle -v          # sceAudio + SAS contracts
 
 - ATRAC track HLE and `sceMp3` are not implemented; T6l's counted gap moves
   here and must not fake PCM.
-- The AAudio smoke is short and drains by design; the 60 s continuous-feed
-  no-underrun soak (TC-12.2) is still pending.
+- The 60 s AAudio soak is clean, but it runs on the audio clock rather than
+  the 59.94 Hz guest loop; that pacing and game audio are T13 work.
 - The VAG fixture is synthetic (constant nibble), so it proves the
   SasCore -> mixer -> AAudio path, not audible game audio; game audio follows
   the HLE wiring in T13.
