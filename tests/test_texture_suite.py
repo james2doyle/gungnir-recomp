@@ -5,6 +5,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests import suite_support
+
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "build"
 GE = BUILD / "tests" / "tex"
@@ -16,7 +18,13 @@ BINARIES = {
 }
 
 
+CHILD_MODULES = ("tests.test_tpl", "tests.test_tex_dump", "tests.test_tex_replace",
+                 "tests.test_font_repack")
+
+
 def setUpModule():
+    if not suite_support.missing(CHILD_MODULES):
+        return
     cfg = subprocess.run(
         ["cmake", "-S", str(REPO), "-B", str(BUILD), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"],
         capture_output=True, text=True)
@@ -43,19 +51,27 @@ class TestTextureSuite(unittest.TestCase):
         self.assertIn("OK", proc.stdout)
 
     def test_tc81_tpl_round_trip(self):
+        if not suite_support.missing(("tests.test_tpl",)):
+            self.skipTest("tests.test_tpl is discovered separately")
         self.run_binary("tex_tpl_tests")
 
     def test_tc82_dump_replace_reload(self):
+        if not suite_support.missing(("tests.test_tex_dump", "tests.test_tex_replace")):
+            self.skipTest("texture dump/replace modules are discovered separately")
         self.run_binary("tex_dump_tests")
         self.run_binary("tex_replace_tests")
 
     def test_tc83_font_atlas(self):
+        if not suite_support.missing(("tests.test_font_repack",)):
+            self.skipTest("tests.test_font_repack is discovered separately")
         proc = subprocess.run([sys.executable, "-m", "unittest", "tests.test_font_repack"],
                               cwd=REPO, capture_output=True, text=True, timeout=120)
         output = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, f"font atlas contracts failed:\n{output}")
 
     def test_tc84_swizzle_edge_cases(self):
+        if not suite_support.missing(("tests.test_tpl",)):
+            self.skipTest("tests.test_tpl is discovered separately")
         self.run_binary("tex_tpl_tests")
 
     def test_docs_and_mutation_ledger(self):

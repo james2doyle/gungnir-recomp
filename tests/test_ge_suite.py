@@ -8,6 +8,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests import suite_support
+
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "build"
 GE = BUILD / "tests" / "ge"
@@ -23,7 +25,12 @@ BINARIES = {
 }
 
 
+CHILD_MODULES = ("tests.test_ge", "tests.test_ge_vulkan", "tests.test_post")
+
+
 def setUpModule():
+    if not suite_support.missing(CHILD_MODULES):
+        return
     cfg = subprocess.run(
         ["cmake", "-S", str(REPO), "-B", str(BUILD), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"],
         capture_output=True, text=True)
@@ -56,18 +63,29 @@ class TestGeFixtureSuite(unittest.TestCase):
         return output
 
     def test_tc71_ge_primitives_state_and_textures(self):
+        if not suite_support.missing(("tests.test_ge",)):
+            self.skipTest("tests.test_ge is discovered separately")
         for name in ("decoder", "vertex", "texture", "software"):
             self.run_binary(name)
 
     def test_tc72_software_vs_vulkan_parity(self):
+        if not suite_support.missing(("tests.test_ge_vulkan",)):
+            self.skipTest("tests.test_ge_vulkan is discovered separately")
         self.run_binary("vulkan")
 
     def test_tc73_post_preset_hashes(self):
+        if not suite_support.missing(("tests.test_post",)):
+            self.skipTest("tests.test_post is discovered separately")
         self.run_binary("post")
 
     def test_tc74_feedback_regression(self):
-        self.run_binary("texture")
-        self.run_binary("vulkan")
+        missing = suite_support.missing(("tests.test_ge", "tests.test_ge_vulkan"))
+        if not missing:
+            self.skipTest("GE and Vulkan modules are discovered separately")
+        if "tests.test_ge" in missing:
+            self.run_binary("texture")
+        if "tests.test_ge_vulkan" in missing:
+            self.run_binary("vulkan")
 
     def test_renderer_and_shader_docs(self):
         renderer = (REPO / "docs" / "RENDERER.md").read_text()

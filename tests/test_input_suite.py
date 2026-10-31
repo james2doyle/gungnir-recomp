@@ -10,6 +10,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests import suite_support
+
 REPO = Path(__file__).resolve().parent.parent
 DOC = REPO / "docs" / "INPUT.md"
 
@@ -24,7 +26,10 @@ MODULES = (
 
 class TestInputHostGate(unittest.TestCase):
     def test_host_modules(self):
-        proc = subprocess.run([sys.executable, "-m", "unittest", *MODULES],
+        missing = suite_support.missing(MODULES)
+        if not missing:
+            self.skipTest("child modules are discovered separately")
+        proc = subprocess.run([sys.executable, "-m", "unittest", *missing],
                               cwd=REPO, capture_output=True, text=True, timeout=900)
         output = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, f"input host gates failed:\n{output}")

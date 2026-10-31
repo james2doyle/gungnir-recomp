@@ -5,6 +5,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests import suite_support
+
 REPO = Path(__file__).resolve().parent.parent
 ANDROID_DOC = REPO / "docs" / "ANDROID.md"
 QA_REPORT = REPO / "docs" / "qa" / "2026-10-30-t9-android-shell.md"
@@ -20,7 +22,10 @@ MODULES = (
 
 class TestAndroidSuite(unittest.TestCase):
     def test_host_modules(self):
-        proc = subprocess.run([sys.executable, "-m", "unittest", *MODULES],
+        missing = suite_support.missing(MODULES)
+        if not missing:
+            self.skipTest("child modules are discovered separately")
+        proc = subprocess.run([sys.executable, "-m", "unittest", *missing],
                               cwd=REPO, capture_output=True, text=True, timeout=900)
         output = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, f"Android host gates failed:\n{output}")

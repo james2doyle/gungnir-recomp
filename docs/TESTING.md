@@ -139,6 +139,13 @@ python3 -m unittest tests.test_audio_mixer -v      # T12a mixer ring/volumes/und
 python3 -m unittest tests.test_savedata -v         # T12b store/SFO/save-load + PPSSPP saves
 python3 -m unittest tests.test_dar -v              # T12b DAR list/extract/repack
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
+
+Consolidated gates (`test_android_suite`, `test_adreno_suite`,
+`test_input_suite`, `test_texture_suite`, `test_ge_suite`) still run their
+child modules when invoked on their own. Under full discovery they skip the
+children that the discovery run already executed, so a full battery does not
+build the APK or the GE/texture binaries twice. The skip reason says which
+modules are covered.
 ```
 
 Golden-file tests (post-processing pins) and PPSSPP diffs live in T7; Android

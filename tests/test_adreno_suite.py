@@ -14,6 +14,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests import suite_support
+
 REPO = Path(__file__).resolve().parent.parent
 DRIVERS_DOC = REPO / "docs" / "ANDROID_DRIVERS.md"
 ANDROID_DOC = REPO / "docs" / "ANDROID.md"
@@ -58,8 +60,11 @@ NAMED_ERRORS = (
 
 class TestAdrenoSuite(unittest.TestCase):
     def test_host_modules(self):
+        missing = suite_support.missing(MODULES)
+        if not missing:
+            self.skipTest("child modules are discovered separately")
         proc = subprocess.run(
-            [sys.executable, "-m", "unittest", *MODULES],
+            [sys.executable, "-m", "unittest", *missing],
             cwd=REPO, capture_output=True, text=True, timeout=1200)
         output = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, f"Adreno host gates failed:\n{output}")
