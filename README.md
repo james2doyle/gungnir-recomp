@@ -48,6 +48,14 @@ bring-up findings journal: [`docs/BRINGUP.md`](docs/BRINGUP.md).
   fixes start from reproducing reds, nothing closes red. Device-facing work
   additionally requires **recorded manual QA** on real hardware (plan §8.3).
 
+## Custom Adreno drivers
+
+Gungnir can load a user-supplied Mesa Turnip/Qualcomm Vulkan ICD package on
+arm64 Android through libadrenotools, with the system driver as the default
+and a fail-closed fallback. Packages are never committed, bundled, or loaded
+from shared storage. Package contract, selection UI, provenance, risks and
+named-error troubleshooting: [`docs/ANDROID_DRIVERS.md`](docs/ANDROID_DRIVERS.md).
+
 ## Repository layout
 
 ```

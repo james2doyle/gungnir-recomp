@@ -132,6 +132,12 @@ closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
 | `driver_selection_invalid` | the persisted selection file is malformed; system is used |
 | `driver_import_failed: <reason>` | a driver zip was rejected; no selection change |
 | `driver_remove_failed: <reason>` | a driver directory could not be removed |
+| `driver_hook_library_missing` | the APK is missing a libadrenotools hook library |
+| `driver_storage_unavailable` | the private driver directory is missing or unreadable |
+| `driver_abi_unsupported` | this ABI is system-only; no custom driver is opened |
+| `driver_custom_open_failed` | Android diagnostic: libadrenotools returned null |
+| `driver_linkernsbypass_unavailable` | Android diagnostic: the linker bypass failed |
+| `driver_custom_symbol_missing` | Android diagnostic: the driver has no `vkGetInstanceProcAddr` |
 | `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `render_failed` | render failed; retried up to three times |
 
@@ -149,8 +155,9 @@ Each mutation was applied locally and the named gate failed for that reason:
 
 - No game rendering yet; the title screen is T13.
 - Audio is a lifecycle tone, not game audio (T12).
-- Custom Adreno driver selection lands with T10; the package contract, loader
-  and selection UI are in [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md).
+- Custom Adreno drivers are complete for arm64/API 28+; packages are
+  user-supplied and never bundled. See
+  [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the contract and named gaps.
 - The affinity heuristic uses the highest allowed CPU, not topology/frequency.
 - Debug APK only; release signing is not configured.
 

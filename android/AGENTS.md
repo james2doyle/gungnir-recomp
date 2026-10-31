@@ -52,7 +52,7 @@ Android CMake files, and `scripts/android/`.
 
 - Host gates: `test_android_build`, `test_android_app`, `test_game_data`,
   `test_affinity`, `test_driver_package`, `test_vulkan_loader`,
-  `test_driver_store`, `test_android_suite`.
+  `test_driver_store`, `test_adreno_suite`, `test_android_suite`.
 - Automated tests and CI never substitute for the physical-device QA gate.
 - Start every task with reference discovery: `gh search code
   "<api-or-symbol>"` (add `--extension cpp` for native work), then

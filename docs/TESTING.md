@@ -128,6 +128,7 @@ python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pin
 python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
 python3 -m unittest tests.test_vulkan_loader -v     # T10c loader selection/fallback
 python3 -m unittest tests.test_driver_store -v      # T10d driver inventory/selection
+python3 -m unittest tests.test_adreno_suite -v      # consolidated T10 gate
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -285,3 +286,13 @@ wrong-ABI imports, the x86_64 `driver_abi_unsupported` path, and three cold
 boots loading a real Rutabaga/Turnip package. The device run found and fixed
 the missing trailing slash in the driver directory passed to
 libadrenotools.
+
+`tests/test_adreno_suite.py` is the consolidated T10f gate. It runs the
+driver-contract, package-inspector, loader, inventory and repository modules,
+then checks the finished `docs/ANDROID_DRIVERS.md`: package sources and risks,
+both schemas, UI/private-storage rules, fallback diagnostics, provenance pins,
+named gaps with VERIFIED/HYPOTHESIS/UNSUPPORTED/PLANNED labels, mutation
+evidence and the T10e QA report. It also asserts that no driver archive or
+native library is tracked. The three mutation checks (system path calling the
+custom opener, ABI guard removed, fallback retaining the failed handle) were
+run locally and recorded in the doc; the mutations were reverted.

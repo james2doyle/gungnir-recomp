@@ -1,11 +1,26 @@
 # ANDROID_DRIVERS — custom Adreno Vulkan drivers
 
-Status: T10a contract and loader decision. The inspector, loader, UI and QA
-land in T10b–T10e. No driver package or binary is bundled with this project.
+Status: T10 complete. The inspector, loader, UI, fail-closed matrix and
+physical-device QA are in place. No driver package or binary is bundled with
+this project. Evidence labels are recorded below.
 
 Gungnir can render through the device's system Vulkan driver (the default) or
 through a user-supplied Mesa Turnip-style ICD package. This file defines what
 a package is, where it may live, how it is validated, and how failures behave.
+
+## Where driver packages come from
+
+This project does not host, mirror, sign, or recommend driver builds. Obtain a
+package from the driver project's own release channel or your device vendor.
+Mesa Turnip builds come from the Mesa Android/Turnip build process; Qualcomm
+packages come from a vendor image or a community repack. Use a source you
+trust: a driver zip is third-party native code running inside the app process
+with the app's permissions. There is no signature check, update feed, or
+compatibility guarantee.
+
+A package is a `.zip`; the supported shapes are below. The app copies the zip
+into app-private storage, validates it structurally, and never loads anything
+from shared storage.
 
 ## Decision
 
@@ -44,7 +59,7 @@ common Turnip/ADPKG metadata shape:
 | `schemaVersion` | int | yes | only `1` is accepted; missing or greater than 1 is rejected |
 | `name` | string | yes | non-empty display name |
 | `libraryName` | string | yes | ICD soname, a basename ending in `.so` (for example `vulkan.ad07XX.so`); path separators and `..` are rejected |
-| `minApi` | int | no | lowest Android API; default `0`; greater than the device API is refused |
+| `minApi` | int | no | lowest Android API; default `0`; the Drivers UI refuses a selection newer than the device API |
 | `vendor` | string | no | shown as `unknown` when absent |
 | `driverVersion` | string | no | shown as `unknown` when absent |
 | `description` | string | no | shown in the detail view |
@@ -61,9 +76,9 @@ No `meta.json`, and the zip contains **exactly one** root-level shared object
 named `libvulkan.so`. The display name comes from the zip filename; `vendor`
 and `driverVersion` are `unknown`; `minApi` is `0`. Any other plurality or
 nesting is rejected (`driver_library_ambiguous` / `driver_library_missing`).
-ADPKG is not accepted in T10.
+ADPKG is not accepted.
 
-### Archive and ELF limits (provisional, T10b enforces)
+### Archive and ELF limits
 
 - compressed archive at most 512 MiB, at most 4096 entries, at most 256 MiB
   per entry, at most 1 GiB uncompressed total;
@@ -210,13 +225,31 @@ a failed load never leaves a half-initialized instance.
 | `driver_elf_type` | not `ET_DYN` |
 | `driver_elf_truncated` | headers/dynamic section cut off |
 | `driver_elf_dynsym` | empty or unreadable `.dynsym` |
-| `driver_min_api` | package requires a newer Android API |
 | `driver_abi_unsupported` | device ABI is not `arm64-v8a` |
 | `driver_storage_unavailable` | private driver directory cannot be created, or the selected directory is missing/unreadable |
 | `driver_hook_library_missing` | `nativeLibraryDir` is missing a libadrenotools hook library |
 | `driver_id_invalid` | a driver id is not a 16-character lowercase hash |
 | `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `driver_load_failed` | libadrenotools returned null for a valid package |
+
+## Troubleshooting
+
+Start with logcat; every failure is named.
+
+| Symptom | What to check |
+|---|---|
+| Driver is not listed | `driver_import_failed: <reason>` after **Import zip** or a drop-folder startup scan. A malformed zip, wrong ELF machine, missing `libraryName`, or an unsupported package shape never becomes selectable. |
+| Driver is listed but cannot be selected | Its `minApi` is newer than the device API. The UI refuses the selection; use the system driver or a package for this Android version. |
+| Selection did not apply | Selection is read once at startup. Restart the app. A malformed selection file logs `driver_selection_invalid` and uses the system driver. |
+| It fell back to system | `driver_fallback: <reason>` names the cause. `driver_load_failed` means libadrenotools rejected the package; `driver_hook_library_missing` means the APK is missing one of the four hook libraries; `driver_storage_unavailable` means the private driver directory is missing or unreadable; `driver_abi_unsupported` means this ABI is system-only. |
+| Custom driver loads but crashes or overheats | A process-level crash cannot be caught. Restart and select the system driver. Driver quality, heat, and game compatibility are the driver author's responsibility. |
+| The app crash-loops with a custom selection | There is no automatic safe mode yet. Clear the app's storage or remove `filesDir/drivers/selection.txt` (for example with `adb shell run-as com.gungnir.recomp rm -f files/drivers/selection.txt`), then start the app again. |
+
+Android diagnostics separate the loader stages:
+`driver_linkernsbypass_unavailable` (linker namespace bypass failed),
+`driver_custom_open_failed` (libadrenotools returned null), and
+`driver_custom_symbol_missing` (no `vkGetInstanceProcAddr`). These are logged
+once at startup with the final `driver_active` or `driver_fallback` line.
 
 ## No-bundling policy
 
@@ -228,6 +261,23 @@ paths by location, and sniffs ZIP and ELF magic so a renamed blob cannot slip
 through. The hook libraries built from libadrenotools are project build
 output, not drivers, and are covered by the ordinary build-output rules.
 
+## Provenance
+
+| Component | Pin | License | Notes |
+|---|---|---|---|
+| `bylaws/libadrenotools` | `8fae8ce254dfc1344527e05301e43f37dea2df80`, archive SHA-256 `ceffce971676d4cfdf348a082df06fc92a1dca6d95bea892a480d63f200961cb` | BSD-2-Clause | Fetch-only, built from source for arm64. No local patches. |
+| `bylaws/liblinkernsbypass` | `aa3975893d83ef1bc84c321ec60c65fbf1287887`, archive SHA-256 `da1128c8aa771c4d24766b53a47822d0717baa5c536ca8491220402942b80638` | BSD-2-Clause | Transitive submodule, composed into libadrenotools at build time. No local patches. |
+| `richgel999/miniz` | `77d0dce8627735138c51770d1799a1ef48f2117d` (3.1.2) | MIT | Vendored byte-identical; ZIP container reader/writer. |
+| `nlohmann/json` | `55f93686c01528224f448c19128836e7df245f72` (3.12.0) | MIT | Vendored byte-identical; `meta.json` parser. |
+| `zeux/volk` | `aa76c86ae99aa76f7411c981dc885f68a08513b5` | MIT | Vendored byte-identical; Android Vulkan entry-point table. |
+
+Pins and content digests are machine-readable in `dependencies.json`; the
+per-subtree records are under `third_party/*/PROVENANCE.md`, and the ledger is
+`docs/PROVENANCE.md`. `tools/deps.py verify` checks the pins and
+`tools/package_notices.py` checks license coverage. The package content id is
+the first 16 hex characters of SHA-256 over the zip bytes, using the adopted
+yakumo SHA-256.
+
 ## Risks
 
 - Third-party binaries run in the app process with the app's permissions; a
@@ -237,26 +287,67 @@ output, not drivers, and are covered by the ordinary build-output rules.
   project's control. There is no warranty.
 - A package can target the wrong Android API or a different Adreno generation;
   it is validated structurally, not functionally.
+- Packages are not signed or verified against a trusted publisher. A zip from
+  an untrusted source is untrusted native code.
+- A bad driver can make startup crash before the Drivers UI is reachable;
+  recovering may require clearing app storage or deleting `selection.txt`.
+- Non-Adreno GPUs (Mali, PowerVR) are not supported by libadrenotools.
 - Importing large zips copies them twice (SAF to staging, then extraction);
   free-space failures are named, not silent.
 
 ## Known gaps
 
 - ADPKG packages are not accepted.
-- 32-bit and x86_64 custom drivers are not supported.
-- API 26–27 devices are system-only.
+- Non-Adreno GPUs (Mali, PowerVR) are unsupported; libadrenotools is
+  Qualcomm-specific.
+- 32-bit ABIs (`armeabi-v7a`, `armeabi`) and x86_64 custom drivers are not
+  supported; only arm64-v8a can import.
+- API 26–27 devices are system-only. API 28 uses the `tmpLibDir` path; it was
+  not exercised on hardware (HYPOTHESIS).
 - Mesa Turnip (Rutabaga-26.10.10) and one Qualcomm v863.1 package have been
-  exercised. Other package layouts may still be rejected.
-- No driver auto-update, repository browser or signature verification.
+  exercised. Other package layouts may still be rejected (HYPOTHESIS).
+- No driver auto-update, repository browser, signature verification, or
+  publisher trust chain.
+- `minApi` is enforced by the Drivers UI; a hand-edited `selection.txt` is not
+  re-checked against the device API by the native loader.
+- No startup safe mode or crash-loop counter. A driver that crashes the
+  process before the UI appears must be removed through app storage or adb.
 - File redirect and BCn toggles are not exposed.
 - Selecting a driver requires restarting the app; the current session keeps
   its already-created instance.
 - Drop-folder imports are scanned at startup only, not while the dialog is
   open.
-- The arm64 phone loads a real Rutabaga/Turnip package through libadrenotools
-  and reports `rutabaga Mesa driver` / Mesa 26.3.0-devel; v863.1 also loaded.
+- Only one Adreno phone and one x86_64 emulator were used for QA; a 30-minute
+  thermal/stability soak and a non-Adreno device are not covered.
 - The dialog list needed a single-choice list layout; the first build's
   `setMessage` + `setItems` combination hid the rows. Fixed and re-verified.
+
+## Evidence status
+
+| Claim | Label | Evidence |
+|---|---|---|
+| System driver boot is unaffected on Adreno and the x86_64 emulator | VERIFIED | Three phone cold boots; emulator SwiftShader frame |
+| A selected-but-unloadable driver falls back with a named error | VERIFIED | Phone `driver_load_failed`, `driver_hook_library_missing`, `driver_storage_unavailable` |
+| A real Turnip package imports, loads, and reports its version | VERIFIED | Rutabaga-26.10.10, three phone cold boots, Mesa 26.3.0-devel |
+| The Qualcomm v863.1 package loads | VERIFIED | One phone boot, Vulkan 1.4.295 |
+| Malformed zip, wrong-ABI ELF, missing hooks and missing private dir fail closed | VERIFIED | Device imports and loader fallbacks |
+| Driver blobs are rejected by repository path and magic | VERIFIED | Red-first probes and work-tree gate |
+| API 28 `tmpLibDir` path | HYPOTHESIS | Not exercised on API 28 hardware |
+| Other Turnip/Qualcomm package layouts | HYPOTHESIS | Only two packages exercised |
+| Non-Adreno, 32-bit and x86_64 custom drivers | UNSUPPORTED | Architecture limits, not tested |
+| Crash-loop recovery / safe mode | PLANNED | Named gap above |
+| 30-minute thermal/stability soak | PLANNED | Not part of T10 QA |
+
+## Mutation evidence
+
+Each mutation was applied locally, the loader suite was run, and the named
+check failed for the intended reason. The mutations were reverted.
+
+| Mutation | Observed failure |
+|---|---|
+| The system path calls the custom opener | `FAIL: system path never calls the custom opener` |
+| The ABI guard is removed | `FAIL: bad_function_call` (empty custom opener invoked) |
+| The fallback retains the failed custom handle instead of closing it | `FAIL: failed custom handle is closed` |
 
 ## References
 
@@ -272,3 +363,18 @@ output, not drivers, and are covered by the ordinary build-output rules.
   driver fails to load"`: reported API 28/29 and packaging failures.
 - libadrenotools `include/adrenotools/driver.h` and README (BSD-2-Clause);
   `liblinkernsbypass` submodule gitlink at the pinned commit.
+- `gh search code "custom GPU drivers" --extension md`: NocturneRecomp's
+  custom-GPU-driver guide (package shape, private storage, selection/restart
+  behavior) and libadrenotools' README (Android 9+, arm64, developer-only
+  library).
+- `gh search code "libadrenotools" --extension cpp`: Vita3K, Flycast,
+  aps3e and other recompilation projects calling
+  `adrenotools_open_libvulkan`.
+- `gh search issues "adrenotools documentation"`: no additional loader
+  regression; issue #25 covers source-archive/submodule composition only.
+- `gh search code "driverPackage" "vulkan" --extension cpp`: Android
+  `GraphicsEnv`/`GpuService` driver-package naming, not an app loader.
+- PPSSPP driver-manager behavior was used as a diff oracle for the package
+  list and restart semantics; no PPSSPP code is linked or copied.
+- Device evidence and the trailing-slash finding:
+  `docs/qa/2026-10-31-t10e-driver-matrix.md`.
