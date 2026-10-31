@@ -707,6 +707,52 @@ void sas_contracts() {
     check(mem.load16(out) == 1123u && mem.load16(out + 2u) == 1123u, "mix adds the hand-computed voice");
 }
 
+std::vector<std::uint8_t> atrac_riff() {
+    constexpr std::uint16_t kBlockAlign = 1536u;
+    constexpr std::uint16_t kCodecParams = 0x00BFu;
+    std::vector<std::uint8_t> data(kBlockAlign, 0u);
+    data[0] = 0x60u;
+    std::vector<std::uint8_t> out;
+    const auto tag = [&out](const char *value) { out.insert(out.end(), value, value + 4); };
+    const auto u16 = [&out](std::uint16_t value) {
+        out.push_back(static_cast<std::uint8_t>(value));
+        out.push_back(static_cast<std::uint8_t>(value >> 8u));
+    };
+    const auto u32 = [&out](std::uint32_t value) {
+        for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::uint8_t>(value >> (8 * i)));
+    };
+    tag("RIFF");
+    u32(0u);
+    tag("WAVE");
+    tag("fmt ");
+    u32(52u);
+    u16(0xFFFEu);
+    u16(2u);
+    u32(44'100u);
+    u32(static_cast<std::uint32_t>(kBlockAlign) * 44'100u / 2048u);
+    u16(kBlockAlign);
+    u16(0u);
+    u16(34u);
+    u16(2048u);
+    u32(3u);
+    static constexpr std::uint8_t kGuid[16] = {0xBF, 0xAA, 0x23, 0xE9, 0x58, 0xCB, 0x71, 0x44,
+        0xA1, 0x19, 0xFF, 0xFA, 0x01, 0xE4, 0xCE, 0x62};
+    out.insert(out.end(), kGuid, kGuid + 16);
+    const std::uint8_t extra[12] = {1u, 0u, static_cast<std::uint8_t>(kCodecParams >> 8u),
+        static_cast<std::uint8_t>(kCodecParams), 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
+    out.insert(out.end(), extra, extra + 12);
+    tag("fact");
+    u32(8u);
+    u32(2048u);
+    u32(0u);
+    tag("data");
+    u32(static_cast<std::uint32_t>(data.size()));
+    out.insert(out.end(), data.begin(), data.end());
+    const std::uint32_t size = static_cast<std::uint32_t>(out.size() - 8u);
+    for (int i = 0; i < 4; ++i) out[4 + i] = static_cast<std::uint8_t>(size >> (8 * i));
+    return out;
+}
+
 void atrac_contracts() {
     Fixture f(test_nids_path(), {}, {});
     const auto atrac = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
@@ -719,6 +765,40 @@ void atrac_contracts() {
     check(atrac("sceAtracReleaseAtracID", {at3}) == 0u, "AT3 ID released");
     check(atrac("sceAtracReleaseAtracID", {at3}) == 0x80630005u, "double release rejected");
     check(atrac("sceAtracReleaseAtracID", {at3plus}) == 0u, "AT3+ ID released");
+
+    auto &mem = f.runtime.memory();
+    const auto riff = atrac_riff();
+    constexpr std::uint32_t kRiff = 0x08832000u;
+    for (std::size_t i = 0; i < riff.size(); ++i)
+        mem.store8(kRiff + static_cast<std::uint32_t>(i), riff[i]);
+    const std::uint32_t id = atrac("sceAtracSetDataAndGetID",
+        {kRiff, static_cast<std::uint32_t>(riff.size())});
+    check(id > 0u && id != 0x80630006u, "ATRAC3+ RIFF opens");
+    constexpr std::uint32_t kValue = Fixture::kOutput + 0x20u;
+    check(atrac("sceAtracGetChannel", {id, kValue}) == 0u && mem.load32(kValue) == 2u,
+        "ATRAC channel count");
+    check(atrac("sceAtracGetMaxSample", {id, kValue}) == 0u && mem.load32(kValue) == 2048u,
+        "ATRAC frame sample count");
+    check(atrac("sceAtracGetSoundSample", {id, kValue, kValue + 4u, kValue + 8u}) == 0u,
+        "ATRAC sound sample query");
+    check(mem.load32(kValue) == 2047u, "ATRAC end sample");
+    check(mem.load32(kValue + 4u) == 0xFFFFFFFFu && mem.load32(kValue + 8u) == 0xFFFFFFFFu,
+        "ATRAC reports no loop");
+    constexpr std::uint32_t kPcm = Fixture::kOutput + 0x400u;
+    check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u,
+        "ATRAC frame decodes");
+    check(mem.load32(kValue) == 2048u, "ATRAC writes 2048 samples");
+    check(mem.load32(kValue + 4u) == 1u, "ATRAC marks the stream end");
+    check(mem.load32(kValue + 8u) == 0xFFFFFFFFu, "ATRAC reports in-memory data");
+    check(mem.load16(kPcm) == 0u, "ATRAC terminator frame is silent");
+    check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0x80630024u,
+        "ATRAC reports all data decoded");
+    check(mem.load32(kValue) == 0u && mem.load32(kValue + 4u) == 1u,
+        "ATRAC end writes zero samples");
+    check(atrac("sceAtracResetPlayPosition", {id, 0u, 0u, 0u}) == 0u, "ATRAC reset accepted");
+    check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u,
+        "ATRAC decodes again after reset");
+    check(atrac("sceAtracReleaseAtracID", {id}) == 0u, "ATRAC data ID released");
 }
 
 void io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {

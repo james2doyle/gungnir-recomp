@@ -62,6 +62,7 @@ set_target_properties(gamepad_tests PROPERTIES
 
 # --- HLE runtime (T6) -------------------------------------------------------
 add_library(gungnir_hle STATIC
+    runtime/audio/atrac_file.cpp
     runtime/audio/audio_mixer.cpp
     runtime/audio/audio_sink.cpp
     runtime/audio/sas_core.cpp
@@ -78,7 +79,7 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_module.cpp
     runtime/savedata/save_store.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
-target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge gungnir_input)
+target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge gungnir_input atrac3p)
 
 add_executable(hle_module_tests tests/hle/module_tests.cpp)
 target_link_libraries(hle_module_tests PRIVATE gungnir_hle)
@@ -368,6 +369,11 @@ set_target_properties(atrac3p_selftest PROPERTIES
 add_executable(audio_mixer_tests tests/audio/mixer_tests.cpp)
 target_link_libraries(audio_mixer_tests PRIVATE gungnir_hle)
 set_target_properties(audio_mixer_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
+
+add_executable(atrac_track_tests tests/audio/atrac_track_tests.cpp)
+target_link_libraries(atrac_track_tests PRIVATE gungnir_hle)
+set_target_properties(atrac_track_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
 
 # --- Analysis / codegen tooling (T4, T5) -----------------------------------

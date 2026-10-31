@@ -12,6 +12,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "build"
 BINARY = BUILD / "tests" / "audio" / "atrac3p_selftest"
+TRACK_BINARY = BUILD / "tests" / "audio" / "atrac_track_tests"
 
 
 def setUpModule():
@@ -20,7 +21,7 @@ def setUpModule():
                          capture_output=True, text=True)
     if cfg.returncode != 0:
         raise RuntimeError(f"cmake configure failed:\n{cfg.stderr}")
-    bld = subprocess.run(["cmake", "--build", str(BUILD), "--target", "atrac3p_selftest"],
+    bld = subprocess.run(["cmake", "--build", str(BUILD), "--target", "atrac3p_selftest", "atrac_track_tests"],
                          capture_output=True, text=True)
     if bld.returncode != 0:
         raise RuntimeError(f"atrac3p self-test build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
@@ -33,3 +34,9 @@ class TestAtracDecoder(unittest.TestCase):
                          f"ATRAC decoder self-test failed:\n{proc.stdout}{proc.stderr}")
         self.assertIn("all", proc.stdout)
         self.assertIn("checks passed", proc.stdout)
+
+    def test_track_parser_and_decoder(self):
+        proc = subprocess.run([str(TRACK_BINARY)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0,
+                         f"ATRAC track contracts failed:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("atrac_track_tests: OK", proc.stdout)

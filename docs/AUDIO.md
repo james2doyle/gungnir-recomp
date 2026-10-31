@@ -6,8 +6,9 @@ voices into guest memory and `sceAtrac3plus` decodes compressed tracks.
 
 Status: T12a is in progress. The SAS voice core, the sceAudio channel HLE,
 the 44.1 kHz mixer, the SDL3 desktop backend, the AAudio backend and the
-ATRAC3/3+ decoder are in the tree. The 60 s AAudio soak passes on the phone;
-the ATRAC track HLE, MP3 and game-loop pacing are not finished.
+ATRAC3/3+ decoder and the whole-file ATRAC track HLE are in the tree. The
+60 s AAudio soak passes on the phone; ATRAC streaming, MP3 and game-loop
+pacing are not finished.
 
 ## Output contract
 
@@ -52,15 +53,23 @@ ledger). `tests/audio/atrac3p_selftest.cpp` checks create/validation, garbage
 rejection, the terminator frame, the IMDCT/IPQF path, determinism and
 reset/flush.
 
-The HLE currently implements only `sceAtracGetAtracID` and
-`sceAtracReleaseAtracID`. The track calls remain a counted gap from T6l:
-SetData/SetDataAndGetID, SetHalfwayBuffer, GetSoundSample, GetChannel,
-GetMaxSample, GetRemainFrame, GetNextSample, DecodeData, SetLoopNum,
-GetLoopStatus, GetBitrate, GetNextDecodePosition, ResetPlayPosition,
-GetStreamDataInfo/AddStreamData, SecondBuffer and BufferInfo. They must decode
-the RIFF/WAVE ATRAC3 (fmt 0x270) and ATRAC3+ (fmt 0xFFFE) streams, honour
-`fact`/`smpl` loop points and copy guest PCM; a failed decode is a named
-error, never fake silence.
+`runtime/audio/atrac_file.*` parses whole-file RIFF/WAVE ATRAC3 (fmt 0x270)
+and ATRAC3+ (fmt 0xFFFE), including `fact` totals/delay and `smpl` loops, and
+drives the vendored decoder. The HLE implements the memory-buffer track set:
+GetAtracID, SetData/SetDataAndGetID, SetHalfwayBuffer(AndGetID), Release,
+GetSoundSample, GetChannel, GetMaxSample, GetRemainFrame, GetNextSample,
+GetNextDecodePosition, GetBitrate, GetLoopStatus, SetLoopNum,
+ResetPlayPosition, DecodeData and GetInternalErrorInfo. DecodeData copies
+guest PCM one codec frame at a time, respects loop/end positions and returns
+`0x80630024` after the last frame; a malformed RIFF or failed decode is a
+named error, never fake silence.
+
+Streaming calls remain counted gaps: GetStreamDataInfo, AddStreamData,
+SetSecondBuffer/GetSecondBufferInfo, GetBufferInfoForReseting, StartEntry and
+EndEntry are not registered, so a title that needs them stops with a named
+NID instead of receiving silent PCM. `tests/audio/atrac_track_tests.cpp`
+covers the parser and decoder with a synthetic ATRAC3+ RIFF; the HLE path is
+covered in `tests/hle/kernel_tests.cpp`.
 
 MP3 (`sceMp3`) is not implemented. It stays a named gap until the title
 executes an MP3 call; adding a decoder without a caller would be speculative.
@@ -85,7 +94,7 @@ game audio are wired during T13. See `docs/qa/2026-10-31-t12a-audio.md`.
 ## Tests
 
 ```sh
-python3 -m unittest tests.test_audio -v        # ATRAC decoder self-test
+python3 -m unittest tests.test_audio -v        # ATRAC decoder + track parser/decoder
 python3 -m unittest tests.test_audio_mixer -v  # mixer ring/volumes/underrun
 python3 -m unittest tests.test_sdl_audio -v     # SDL3 tone smoke (desktop)
 # phone (debug APK): am start ... --ez audio_smoke true
@@ -94,8 +103,9 @@ python3 -m unittest tests.test_hle -v          # sceAudio + SAS contracts
 
 ## Named gaps
 
-- ATRAC track HLE and `sceMp3` are not implemented; T6l's counted gap moves
-  here and must not fake PCM.
+- ATRAC streaming (GetStreamDataInfo/AddStreamData/second buffer/reset-buffer
+  info/start-end entry) and `sceMp3` are not implemented; those calls stop
+  with a named NID rather than fake PCM.
 - The 60 s AAudio soak is clean, but it runs on the audio clock rather than
   the 59.94 Hz guest loop; that pacing and game audio are T13 work.
 - The VAG fixture is synthetic (constant nibble), so it proves the
