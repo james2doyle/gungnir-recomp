@@ -45,6 +45,17 @@ public final class TouchOverlayView extends View {
     private final RectF rect = new RectF();
 
     private boolean editing;
+    private boolean suppressed;
+    private final Runnable gamepadPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!suppressed) {
+                int desired = GamepadBridge.active() ? INVISIBLE : VISIBLE;
+                if (getVisibility() != desired) setVisibility(desired);
+            }
+            if (isAttachedToWindow()) postDelayed(this, 400);
+        }
+    };
     private int insetLeft;
     private int insetTop;
     private int insetRight;
@@ -113,6 +124,21 @@ public final class TouchOverlayView extends View {
         invalidate();
     }
 
+    public void setSuppressed(boolean value) {
+        suppressed = value;
+        if (suppressed) {
+            setVisibility(INVISIBLE);
+        } else {
+            setVisibility(GamepadBridge.active() ? INVISIBLE : VISIBLE);
+        }
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        postDelayed(gamepadPoll, 300);
+    }
+
     @Override
     protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
         super.onSizeChanged(width, height, oldWidth, oldHeight);
@@ -177,6 +203,7 @@ public final class TouchOverlayView extends View {
 
     @Override
     protected void onDetachedFromWindow() {
+        removeCallbacks(gamepadPoll);
         releaseAll();
         super.onDetachedFromWindow();
     }

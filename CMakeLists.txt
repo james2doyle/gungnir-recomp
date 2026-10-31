@@ -29,6 +29,9 @@ target_include_directories(yakumo PUBLIC
 # Source-neutral button/analog state and the PSP pad mapping. No SDL, JNI or
 # guest-memory dependency, so the merge and edge contracts run on the host.
 add_library(gungnir_input STATIC
+    runtime/input/gamepad_profile.cpp
+    runtime/input/gamepad_remap.cpp
+    runtime/input/gamepad_state.cpp
     runtime/input/input_state.cpp
     runtime/input/keyboard_map.cpp
     runtime/input/touch_haptics.cpp
@@ -50,6 +53,11 @@ set_target_properties(touch_overlay_tests PROPERTIES
 add_executable(touch_haptics_tests tests/input/touch_haptics_tests.cpp)
 target_link_libraries(touch_haptics_tests PRIVATE gungnir_input)
 set_target_properties(touch_haptics_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
+add_executable(gamepad_tests tests/input/gamepad_tests.cpp)
+target_link_libraries(gamepad_tests PRIVATE gungnir_input)
+set_target_properties(gamepad_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 
 # --- HLE runtime (T6) -------------------------------------------------------
@@ -238,6 +246,17 @@ find_program(GLSL_COMPILER NAMES glslc)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(SDL3 QUIET IMPORTED_TARGET sdl3)
+endif()
+
+if(SDL3_FOUND)
+    add_executable(sdl_gamepad_tests
+        tests/input/sdl_gamepad_tests.cpp
+        runtime/platform/sdl_gamepad.cpp)
+    target_compile_definitions(sdl_gamepad_tests PRIVATE GUNGNIR_HAVE_SDL3=1)
+    target_include_directories(sdl_gamepad_tests PRIVATE runtime)
+    target_link_libraries(sdl_gamepad_tests PRIVATE gungnir_input PkgConfig::SDL3)
+    set_target_properties(sdl_gamepad_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 endif()
 
 if(Vulkan_FOUND AND GLSL_COMPILER)

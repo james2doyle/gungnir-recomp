@@ -14,6 +14,7 @@
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/game_data.hpp"
+#include "platform/sdl_gamepad.hpp"
 
 #include <array>
 #include <atomic>
@@ -43,6 +44,7 @@ namespace {
 std::mutex g_driver_info_mutex;
 std::string g_driver_info;
 std::mutex g_touch_mutex;
+std::atomic<gungnir::platform::SdlGamepad *> g_gamepad{nullptr};
 
 gungnir::input::TouchHaptics &touch_haptics() {
     static gungnir::input::TouchHaptics haptics([] {});
@@ -128,12 +130,14 @@ struct LifecycleState {
     std::atomic<bool> resume{false};
     std::atomic<SDL_AudioStream *> tone{nullptr};
     gungnir::input::SdlInput *sdl_input{};
+    gungnir::platform::SdlGamepad *gamepad{};
 };
 
 bool lifecycle_watch(void *userdata, SDL_Event *event) {
     auto *state = static_cast<LifecycleState *>(userdata);
     if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
         if (state->sdl_input != nullptr) state->sdl_input->release_held();
+        if (state->gamepad != nullptr) state->gamepad->release_all();
         gungnir::input::state().release_all();
         state->background.store(true);
         if (SDL_AudioStream *tone = state->tone.load(); tone != nullptr) {
@@ -146,6 +150,7 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
     }
     if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
         if (state->sdl_input != nullptr) state->sdl_input->release_held();
+        if (state->gamepad != nullptr) state->gamepad->release_all();
         gungnir::input::state().release_all();
     }
     if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
@@ -374,15 +379,75 @@ Java_com_gungnir_recomp_input_TouchOverlayView_nativeResetLayout(JNIEnv *, jclas
     overlay.reset_layout();
     overlay.publish();
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_active(JNIEnv *, jclass) {
+    auto *gamepad = g_gamepad.load();
+    return gamepad != nullptr && gamepad->active() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_info(JNIEnv *env, jclass) {
+    auto *gamepad = g_gamepad.load();
+    return env->NewStringUTF(gamepad != nullptr ? gamepad->info().c_str() : "No gamepad connected");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_beginRemap(JNIEnv *, jclass) {
+    auto *gamepad = g_gamepad.load();
+    if (gamepad != nullptr) gamepad->begin_remap();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_cancelRemap(JNIEnv *, jclass) {
+    auto *gamepad = g_gamepad.load();
+    if (gamepad != nullptr) gamepad->cancel_remap();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_remapStatus(JNIEnv *env, jclass) {
+    auto *gamepad = g_gamepad.load();
+    return env->NewStringUTF(gamepad != nullptr ? gamepad->remap_status().c_str()
+                                                : "No gamepad connected");
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_remapDone(JNIEnv *, jclass) {
+    auto *gamepad = g_gamepad.load();
+    return gamepad != nullptr && gamepad->remap_done() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_saveRemap(JNIEnv *env, jclass) {
+    auto *gamepad = g_gamepad.load();
+    if (gamepad == nullptr) return env->NewStringUTF("gamepad_unavailable");
+    std::string error;
+    return env->NewStringUTF(gamepad->save_remap(error) ? "" : error.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_resetProfile(JNIEnv *env, jclass) {
+    auto *gamepad = g_gamepad.load();
+    if (gamepad == nullptr) return env->NewStringUTF("gamepad_unavailable");
+    std::string error;
+    return env->NewStringUTF(gamepad->reset_profile(error) ? "" : error.c_str());
+}
 #endif
 
 int main(int, char **) {
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         GUNGNIR_LOGE("sdl_init_failed: %s\n", SDL_GetError());
         return 1;
     }
     const char *internal = SDL_GetAndroidInternalStoragePath();
     if (internal != nullptr) unpack_runtime_assets(internal);
+    const std::string gamepad_profiles = read_asset("input_profiles/profiles.json");
+    const std::filesystem::path gamepad_directory = internal != nullptr
+        ? std::filesystem::path(internal) / "input_profiles"
+        : std::filesystem::path("input_profiles");
+    gungnir::platform::SdlGamepad gamepad(gamepad_profiles, gamepad_directory);
+    g_gamepad.store(&gamepad);
+    if (gamepad_profiles.empty()) GUNGNIR_LOGE("gamepad_profiles_asset_missing\n");
     if (!check_game_data().ok) show_game_data_picker();
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft");
     SDL_Window *window =
@@ -470,6 +535,7 @@ int main(int, char **) {
     LifecycleState lifecycle;
     gungnir::input::SdlInput sdl_input;
     lifecycle.sdl_input = &sdl_input;
+    lifecycle.gamepad = &gamepad;
     SDL_AudioStream *tone = open_tone();
     lifecycle.tone.store(tone);
     SDL_AddEventWatch(lifecycle_watch, &lifecycle);
@@ -484,6 +550,7 @@ int main(int, char **) {
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            gamepad.handle_event(event);
             sdl_input.handle(event);
             if (event.type == SDL_EVENT_QUIT ||
                 event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
@@ -549,6 +616,8 @@ int main(int, char **) {
     }
 
     SDL_RemoveEventWatch(lifecycle_watch, &lifecycle);
+    g_gamepad.store(nullptr);
+    gamepad.shutdown();
     lifecycle.tone.store(nullptr);
     if (tone != nullptr) SDL_DestroyAudioStream(tone);
     backend.shutdown();

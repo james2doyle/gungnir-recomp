@@ -15,6 +15,7 @@ public final class SettingsOverlayView extends FrameLayout {
     public interface Listener {
         void onToggleLayout();
         void onResetLayout();
+        void onGamepad();
         void onDrivers();
         void onGameData();
         void onClose();
@@ -60,6 +61,7 @@ public final class SettingsOverlayView extends FrameLayout {
 
         layoutRow = row("Edit touch layout", listener::onToggleLayout);
         row("Reset touch layout", listener::onResetLayout);
+        row("Gamepad", listener::onGamepad);
         row("Vulkan driver", listener::onDrivers);
         row("Game data", listener::onGameData);
         row("Close", listener::onClose);

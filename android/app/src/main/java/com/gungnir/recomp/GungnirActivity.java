@@ -7,13 +7,18 @@ import android.content.pm.ActivityInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import com.gungnir.recomp.input.GamepadBridge;
 import com.gungnir.recomp.input.TouchOverlayView;
 
 import org.libsdl.app.SDLActivity;
@@ -71,6 +76,12 @@ public final class GungnirActivity extends SDLActivity {
             @Override
             public void onResetLayout() {
                 confirmResetLayout();
+            }
+
+            @Override
+            public void onGamepad() {
+                closeSettings();
+                showGamepadDialog();
             }
 
             @Override
@@ -135,7 +146,7 @@ public final class GungnirActivity extends SDLActivity {
         if (settingsOverlay == null) return;
         if (touchOverlay != null) {
             touchOverlay.releaseAll();
-            touchOverlay.setVisibility(View.INVISIBLE);
+            touchOverlay.setSuppressed(true);
         }
         settingsButton.setVisibility(View.GONE);
         settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
@@ -144,8 +155,87 @@ public final class GungnirActivity extends SDLActivity {
     private void closeSettings() {
         if (settingsOverlay == null) return;
         settingsOverlay.hide();
-        if (touchOverlay != null) touchOverlay.setVisibility(View.VISIBLE);
+        if (touchOverlay != null) touchOverlay.setSuppressed(false);
         if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
+    }
+
+    private void showGamepadDialog() {
+        if (settingsOverlay != null) settingsOverlay.hide();
+        if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
+        if (touchOverlay != null) touchOverlay.setSuppressed(false);
+        String info = GamepadBridge.info();
+        if (info == null || info.startsWith("No gamepad")) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Gamepad")
+                    .setMessage("No gamepad connected. Pair a Bluetooth or USB controller and reopen Settings.")
+                    .setPositiveButton("Close", null)
+                    .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Gamepad")
+                .setMessage(info)
+                .setPositiveButton("Remap", (dialog, which) -> startGamepadRemap())
+                .setNeutralButton("Reset profile", (dialog, which) -> confirmResetGamepad())
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void confirmResetGamepad() {
+        new AlertDialog.Builder(this)
+                .setTitle("Reset gamepad profile")
+                .setMessage("Restore the default button and stick mapping for this controller?")
+                .setPositiveButton("Reset", (dialog, which) -> {
+                    String error = GamepadBridge.resetProfile();
+                    Toast.makeText(this, error == null || error.isEmpty()
+                            ? "Gamepad profile reset" : error, Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void startGamepadRemap() {
+        GamepadBridge.beginRemap();
+        TextView prompt = new TextView(this);
+        int padding = Math.round(20 * getResources().getDisplayMetrics().density);
+        prompt.setPadding(padding, padding, padding, padding);
+        prompt.setTextSize(16.0f);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Remap gamepad")
+                .setView(prompt)
+                .setPositiveButton("Save", null)
+                .setNegativeButton("Cancel", (ignored, which) -> GamepadBridge.cancelRemap())
+                .setCancelable(false)
+                .create();
+        dialog.getWindow().setFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE);
+        dialog.setOnShowListener(ignored -> {
+            Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            save.setEnabled(false);
+            Handler handler = new Handler(Looper.getMainLooper());
+            Runnable poll = new Runnable() {
+                @Override
+                public void run() {
+                    if (!dialog.isShowing()) return;
+                    String status = GamepadBridge.remapStatus();
+                    prompt.setText(status);
+                    boolean done = GamepadBridge.remapDone();
+                    save.setEnabled(done);
+                    if (!done) handler.postDelayed(this, 150);
+                }
+            };
+            save.setOnClickListener(view -> {
+                String error = GamepadBridge.saveRemap();
+                if (error == null || error.isEmpty()) {
+                    dialog.dismiss();
+                    Toast.makeText(this, "Gamepad profile saved", Toast.LENGTH_LONG).show();
+                } else {
+                    prompt.setText(error);
+                }
+            });
+            handler.post(poll);
+        });
+        dialog.show();
     }
 
     private void confirmResetLayout() {
@@ -177,6 +267,7 @@ public final class GungnirActivity extends SDLActivity {
 
     @Override
     protected void onPause() {
+        GamepadBridge.cancelRemap();
         if (touchOverlay != null) {
             touchOverlay.releaseAll();
             touchOverlay.saveLayout();

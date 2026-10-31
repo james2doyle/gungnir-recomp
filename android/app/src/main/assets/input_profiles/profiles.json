@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "default",
+      "match": "*",
+      "name": "Default",
+      "buttons": [
+        16384, 8192, 32768, 4096, 1, 0, 8, 0,
+        0, 256, 512, 16, 64, 128, 32, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ],
+      "left_x_axis": 0,
+      "left_y_axis": 1,
+      "deadzone": 0.12,
+      "invert_y": false
+    },
+    {
+      "id": "ayn_odin",
+      "match": "Ayn Odin",
+      "name": "Ayn Odin",
+      "buttons": [
+        16384, 8192, 32768, 4096, 1, 0, 8, 0,
+        0, 256, 512, 16, 64, 128, 32, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ],
+      "left_x_axis": 0,
+      "left_y_axis": 1,
+      "deadzone": 0.14,
+      "invert_y": false
+    },
+    {
+      "id": "ayaneo",
+      "match": "AYANEO",
+      "name": "AYANEO",
+      "buttons": [
+        16384, 8192, 32768, 4096, 1, 0, 8, 0,
+        0, 256, 512, 16, 64, 128, 32, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ],
+      "left_x_axis": 0,
+      "left_y_axis": 1,
+      "deadzone": 0.14,
+      "invert_y": false
+    }
+  ]
+}

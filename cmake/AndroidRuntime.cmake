@@ -64,6 +64,9 @@ function(gungnir_add_runtime_library target)
         VERBATIM)
 
     add_library(${target} SHARED
+        "${ARG_ROOT}/runtime/input/gamepad_profile.cpp"
+        "${ARG_ROOT}/runtime/input/gamepad_remap.cpp"
+        "${ARG_ROOT}/runtime/input/gamepad_state.cpp"
         "${ARG_ROOT}/runtime/input/input_state.cpp"
         "${ARG_ROOT}/runtime/input/keyboard_map.cpp"
         "${ARG_ROOT}/runtime/input/sdl_input.cpp"
@@ -78,6 +81,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/android/game_data.cpp"
         "${ARG_ROOT}/runtime/platform/android/assets.cpp"
         "${ARG_ROOT}/runtime/platform/android/affinity.cpp"
+        "${ARG_ROOT}/runtime/platform/sdl_gamepad.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/loader.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
         "${ARG_ROOT}/third_party/miniz/miniz.c"

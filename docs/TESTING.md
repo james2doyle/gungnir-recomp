@@ -132,6 +132,8 @@ python3 -m unittest tests.test_adreno_suite -v      # consolidated T10 gate
 python3 -m unittest tests.test_input -v            # T11a input core + sceCtrl mapping
 python3 -m unittest tests.test_touch_overlay -v    # T11b layout/pointer/edit/JSON
 python3 -m unittest tests.test_touch_haptics -v    # T11c touch-haptics policy
+python3 -m unittest tests.test_gamepad -v          # T11d profiles/state/remap
+python3 -m unittest tests.test_sdl_gamepad -v      # T11d virtual-gamepad adapter
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 

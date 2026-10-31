@@ -11,7 +11,7 @@
 // x/y in [0, 1], radius relative to min(content width, height). Touch input
 // and the draw snapshot use window pixels.
 
-#include "input/input_state.hpp"
+#include "input/psp_buttons.hpp"
 
 #include <array>
 #include <cstddef>
@@ -36,19 +36,6 @@ enum class TouchControl : std::uint8_t {
 };
 
 inline constexpr std::size_t kTouchControls = static_cast<std::size_t>(TouchControl::Count);
-
-inline constexpr ButtonMask kSelectBit = button_mask(Button::Select);
-inline constexpr ButtonMask kStartBit = button_mask(Button::Start);
-inline constexpr ButtonMask kUpBit = button_mask(Button::Up);
-inline constexpr ButtonMask kRightBit = button_mask(Button::Right);
-inline constexpr ButtonMask kDownBit = button_mask(Button::Down);
-inline constexpr ButtonMask kLeftBit = button_mask(Button::Left);
-inline constexpr ButtonMask kLBit = button_mask(Button::L);
-inline constexpr ButtonMask kRBit = button_mask(Button::R);
-inline constexpr ButtonMask kTriangleBit = button_mask(Button::Triangle);
-inline constexpr ButtonMask kCircleBit = button_mask(Button::Circle);
-inline constexpr ButtonMask kCrossBit = button_mask(Button::Cross);
-inline constexpr ButtonMask kSquareBit = button_mask(Button::Square);
 
 struct TouchInsets {
     float left{};
