@@ -229,10 +229,10 @@ void TouchOverlay::update_stick_origin(Pointer &pointer, float x, float y) noexc
     }
 }
 
-void TouchOverlay::touch_down(int pointer, float x, float y) {
+TouchControl TouchOverlay::touch_down(int pointer, float x, float y) {
     if (editing_) {
         edit_down(pointer, x, y);
-        return;
+        return TouchControl::Count;
     }
     if (Pointer *existing = find(pointer)) {
         (void)existing;
@@ -245,7 +245,7 @@ void TouchOverlay::touch_down(int pointer, float x, float y) {
             break;
         }
     }
-    if (entry == nullptr) return;
+    if (entry == nullptr) return TouchControl::Count;
     *entry = Pointer{};
     entry->id = pointer;
     entry->used = true;
@@ -257,17 +257,23 @@ void TouchOverlay::touch_down(int pointer, float x, float y) {
         entry->role = Role::Dpad;
         entry->control = TouchControl::Dpad;
         entry->dpad = dpad_at(hit, x, y);
-    } else if (hit != TouchControl::Count) {
+        return TouchControl::Dpad;
+    }
+    if (hit != TouchControl::Count) {
         entry->role = Role::Control;
         entry->control = hit;
-    } else if (x < insets_.left + content_width() * kStickSplit && stick_pointer_ < 0) {
+        return hit;
+    }
+    if (x < insets_.left + content_width() * kStickSplit && stick_pointer_ < 0) {
         entry->role = Role::Stick;
         stick_pointer_ = pointer;
         stick_origin_x_ = x;
         stick_origin_y_ = y;
         stick_x_ = x;
         stick_y_ = y;
+        return TouchControl::Stick;
     }
+    return TouchControl::Count;
 }
 
 void TouchOverlay::touch_move(int pointer, float x, float y) {

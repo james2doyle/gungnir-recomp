@@ -7,6 +7,7 @@
 
 #include "input/input_state.hpp"
 #include "input/sdl_input.hpp"
+#include "input/touch_haptics.hpp"
 #include "input/touch_layout_store.hpp"
 #include "input/touch_overlay.hpp"
 #include "platform/adreno/package.hpp"
@@ -42,6 +43,11 @@ namespace {
 std::mutex g_driver_info_mutex;
 std::string g_driver_info;
 std::mutex g_touch_mutex;
+
+gungnir::input::TouchHaptics &touch_haptics() {
+    static gungnir::input::TouchHaptics haptics([] {});
+    return haptics;
+}
 
 std::string read_asset(const char *name) {
     SDL_IOStream *stream = SDL_IOFromFile(name, "rb");
@@ -266,14 +272,15 @@ Java_com_gungnir_recomp_input_TouchOverlayView_nativeViewport(
             static_cast<float>(right), static_cast<float>(bottom)});
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jint JNICALL
 Java_com_gungnir_recomp_input_TouchOverlayView_nativeTouch(
     JNIEnv *, jclass, jint action, jint pointer, jfloat x, jfloat y) {
     std::lock_guard<std::mutex> lock(g_touch_mutex);
     auto &overlay = gungnir::input::touch_overlay();
+    bool tick = false;
     switch (action) {
     case 0:
-        overlay.touch_down(pointer, x, y);
+        tick = touch_haptics().press(overlay.touch_down(pointer, x, y));
         break;
     case 1:
         overlay.touch_move(pointer, x, y);
@@ -286,6 +293,7 @@ Java_com_gungnir_recomp_input_TouchOverlayView_nativeTouch(
         break;
     }
     overlay.publish();
+    return tick ? 1 : 0;
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL

@@ -105,7 +105,7 @@ public:
     // Game input, window pixels. The stick is floating: a finger landing in
     // the left half (and not on a placed control) becomes the stick. JNI
     // publishes buttons()/analog() into InputState after every event.
-    void touch_down(int pointer, float x, float y);
+    [[nodiscard]] TouchControl touch_down(int pointer, float x, float y);
     void touch_move(int pointer, float x, float y);
     void touch_up(int pointer);
     void cancel();

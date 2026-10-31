@@ -7,7 +7,9 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Log;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
@@ -72,7 +74,7 @@ public final class TouchOverlayView extends View {
 
     private static native void nativeViewport(int width, int height, int left, int top, int right, int bottom);
 
-    private static native void nativeTouch(int action, int pointer, float x, float y);
+    private static native int nativeTouch(int action, int pointer, float x, float y);
 
     private static native float[] nativeSnapshot();
 
@@ -147,7 +149,8 @@ public final class TouchOverlayView extends View {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
                 int index = event.getActionIndex();
-                nativeTouch(0, event.getPointerId(index), event.getX(index), event.getY(index));
+                int tick = nativeTouch(0, event.getPointerId(index), event.getX(index), event.getY(index));
+                if (tick != 0) tickHaptic();
                 break;
             }
             case MotionEvent.ACTION_MOVE:
@@ -318,6 +321,25 @@ public final class TouchOverlayView extends View {
             fill.setColor(0x33FFFFFF);
             canvas.drawCircle(cx, cy, radius * 0.22f, fill);
             fill.setColor(0x44FFFFFF);
+        }
+    }
+
+    private void tickHaptic() {
+        if (!isHapticFeedbackEnabled()) return;
+        try {
+            if (Settings.System.getInt(getContext().getContentResolver(),
+                    Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) == 0) {
+                Log.d(TAG, "touch_haptic_disabled");
+                return;
+            }
+        } catch (RuntimeException ignored) {
+            // A missing setting must not disable an otherwise working vibrator.
+        }
+        try {
+            boolean performed = performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            Log.d(TAG, "touch_haptic performed=" + performed);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "touch_haptic_failed: " + error.getMessage());
         }
     }
 

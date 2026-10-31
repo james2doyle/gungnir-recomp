@@ -31,6 +31,7 @@ target_include_directories(yakumo PUBLIC
 add_library(gungnir_input STATIC
     runtime/input/input_state.cpp
     runtime/input/keyboard_map.cpp
+    runtime/input/touch_haptics.cpp
     runtime/input/touch_layout_store.cpp
     runtime/input/touch_overlay.cpp)
 target_include_directories(gungnir_input PUBLIC runtime)
@@ -44,6 +45,11 @@ set_target_properties(input_tests PROPERTIES
 add_executable(touch_overlay_tests tests/input/touch_overlay_tests.cpp)
 target_link_libraries(touch_overlay_tests PRIVATE gungnir_input)
 set_target_properties(touch_overlay_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
+add_executable(touch_haptics_tests tests/input/touch_haptics_tests.cpp)
+target_link_libraries(touch_haptics_tests PRIVATE gungnir_input)
+set_target_properties(touch_haptics_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 
 # --- HLE runtime (T6) -------------------------------------------------------

@@ -30,7 +30,7 @@ bool near(float a, float b, float epsilon = 0.001f) {
 }
 
 void press(TouchOverlay &overlay, int id, float x, float y) {
-    overlay.touch_down(id, x, y);
+    (void)overlay.touch_down(id, x, y);
 }
 
 void move_to(TouchOverlay &overlay, int id, float x, float y) {
