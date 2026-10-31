@@ -270,3 +270,13 @@ arm64 phone the dialog listed the system driver plus a synthetic imported
 package; selecting it produced `driver_fallback: driver_load_failed` and the
 system frame, SAF import reported `driver_import_ok`, and delete restored
 system. A real Turnip driver remains T10e.
+
+`tests/test_repository_check.py` adds T10e probes for driver payloads:
+ZIP magic catches a renamed archive, and the root `drivers/`, asset-side
+`drivers/` and source `jniLibs/` locations fail even when force-added. Device
+evidence for the fail-closed matrix is in
+`docs/qa/2026-10-31-t10e-driver-matrix.md`: three phone cold boots on the
+system driver, named fallback for `driver_load_failed`,
+`driver_hook_library_missing` and `driver_storage_unavailable`, malformed and
+wrong-ABI imports, and the x86_64 `driver_abi_unsupported` path. TC-10.2
+(a real Turnip load) is still not verified.
