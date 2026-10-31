@@ -115,6 +115,15 @@ if(PNG_FOUND)
     target_link_libraries(tex_dump_tests PRIVATE gungnir_tex_dump)
     set_target_properties(tex_dump_tests PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tex)
+
+    add_library(gungnir_tex_replace STATIC runtime/tex/replace.cpp)
+    target_include_directories(gungnir_tex_replace PUBLIC runtime)
+    target_link_libraries(gungnir_tex_replace PUBLIC gungnir_tex gungnir_tex_png)
+
+    add_executable(tex_replace_tests tests/tex/replace_tests.cpp)
+    target_link_libraries(tex_replace_tests PRIVATE gungnir_tex_replace gungnir_tex_dump)
+    set_target_properties(tex_replace_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tex)
 endif()
 
 # --- Post-processing chain (T7g) ------------------------------------------

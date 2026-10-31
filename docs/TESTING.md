@@ -156,4 +156,9 @@ ASan/UBSan scan round-tripped 1,304 containers byte-identically;
 available): content-key stability/sensitivity and sampler independence, RGBA8
 PNG round-trip, `textures.ini` creation/de-duplication, CLUT-change dumps,
 existing-file collision and corrupt-file rejection. `docs/TEXTURE_REPLACEMENT.md`
-records the dump layout and key rules. T8f consolidates TC-8.1–TC-8.4.
+records the dump layout and key rules.
+
+`tests/test_tex_replace.py` runs `tex_replace_tests`: 2x/4x replacements
+rendered through the software rasterizer, native fallback, replacement state
+derivation, unmatched/corrupt scan reporting, cache/clear reload, dump vs
+replacement isolation and invalid inputs. T8f consolidates TC-8.1–TC-8.4.

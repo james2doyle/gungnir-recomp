@@ -1,8 +1,8 @@
 # TEXTURE REPLACEMENT — dump, keys and user packs
 
-Status: T8c dump mode implemented; T8d replacement loading is pending. This
-guide describes the files the runtime writes and the rules a user pack must
-follow. No game textures, PNG dumps or pack files are committed.
+Status: T8c dump mode and T8d replacement loading implemented. This guide
+describes the files the runtime writes and the rules a user pack must follow.
+No game textures, PNG dumps or pack files are committed.
 
 ## Dump layout
 
@@ -77,6 +77,52 @@ T8d will read user PNGs through the same module, accepting RGB/RGBA/gray and
 palette images normalised to RGBA8. Replacement images may be any resolution;
 the renderer samples them according to GE state.
 
+## Replacement layout
+
+Put user PNGs under `replace/` using the dump key as the filename:
+
+```text
+<root>/replace/0123456789ABCDEF.png
+```
+
+The loader also accepts a lowercase key and `.PNG`. The image may be 1x, 2x,
+4x or any other resolution. There are no mipmap levels; the GE sampling path
+maps the sprite's UVs across the replacement regardless of its size.
+
+The key is the same 16-hex content key as dump mode. A replacement is used
+when the live texture's key matches; otherwise the native texture stays
+active. A PNG whose key matches no known texture is reported by filename by
+`TextureReplacements::scan`, never silently ignored.
+
+## Replacement API
+
+```cpp
+tex::TextureReplacements replacements(root);
+tex::ReplacementLookup found = replacements.find(key);
+if (found.ok) {
+    ge::TextureState state = found.image->state_for(live.state);
+    ge::Texture texture(state, found.image->rgba);
+    // sample/draw with texture
+} else {
+    // use the native texture; found.error names the reason
+}
+```
+
+- `find` returns `not_found`, `invalid_key`, `invalid_root`,
+  `file_access_failed`, `invalid_replacement` or a PNG error
+  (`png_read_failed`, `png_unsupported_layout`, `file_not_found`).
+- `state_for` copies the live clamp/filter state and overrides format to
+  `Rgba8888`, swizzle off, width/height/buffer width from the replacement.
+- Successful loads are cached; call `clear()` (or `set_root()`) after changing
+  files to reload. A corrupt PNG fails closed; the caller keeps the native
+  texture.
+- `scan(known_keys)` returns `present` (PNG files), `loaded`, `unmatched`
+  filenames (sorted) and per-file `errors` (sorted). The caller logs these;
+  the loader does not print or discard them.
+
+Dump mode never writes under `replace/`; a user replacement is never
+overwritten by a later dump.
+
 ## Tests
 
 `tests/test_tex_dump.py` runs `tex_dump_tests` over hand-authored linear
@@ -84,3 +130,8 @@ textures: key stability and sensitivity (CLUT, texel, buffer width, swizzle,
 format), live-sampler independence, PNG round-trip, manifest creation and
 de-duplication, CLUT-change dumps, collision/corrupt-file rejection, and
 invalid input names.
+
+`tests/test_tex_replace.py` runs `tex_replace_tests`: 2x and 4x replacements
+rendered through the software rasterizer, native fallback, state derivation,
+unmatched/corrupt scan reporting, cache/clear reload, dump/replacement
+isolation and invalid keys/roots.
