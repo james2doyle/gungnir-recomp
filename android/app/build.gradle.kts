@@ -2,6 +2,12 @@ plugins {
     id("com.android.application")
 }
 
+val repoRoot = rootProject.projectDir.parentFile
+val sdlSource = file((project.findProperty("sdlSource") as String?) ?: "${repoRoot}/build/android-deps/sdl3-src")
+check(sdlSource.isDirectory) {
+    "sdl_source_missing: $sdlSource (run scripts/android/build.sh)"
+}
+
 android {
     namespace = "com.gungnir.recomp"
     compileSdk = 36
@@ -19,8 +25,18 @@ android {
         }
         externalNativeBuild {
             cmake {
-                arguments.addAll(listOf("-DANDROID_STL=c++_static", "-DCMAKE_CXX_STANDARD=20"))
+                arguments.addAll(listOf(
+                    "-DGUNGNIR_ROOT=${repoRoot.absolutePath}",
+                    "-DGUNGNIR_SDL3_DIR=${sdlSource.absolutePath}",
+                    "-DANDROID_STL=c++_static",
+                    "-DCMAKE_CXX_STANDARD=20"))
             }
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDir("${sdlSource}/android-project/app/src/main/java")
         }
     }
 

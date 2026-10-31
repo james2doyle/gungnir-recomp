@@ -120,6 +120,7 @@ python3 -m unittest tests.test_core_fixtures -v     # TC-4.1..TC-4.4
 python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
 python3 -m unittest tests.test_nids tests.test_hle -v  # T6a/T6b registry + kernel/HLE
 python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skeleton
+python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scripts
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -174,12 +175,18 @@ four groups above. It also checks the TPL/DAR/replacement documents, the
 mutation ledger and the named-gap list. `docs/TEXTURE_REPLACEMENT.md` is the
 user-facing dump/replacement/font guide.
 
-## Android gates (T9, planned)
+## Android gates (T9)
 
 `tests/test_android_build.py` covers TC-9.1: SHA-pinned wrapper,
-property-only machine paths, `.gitignore` coverage and named failure when the
-SDK/NDK pin is missing. `tests/test_android_suite.py` will consolidate host
-checks for TC-9.2–TC-9.4 (probe frame, both game-data paths, hash-gate
-rejection, lifecycle transitions) with named skips when no SDK or device is
-present. Device and emulator runs are recorded per plan §8.3; tests never
-substitute for that evidence.
+property-only machine paths, `.gitignore` coverage, named failure when the
+SDK/NDK pin is missing, a relocated-tree build, both ABI `libmain.so`
+libraries, statically linked SDL3, the packaged SDL Java layer and an exported
+`SDL_main`.
+
+`tests/test_android_app.py` checks the SDL3 `release-3.4.18` pin against
+`cmake/Deps.cmake`, fetch reuse from a verified archive, tampered-archive
+rejection and the deploy scripts. `tests/test_android_suite.py` will
+consolidate host checks for TC-9.2–TC-9.4 (probe frame, both game-data paths,
+hash-gate rejection, lifecycle transitions) with named skips when no SDK or
+device is present. Device and emulator runs are recorded per plan §8.3; tests
+never substitute for that evidence.

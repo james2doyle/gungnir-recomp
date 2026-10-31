@@ -6,13 +6,15 @@ Reads dependencies.json at the given root and verifies every entry:
   type "vendored": the directory must exist and its content digest must
                    equal the pinned sha256 (canonical form: sorted relative
                    POSIX paths, each `path \\0 + sha256(file bytes)`).
-  any other type:  DEPS_FETCH_UNSUPPORTED — no fetch-based dependency is in
-                   use yet (Devs.cmake fetch support lands with the first
-                   one; a silent skip would be a hidden failure, so this
-                   names the gap instead).
+  type "fetch":    the entry must carry version/url/archive_sha256; the
+                   archive is verified when present under build/android-deps,
+                   otherwise the pin is reported as not materialized. The
+                   Android build materializes it through cmake/Deps.cmake.
+  any other type:  DEPS_FETCH_UNSUPPORTED — named gap, never a silent skip.
 
 Failures are named and loud: DEPS_MISSING / DEPS_DIGEST_MISMATCH /
-DEPS_FETCH_UNSUPPORTED. Exit 0 only when every entry verifies.
+DEPS_PIN_MISSING / DEPS_FETCH_UNSUPPORTED. Exit 0 only when every entry
+verifies or is a correctly pinned, unmaterialized fetch entry.
 
 Run: python3 tools/deps.py verify [--root REPO]
 """
@@ -64,11 +66,27 @@ def deps(root: Path):
     for entry in load_dependencies(root):
         kind = entry.get("type", "vendored")
         tree = root / entry["path"]
+        if kind == "fetch":
+            pinned = entry.get("archive_sha256")
+            url = entry.get("url")
+            version = entry.get("version")
+            if not pinned or not url or not version:
+                die("DEPS_PIN_MISSING",
+                    f"dependency {entry['name']!r} needs version/url/archive_sha256")
+            archive = root / "build" / "android-deps" / url.rsplit("/", 1)[-1]
+            if archive.is_file():
+                actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+                if actual != pinned:
+                    die("DEPS_DIGEST_MISMATCH",
+                        f"dependency {entry['name']!r}: archive {actual} != pinned {pinned}")
+                print(f"OK {entry['name']} @ {version} ({entry['license']}) materialized")
+            else:
+                print(f"OK {entry['name']} @ {version} ({entry['license']}) not materialized")
+            continue
         if kind != "vendored":
             die("DEPS_FETCH_UNSUPPORTED",
                 f"dependency {entry['name']!r} declares type {kind!r}; "
-                "fetch-based materialization (cmake/Deps.cmake) lands with "
-                "the first fetch-type dependency — nothing to skip silently")
+                "only vendored and fetch entries are supported")
         actual = digest_of_tree(tree)
         pinned = entry.get("digest")
         if not pinned:

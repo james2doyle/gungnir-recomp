@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""T9b — SDL3 pin, fetch reuse and Android shell contracts."""
+import json
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+DEPS_CMAKE = REPO / "cmake" / "Deps.cmake"
+ARCHIVE = REPO / "build" / "android-deps" / "SDL3-3.4.18.tar.gz"
+
+
+class TestSdl3Dependency(unittest.TestCase):
+    def test_manifest_and_cmake_agree(self):
+        data = json.loads((REPO / "dependencies.json").read_text())
+        sdl = next(entry for entry in data["dependencies"] if entry["name"] == "sdl3")
+        self.assertEqual(sdl["type"], "fetch")
+        self.assertEqual(sdl["version"], "3.4.18")
+        self.assertEqual(sdl["license"], "Zlib")
+        cmake = DEPS_CMAKE.read_text()
+        self.assertIn(f'SDL3_VERSION "{sdl["version"]}"', cmake)
+        self.assertIn("libsdl-org/SDL/releases/download/release-${SDL3_VERSION}", cmake)
+        self.assertIn(f'SDL3_SHA256 "{sdl["archive_sha256"]}"', cmake)
+
+    def test_fetch_reuses_verified_archive(self):
+        if not ARCHIVE.is_file():
+            self.skipTest("SDL3 archive not materialized on this host")
+        with tempfile.TemporaryDirectory(prefix="gungnir-sdl3-") as directory:
+            deps = Path(directory)
+            shutil.copy2(ARCHIVE, deps / ARCHIVE.name)
+            command = ["cmake", f"-DGUNGNIR_DEPS_DIR={deps}", "-P", str(DEPS_CMAKE)]
+            first = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            self.assertTrue((deps / "sdl3-src" / "CMakeLists.txt").is_file())
+            self.assertTrue((deps / "sdl3-src" / "android-project" / "app" /
+                             "src" / "main" / "java" / "org" / "libsdl" / "app" /
+                             "SDLActivity.java").is_file())
+            second = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+            self.assertIn("cached", second.stdout)
+
+    def test_deps_verifier_rejects_tampered_archive(self):
+        if not ARCHIVE.is_file():
+            self.skipTest("SDL3 archive not materialized on this host")
+        data = json.loads((REPO / "dependencies.json").read_text())
+        sdl = next(entry for entry in data["dependencies"] if entry["name"] == "sdl3")
+        with tempfile.TemporaryDirectory(prefix="gungnir-deps-") as directory:
+            root = Path(directory)
+            (root / "build" / "android-deps").mkdir(parents=True)
+            (root / "build" / "android-deps" / ARCHIVE.name).write_bytes(b"tampered")
+            (root / "dependencies.json").write_text(json.dumps({"dependencies": [sdl]}))
+            proc = subprocess.run(["python3", str(REPO / "tools" / "deps.py"), "verify",
+                                   "--root", str(root)], capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("DEPS_DIGEST_MISMATCH", proc.stdout + proc.stderr)
+
+    def test_tampered_archive_is_rejected(self):
+        if not ARCHIVE.is_file():
+            self.skipTest("SDL3 archive not materialized on this host")
+        with tempfile.TemporaryDirectory(prefix="gungnir-sdl3-bad-") as directory:
+            deps = Path(directory)
+            corrupted = deps / ARCHIVE.name
+            corrupted.write_bytes(ARCHIVE.read_bytes()[:1024])
+            proc = subprocess.run(["cmake", f"-DGUNGNIR_DEPS_DIR={deps}",
+                                   "-DGUNGNIR_OFFLINE=ON", "-P", str(DEPS_CMAKE)],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0, "tampered SDL3 archive must fail")
+
+
+class TestAndroidScripts(unittest.TestCase):
+    def test_build_help_documents_offline(self):
+        proc = subprocess.run([str(REPO / "scripts" / "android" / "build.sh"), "--help"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("--offline", proc.stdout)
+
+    def test_deploy_scripts_exist(self):
+        scripts = REPO / "scripts" / "android"
+        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh"):
+            path = scripts / name
+            self.assertTrue(path.is_file(), f"{name} exists")
+            self.assertTrue(path.stat().st_mode & 0o111, f"{name} is executable")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -10,6 +10,10 @@
 #include <map>
 #include <vector>
 
+#if defined(__ANDROID__)
+#include <dlfcn.h>
+#endif
+
 namespace gungnir::ge {
 namespace {
 
@@ -945,9 +949,15 @@ VulkanBackend::~VulkanBackend() {
 }
 
 bool VulkanBackend::available(std::string &reason) {
-    if (vkEnumerateInstanceVersion != nullptr) {
+#if defined(__ANDROID__)
+    const auto enumerate_version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+        dlsym(RTLD_DEFAULT, "vkEnumerateInstanceVersion"));
+#else
+    const auto enumerate_version = vkEnumerateInstanceVersion;
+#endif
+    if (enumerate_version != nullptr) {
         std::uint32_t version = 0;
-        if (vkEnumerateInstanceVersion(&version) == VK_SUCCESS && version < VK_API_VERSION_1_1) {
+        if (enumerate_version(&version) == VK_SUCCESS && version < VK_API_VERSION_1_1) {
             reason = "vulkan_1_1_unavailable";
             return false;
         }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T9a — Android build skeleton, pins and clean-checkout APK contracts.
+"""T9a/T9b — Android build skeleton, pins and clean-checkout APK contracts.
 
 The APK build is skipped by name when no usable Android SDK is present. The
 static contract checks (pins, no machine-local paths, named failures) always
@@ -108,9 +108,15 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copytree(ANDROID, root / "android", ignore=ignore)
             (root / "scripts" / "android").mkdir(parents=True)
             shutil.copy2(BUILD_SH, root / "scripts" / "android" / "build.sh")
+            shutil.copytree(REPO / "cmake", root / "cmake")
+            shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
+            shutil.copytree(REPO / "assets" / "shaders" / "ge", root / "assets" / "shaders" / "ge")
+            (root / "tools").mkdir()
+            shutil.copy2(REPO / "tools" / "embed_shaders.py", root / "tools" / "embed_shaders.py")
             proc = subprocess.run([str(root / "scripts" / "android" / "build.sh"),
                                    f"-Pgungnir.sdkDir={SDK}",
-                                   f"-Pgungnir.javaHome={java_home}"],
+                                   f"-Pgungnir.javaHome={java_home}",
+                                   f"-Pgungnir.depsDir={REPO / 'build' / 'android-deps'}"],
                                   capture_output=True, text=True, timeout=900)
             self.assertEqual(proc.returncode, 0,
                              f"build failed:\n{proc.stdout[-4000:]}{proc.stderr[-4000:]}")
@@ -120,8 +126,22 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             self.assertGreater(apk.stat().st_size, 4096, "APK is not empty")
             with zipfile.ZipFile(apk) as archive:
                 names = archive.namelist()
-        expected_libs = {f"lib/{abi}/libgungnir_probe.so" for abi in ("arm64-v8a", "x86_64")}
-        self.assertTrue(expected_libs.issubset(names), "both ABI probe libraries exist")
+                dex_bytes = b"".join(archive.read(name) for name in names
+                                     if name.startswith("classes") and name.endswith(".dex"))
+                libmain = archive.read("lib/arm64-v8a/libmain.so")
+            expected_libs = {f"lib/{abi}/libmain.so" for abi in ("arm64-v8a", "x86_64")}
+            self.assertTrue(expected_libs.issubset(names), "both ABI runtime libraries exist")
+            self.assertNotIn("lib/arm64-v8a/libSDL3.so", names, "SDL3 is linked statically")
+            self.assertIn(b"org/libsdl/app/SDLActivity", dex_bytes, "SDL Java layer is packaged")
+            self.assertIn(b"com/gungnir/recomp/GungnirActivity", dex_bytes,
+                          "the app Activity is packaged")
+            self.assertIn(b"libmain", dex_bytes, "SDLActivity loads libmain")
+            if shutil.which("readelf"):
+                lib_path = root / "libmain.so"
+                lib_path.write_bytes(libmain)
+                symbols = subprocess.run(["readelf", "-Ws", str(lib_path)],
+                                         capture_output=True, text=True)
+                self.assertIn("SDL_main", symbols.stdout, "libmain exports SDL_main")
         for name in names:
             if name.startswith("lib/") and name.endswith(".so"):
                 self.assertIn(name, expected_libs, f"unexpected native library: {name}")

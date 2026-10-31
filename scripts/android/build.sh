@@ -9,6 +9,7 @@ GRADLE_PROPS=()
 BUILD_TYPE=debug
 BUILD_TASK=:app:assembleDebug
 CLEAN=0
+OFFLINE=0
 
 usage() {
     cat <<'EOF'
@@ -21,6 +22,7 @@ options:
   --help                  show this help
   --release               assembleRelease instead of assembleDebug
   --clean                 run :app:clean first
+  --offline               require the pinned SDL3 archive to be already present
   -Pgungnir.sdkDir=DIR    Android SDK root (default: ANDROID_HOME)
   -Pgungnir.javaHome=DIR  JDK 17-23 (default: JAVA_HOME, else java on PATH)
   -Pgungnir.depsDir=DIR   fetched-dependency cache (default: build/android-deps)
@@ -40,6 +42,9 @@ while [ $# -gt 0 ]; do
             ;;
         --clean)
             CLEAN=1
+            ;;
+        --offline)
+            OFFLINE=1
             ;;
         -Pgungnir.sdkDir=*)
             SDK_DIR=${1#*=}
@@ -98,6 +103,21 @@ if [ -z "$JAVA_MAJOR" ] || [ "$JAVA_MAJOR" -lt 17 ] || [ "$JAVA_MAJOR" -gt 23 ];
     echo "unsupported_jdk: need JDK 17-23, found ${JAVA_MAJOR:-unknown}; pass -Pgungnir.javaHome=DIR" >&2
     exit 1
 fi
+
+if ! command -v cmake >/dev/null 2>&1; then
+    echo "missing_cmake: cmake 3.22+ is required to materialise SDL3" >&2
+    exit 1
+fi
+CMAKE_ARGS=("-DGUNGNIR_DEPS_DIR=$DEPS_DIR")
+if [ "$OFFLINE" -eq 1 ]; then
+    CMAKE_ARGS+=("-DGUNGNIR_OFFLINE=ON")
+fi
+cmake "${CMAKE_ARGS[@]}" -P "$ROOT/cmake/Deps.cmake"
+if [ ! -d "$DEPS_DIR/sdl3-src/android-project/app/src/main/java" ]; then
+    echo "missing_sdl3_java: $DEPS_DIR/sdl3-src" >&2
+    exit 1
+fi
+GRADLE_PROPS+=("-PsdlSource=$DEPS_DIR/sdl3-src")
 
 export ANDROID_HOME="$SDK_DIR"
 export ANDROID_SDK_ROOT="$SDK_DIR"
