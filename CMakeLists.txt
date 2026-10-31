@@ -264,6 +264,15 @@ if(SDL3_FOUND)
     target_link_libraries(sdl_gamepad_tests PRIVATE gungnir_input PkgConfig::SDL3)
     set_target_properties(sdl_gamepad_tests PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
+    add_executable(sdl_audio_smoke
+        tests/audio/sdl_audio_smoke.cpp
+        runtime/platform/sdl_audio.cpp)
+    target_compile_definitions(sdl_audio_smoke PRIVATE GUNGNIR_HAVE_SDL3=1)
+    target_include_directories(sdl_audio_smoke PRIVATE runtime)
+    target_link_libraries(sdl_audio_smoke PRIVATE gungnir_hle PkgConfig::SDL3)
+    set_target_properties(sdl_audio_smoke PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
 endif()
 
 if(Vulkan_FOUND AND GLSL_COMPILER)

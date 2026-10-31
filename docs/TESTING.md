@@ -136,6 +136,7 @@ python3 -m unittest tests.test_gamepad -v          # T11d profiles/state/remap
 python3 -m unittest tests.test_sdl_gamepad -v      # T11d virtual-gamepad adapter
 python3 -m unittest tests.test_input_suite -v      # consolidated T11 gate + docs
 python3 -m unittest tests.test_audio_mixer -v      # T12a mixer ring/volumes/underrun
+python3 -m unittest tests.test_sdl_audio -v        # T12a SDL3 tone smoke
 python3 -m unittest tests.test_savedata -v         # T12b store/SFO/save-load + PPSSPP saves
 python3 -m unittest tests.test_dar -v              # T12b DAR list/extract/repack
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
