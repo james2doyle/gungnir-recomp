@@ -65,7 +65,9 @@ build/       GITIGNORED: your game tree, generated recompiled code, outputs
 
 ## Building
 
-See `docs/BUILDING.md` (landing with milestone M4). Prerequisites:
+Android shell setup, build/deploy and SAF/adb intake are in
+[`docs/ANDROID.md`](docs/ANDROID.md). See `docs/BUILDING.md` (landing with
+milestone M4) for the full from-scratch flow. Prerequisites:
 `cmake`, `ninja`, a C++20 compiler, Python 3.11+, Android SDK/NDK (arm64),
 and your own disc image.
 

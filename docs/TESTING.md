@@ -123,6 +123,7 @@ python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skele
 python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scripts
 python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity gate
 python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
+python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -212,8 +213,8 @@ the generated CMake compile commands: the runtime target carries `-O2` and
 later `-O1`. Device evidence: the phone and emulator both logged
 `affinity_applied` and `priority_applied`; denial is logged, never fatal.
 
-`tests/test_android_suite.py` will consolidate host checks for TC-9.2–TC-9.4
-(probe frame, both game-data paths, hash-gate rejection, lifecycle
-transitions) with named skips when no SDK or device is present. Device and
-emulator runs are recorded per plan §8.3; tests never substitute for that
-evidence.
+`tests/test_android_suite.py` is the consolidated T9 gate. It runs the build,
+SDL3, game-data and affinity modules, checks `docs/ANDROID.md` and the T9 QA
+report, and verifies that screenshots land under the gitignored `build/qa/`
+tree. Device and emulator evidence is in
+`docs/qa/2026-10-30-t9-android-shell.md`; tests never substitute for it.
