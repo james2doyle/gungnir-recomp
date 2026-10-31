@@ -5,7 +5,13 @@
 // surface is supplied by the platform layer. Shaders are compiled to SPIR-V
 // at build time and embedded in the binary.
 
+#include "platform/adreno/loader.hpp"
+
+#if defined(__ANDROID__)
+#include <volk.h>
+#else
 #include <vulkan/vulkan.h>
+#endif
 
 #include <cstdint>
 #include <functional>
@@ -84,6 +90,7 @@ public:
         bool headless{true};
         bool validation{false};
         std::vector<const char *> instance_extensions;
+        gungnir::platform::VulkanDriverSelection driver;
         std::function<VkSurfaceKHR(VkInstance)> create_surface;
     };
 
@@ -109,6 +116,7 @@ public:
     [[nodiscard]] bool initialized() const;
     [[nodiscard]] bool headless() const;
     [[nodiscard]] std::size_t pipeline_count() const;
+    [[nodiscard]] const gungnir::platform::VulkanDriverInfo &driver_info() const;
 
 private:
     struct Impl;

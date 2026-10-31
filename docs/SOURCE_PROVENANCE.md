@@ -107,6 +107,7 @@ reimplemented (hard limit #0). Record:
 |---|---|---|---|
 | `miniz` 3.1.2 | `77d0dce8627735138c51770d1799a1ef48f2117d` | MIT | ZIP container reader/writer; we never parse ZIP by hand |
 | `nlohmann/json` 3.12.0 (single header) | `55f93686c01528224f448c19128836e7df245f72` | MIT | strict `meta.json` parsing; parser exceptions are mapped to named errors |
+| `volk` 1.4.367 | `aa76c86ae99aa76f7411c981dc885f68a08513b5` | MIT | Vulkan entry-point table for system/custom ICD dispatch on Android |
 
 Both are vendored byte-identical, pinned in `dependencies.json`, and recorded
 in the per-subtree notes under `third_party/`. They are compiled from source

@@ -148,6 +148,7 @@ set_target_properties(affinity_tests PROPERTIES
 # --- Adreno driver packages (T10b) ----------------------------------------
 add_library(gungnir_adreno STATIC
     runtime/platform/adreno/package.cpp
+    runtime/platform/adreno/loader.cpp
     third_party/miniz/miniz.c)
 target_include_directories(gungnir_adreno PUBLIC
     runtime
@@ -158,6 +159,11 @@ target_link_libraries(gungnir_adreno PUBLIC yakumo)
 add_executable(driver_package_tests tests/platform/driver_package_tests.cpp)
 target_link_libraries(driver_package_tests PRIVATE gungnir_adreno)
 set_target_properties(driver_package_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
+
+add_executable(loader_tests tests/platform/loader_tests.cpp)
+target_link_libraries(loader_tests PRIVATE gungnir_adreno)
+set_target_properties(loader_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
 
 # --- Post-processing chain (T7g) ------------------------------------------

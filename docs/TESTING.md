@@ -126,6 +126,7 @@ python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
 python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
 python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pins
 python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
+python3 -m unittest tests.test_vulkan_loader -v     # T10c loader selection/fallback
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -240,3 +241,16 @@ and atomic failure (no staging directory left behind). Mutation checks:
 disabling the encryption guard returns a different named error for the
 encrypted fixture, and disabling the path guard accepts the zip-slip fixture;
 both make the suite die for the intended case.
+
+`tests/test_vulkan_loader.py` runs `loader_tests` with injected openers: the
+system path never calls the custom opener and tries the system names in
+order; a custom selection forwards its dirs/soname and succeeds; custom
+failure (missing ABI support, null handle, missing entry point, invalid
+selection) falls back to system with the named error retained; total failure
+is `vulkan_loader_unavailable`; shutdown closes the active handle once.
+`tests/ge/vulkan_tests.cpp` also asserts `driver_info()` reports a loaded
+driver, a non-empty name and an API version after initialization. The Android
+system path was exercised on the x86_64 emulator, which logged
+`driver_active=system name=gfxstream (SwiftShader driver)` before the first
+frame. The arm64 phone was unavailable for this checkpoint; custom-driver
+device QA remains T10e.

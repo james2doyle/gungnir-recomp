@@ -1,9 +1,10 @@
+#include "ge/vulkan_backend.hpp"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_vulkan.h>
 
-#include "ge/vulkan_backend.hpp"
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/game_data.hpp"
@@ -238,6 +239,14 @@ int main(int, char **) {
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+
+    const gungnir::platform::VulkanDriverInfo &driver = backend.driver_info();
+    GUNGNIR_LOGI("driver_active=%s name=%s info=%s api=%u\n",
+                 driver.custom ? "custom" : "system", driver.driver_name.c_str(),
+                 driver.driver_info.c_str(), driver.api_version);
+    if (driver.fell_back) {
+        GUNGNIR_LOGE("driver_fallback: %s\n", driver.fallback_error.c_str());
     }
 
     const gungnir::platform::CpuTuning tuning = gungnir::platform::tune_current_thread();

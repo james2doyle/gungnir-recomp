@@ -49,6 +49,10 @@ void headless_triangle() {
     config.headless = true;
     std::string error;
     check(backend.initialize(config, error), error.c_str());
+    const gungnir::platform::VulkanDriverInfo &driver = backend.driver_info();
+    check(driver.loaded, "driver info is loaded after initialization");
+    check(!driver.driver_name.empty(), "driver name is reported");
+    check(driver.api_version >= VK_API_VERSION_1_1, "driver API version is reported");
 
     VulkanFrame first;
     check(backend.render_headless(first, error), error.c_str());

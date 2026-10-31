@@ -69,6 +69,29 @@ class TestSdl3Dependency(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0, "tampered SDL3 archive must fail")
 
 
+class TestDriverDependencies(unittest.TestCase):
+    def test_adrenotools_fetch_pins_match_the_script(self):
+        data = json.loads((REPO / "dependencies.json").read_text())
+        entries = {entry["name"]: entry for entry in data["dependencies"]}
+        script = (REPO / "cmake" / "AdrenotoolsDeps.cmake").read_text()
+        for name in ("libadrenotools", "liblinkernsbypass"):
+            entry = entries[name]
+            self.assertEqual(entry["type"], "fetch")
+            self.assertIn(entry["commit"], script)
+            self.assertIn(entry["archive_sha256"], script)
+
+    def test_volk_is_vendored_and_built_from_the_repo(self):
+        data = json.loads((REPO / "dependencies.json").read_text())
+        volk = next(entry for entry in data["dependencies"] if entry["name"] == "volk")
+        self.assertEqual(volk["type"], "vendored")
+        self.assertEqual(volk["license"], "MIT")
+        runtime = (REPO / "cmake" / "AndroidRuntime.cmake").read_text()
+        self.assertIn("third_party/volk/volk.c", runtime)
+        self.assertNotIn("GUNGNIR_VOLK_DIR", runtime)
+        android = (REPO / "android" / "app" / "CMakeLists.txt").read_text()
+        self.assertNotIn("GUNGNIR_VOLK_DIR", android)
+
+
 class TestAndroidScripts(unittest.TestCase):
     def test_build_help_documents_offline(self):
         proc = subprocess.run([str(REPO / "scripts" / "android" / "build.sh"), "--help"],

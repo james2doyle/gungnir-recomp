@@ -87,6 +87,27 @@ only after every entry was written. A failure leaves neither a staged nor a
 partially installed driver. `scan_drop_folder()` returns valid packages and
 named per-file errors instead of silently skipping bad zips.
 
+### Loader and dispatch (T10c)
+
+`runtime/platform/adreno/loader.cpp` selects the Vulkan loader before any
+instance exists. The system path tries `libvulkan.so.1`, then `libvulkan.so`
+(Windows: `vulkan-1.dll`; macOS: the MoltenVK names) and never calls the
+custom opener. The custom path calls
+`adrenotools_open_libvulkan(RTLD_NOW|RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM,
+tmpLibDir, nativeLibraryDir, privateDriverDir, soname, nullptr, nullptr)` and
+uses the returned `vkGetInstanceProcAddr`. If the custom path fails, the
+requested error is retained and the system loader is opened instead; the app
+logs `driver_fallback: <named error>` and boots on the system driver. No
+Vulkan instance is created while the driver choice is unresolved.
+
+Android arm64 uses the vendored Volk table for both paths; `volkLoadInstance`
+and `volkLoadDevice` populate the entry points after creation. Desktop builds
+keep the direct Vulkan link and do not compile Volk. After device creation the
+backend queries `VK_KHR_driver_properties` when available and logs one
+`driver_active=<system|custom> name=... info=... api=...` line; the UI reads
+the same `VulkanDriverInfo`. The x86_64 emulator build is system-only and
+does not package the hook libraries.
+
 ## Install and selection flow
 
 1. **Import** — the user picks a zip with SAF (`ACTION_OPEN_DOCUMENT`) or
@@ -159,6 +180,7 @@ a failed load never leaves a half-initialized instance.
 | `driver_abi_unsupported` | device ABI is not `arm64-v8a` |
 | `driver_storage_unavailable` | private driver directory cannot be created |
 | `driver_id_invalid` | a driver id is not a 16-character lowercase hash |
+| `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `driver_load_failed` | libadrenotools returned null for a valid package |
 
 ## No-bundling policy

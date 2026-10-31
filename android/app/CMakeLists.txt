@@ -16,5 +16,16 @@ set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${GUNGNIR_SDL3_DIR}" "${CMAKE_BINARY_DIR}/sdl3")
 
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    if(NOT DEFINED GUNGNIR_ADRENOTOOLS_DIR OR GUNGNIR_ADRENOTOOLS_DIR STREQUAL "")
+        message(FATAL_ERROR "GUNGNIR_ADRENOTOOLS_DIR is required for arm64-v8a")
+    endif()
+    set(BUILD_SHARED_LIBS OFF)
+    add_subdirectory("${GUNGNIR_ADRENOTOOLS_DIR}" "${CMAKE_BINARY_DIR}/libadrenotools")
+    set(ADRENOTOOLS_TARGET adrenotools)
+endif()
+
 include("${GUNGNIR_ROOT}/cmake/AndroidRuntime.cmake")
-gungnir_add_runtime_library(main ROOT "${GUNGNIR_ROOT}" SDL3_DIR "${GUNGNIR_SDL3_DIR}")
+gungnir_add_runtime_library(main ROOT "${GUNGNIR_ROOT}"
+    SDL3_DIR "${GUNGNIR_SDL3_DIR}"
+    ADRENOTOOLS_TARGET "${ADRENOTOOLS_TARGET}")

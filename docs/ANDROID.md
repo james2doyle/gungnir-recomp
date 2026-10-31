@@ -32,8 +32,10 @@ scripts/android/build.sh \
 | `-P<name>=<value>` | any other Gradle project property |
 
 `build.sh` validates the pinned SDK components and JDK, fetches SDL3
-`release-3.4.18` (SHA-256 pinned) unless `--offline`, then builds the debug
-APK. Release builds use `--release`; no release signing is configured.
+`release-3.4.18` plus the pinned libadrenotools and liblinkernsbypass sources
+(SHA-256 pinned; `--offline` requires the archives). Volk is vendored
+source, not fetched. The script then builds the debug APK. Release builds use
+`--release`; no release signing is configured.
 
 The runtime target compiles at `-O2 -fno-lto` even in debug. Named units can
 be dropped to `-O1` through `-Pgungnir.o1Sources`; the choice is visible in
@@ -104,6 +106,8 @@ frames are 640x320 in the current AVD; the phone renders 3063x1335.
 | `affinity_unavailable`, `priority_unavailable` | tuning denied; boot continues |
 | `audio_unavailable` | no audio device; the probe continues silently |
 | `surface_recreate_failed` | swapchain surface could not be rebuilt; retried |
+| `driver_fallback: <reason>` | a selected custom driver failed; the system driver is used |
+| `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `render_failed` | render failed; retried up to three times |
 
 ## Regression evidence

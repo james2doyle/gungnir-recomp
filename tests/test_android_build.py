@@ -113,6 +113,20 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copytree(REPO / "cmake", root / "cmake")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
             shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")
+            shutil.copytree(REPO / "third_party" / "miniz", root / "third_party" / "miniz")
+            shutil.copytree(REPO / "third_party" / "nlohmann-json",
+                            root / "third_party" / "nlohmann-json")
+            (root / "third_party" / "yakumo" / "include").parent.mkdir(parents=True)
+            shutil.copytree(REPO / "third_party" / "yakumo" / "include",
+                            root / "third_party" / "yakumo" / "include")
+            (root / "third_party" / "yakumo" / "src").mkdir(parents=True)
+            shutil.copy2(REPO / "third_party" / "yakumo" / "src" / "sha256.cpp",
+                         root / "third_party" / "yakumo" / "src" / "sha256.cpp")
+            (root / "third_party" / "volk").mkdir(parents=True)
+            shutil.copy2(REPO / "third_party" / "volk" / "volk.c",
+                         root / "third_party" / "volk" / "volk.c")
+            shutil.copy2(REPO / "third_party" / "volk" / "volk.h",
+                         root / "third_party" / "volk" / "volk.h")
             shutil.copytree(REPO / "assets" / "shaders" / "ge", root / "assets" / "shaders" / "ge")
             (root / "tools").mkdir()
             shutil.copy2(REPO / "tools" / "embed_shaders.py", root / "tools" / "embed_shaders.py")
@@ -134,8 +148,19 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
                                      if name.startswith("classes") and name.endswith(".dex"))
                 libmain = archive.read("lib/arm64-v8a/libmain.so")
             expected_libs = {f"lib/{abi}/libmain.so" for abi in ("arm64-v8a", "x86_64")}
+            expected_libs |= {
+                "lib/arm64-v8a/libmain_hook.so",
+                "lib/arm64-v8a/libfile_redirect_hook.so",
+                "lib/arm64-v8a/libgsl_alloc_hook.so",
+                "lib/arm64-v8a/libhook_impl.so",
+            }
             self.assertTrue(expected_libs.issubset(names), "both ABI runtime libraries exist")
             self.assertNotIn("lib/arm64-v8a/libSDL3.so", names, "SDL3 is linked statically")
+            for hook in ("libmain_hook.so", "libfile_redirect_hook.so",
+                         "libgsl_alloc_hook.so", "libhook_impl.so"):
+                self.assertIn(f"lib/arm64-v8a/{hook}", names, f"hook {hook} is packaged")
+            self.assertFalse(any(name.startswith("lib/x86_64/") and "hook" in name for name in names),
+                             "x86_64 is system-only")
             self.assertIn(b"org/libsdl/app/SDLActivity", dex_bytes, "SDL Java layer is packaged")
             self.assertIn(b"com/gungnir/recomp/GungnirActivity", dex_bytes,
                           "the app Activity is packaged")

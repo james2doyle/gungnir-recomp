@@ -64,6 +64,19 @@
       "note": "single-header JSON parser for untrusted driver meta.json; vendored byte-identical from the v3.12.0 release asset"
     },
     {
+      "name": "volk",
+      "type": "vendored",
+      "upstream": "https://github.com/zeux/volk",
+      "commit": "aa76c86ae99aa76f7411c981dc885f68a08513b5",
+      "version": "1.4.367",
+      "license": "MIT",
+      "license_file": "third_party/volk/LICENSE.md",
+      "path": "third_party/volk",
+      "digest": "6d2cbd5b88a94ef3da9533fcb1ac0d7a26265261b9a461aa37f70de5e122fecd",
+      "provenance": "third_party/volk/PROVENANCE.md",
+      "note": "Vulkan entry-point table for the Android system/custom ICD dispatch; vendored byte-identical"
+    },
+    {
       "name": "sdl3",
       "type": "fetch",
       "upstream": "https://github.com/libsdl-org/SDL",

@@ -4,7 +4,7 @@ include_guard(GLOBAL)
 # are the same files the desktop build compiles; only the platform entry point
 # and the SDL/Vulkan linkage differ.
 function(gungnir_add_runtime_library target)
-    cmake_parse_arguments(ARG "" "ROOT;SDL3_DIR" "" ${ARGN})
+    cmake_parse_arguments(ARG "" "ROOT;SDL3_DIR;ADRENOTOOLS_TARGET" "" ${ARGN})
     if(NOT ARG_ROOT OR NOT ARG_SDL3_DIR)
         message(FATAL_ERROR "gungnir_add_runtime_library(${target}) needs ROOT and SDL3_DIR")
     endif()
@@ -72,12 +72,29 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/android/game_data.cpp"
         "${ARG_ROOT}/runtime/platform/android/assets.cpp"
         "${ARG_ROOT}/runtime/platform/android/affinity.cpp"
+        "${ARG_ROOT}/runtime/platform/adreno/loader.cpp"
+        "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
+        "${ARG_ROOT}/third_party/miniz/miniz.c"
+        "${ARG_ROOT}/third_party/yakumo/src/sha256.cpp"
+        "${ARG_ROOT}/third_party/volk/volk.c"
         "${gen_dir}/vulkan_shaders.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/main.cpp")
-    target_include_directories(${target} PRIVATE "${ARG_ROOT}/runtime" "${CMAKE_BINARY_DIR}/generated")
+    target_include_directories(${target} PRIVATE
+        "${ARG_ROOT}/runtime"
+        "${CMAKE_BINARY_DIR}/generated"
+        "${ARG_ROOT}/third_party/miniz"
+        "${ARG_ROOT}/third_party/nlohmann-json"
+        "${ARG_ROOT}/third_party/yakumo/include"
+        "${ARG_ROOT}/third_party/volk")
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
     target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log z)
+    if(ARG_ADRENOTOOLS_TARGET)
+        target_link_libraries(${target} PRIVATE ${ARG_ADRENOTOOLS_TARGET})
+        target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_ADRENOTOOLS=1)
+    else()
+        target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_ADRENOTOOLS=0)
+    endif()
 
     set(GUNGNIR_ANDROID_O1_SOURCES "" CACHE STRING
         "Semicolon-separated runtime sources compiled at -O1")

@@ -22,7 +22,7 @@ options:
   --help                  show this help
   --release               assembleRelease instead of assembleDebug
   --clean                 run :app:clean first
-  --offline               require the pinned SDL3 archive to be already present
+  --offline               require pinned dependency archives to be present
   -Pgungnir.sdkDir=DIR    Android SDK root (default: ANDROID_HOME)
   -Pgungnir.javaHome=DIR  JDK 17-23 (default: JAVA_HOME, else java on PATH)
   -Pgungnir.depsDir=DIR   fetched-dependency cache (default: build/android-deps)
@@ -114,6 +114,7 @@ if [ "$OFFLINE" -eq 1 ]; then
     CMAKE_ARGS+=("-DGUNGNIR_OFFLINE=ON")
 fi
 cmake "${CMAKE_ARGS[@]}" -P "$ROOT/cmake/Deps.cmake"
+cmake "${CMAKE_ARGS[@]}" -P "$ROOT/cmake/AdrenotoolsDeps.cmake"
 if [ ! -d "$DEPS_DIR/sdl3-src/android-project/app/src/main/java" ]; then
     echo "missing_sdl3_java: $DEPS_DIR/sdl3-src" >&2
     exit 1

@@ -10,10 +10,6 @@
 #include <map>
 #include <vector>
 
-#if defined(__ANDROID__)
-#include <dlfcn.h>
-#endif
-
 namespace gungnir::ge {
 namespace {
 
@@ -122,10 +118,52 @@ bool result_ok(VkResult result, const char *operation, std::string &error) {
     return false;
 }
 
+void query_driver_info(VkPhysicalDevice physical,
+                       gungnir::platform::VulkanDriverInfo &info) {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physical, &properties);
+    info.api_version = properties.apiVersion;
+
+    std::uint32_t extension_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical, nullptr, &extension_count, nullptr);
+    std::vector<VkExtensionProperties> extensions(extension_count);
+    if (extension_count != 0) {
+        vkEnumerateDeviceExtensionProperties(physical, nullptr, &extension_count,
+                                             extensions.data());
+    }
+    bool has_driver_properties = false;
+    for (const VkExtensionProperties &extension : extensions) {
+        if (std::strcmp(extension.extensionName, VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME) == 0) {
+            has_driver_properties = true;
+        }
+    }
+
+#if defined(VK_KHR_driver_properties)
+    if (has_driver_properties) {
+        VkPhysicalDeviceDriverProperties driver{};
+        driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        VkPhysicalDeviceProperties2 properties2{};
+        properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties2.pNext = &driver;
+        vkGetPhysicalDeviceProperties2(physical, &properties2);
+        info.driver_name = driver.driverName;
+        info.driver_info = driver.driverInfo;
+        info.api_version = properties2.properties.apiVersion;
+        return;
+    }
+    info.driver_info = "driver_properties_unavailable";
+#else
+    (void)has_driver_properties;
+    info.driver_info = "driver_properties_unavailable";
+#endif
+    info.driver_name = properties.deviceName;
+}
+
 } // namespace
 
 struct VulkanBackend::Impl {
     Config config;
+    gungnir::platform::VulkanDriverInfo driver_info;
     bool initialized{};
     VkInstance instance{VK_NULL_HANDLE};
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};
@@ -950,11 +988,14 @@ VulkanBackend::~VulkanBackend() {
 
 bool VulkanBackend::available(std::string &reason) {
 #if defined(__ANDROID__)
-    const auto enumerate_version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
-        dlsym(RTLD_DEFAULT, "vkEnumerateInstanceVersion"));
-#else
-    const auto enumerate_version = vkEnumerateInstanceVersion;
+    const gungnir::platform::VulkanLoaderResult loader =
+        gungnir::platform::initialize_vulkan_loader({});
+    if (!loader.ok) {
+        reason = loader.error;
+        return false;
+    }
 #endif
+    const auto enumerate_version = vkEnumerateInstanceVersion;
     if (enumerate_version != nullptr) {
         std::uint32_t version = 0;
         if (enumerate_version(&version) == VK_SUCCESS && version < VK_API_VERSION_1_1) {
@@ -974,6 +1015,9 @@ bool VulkanBackend::available(std::string &reason) {
         reason = "vulkan_loader_unavailable";
         return false;
     }
+#if defined(__ANDROID__)
+    volkLoadInstance(instance);
+#endif
     std::uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
     vkDestroyInstance(instance, nullptr);
@@ -991,6 +1035,16 @@ bool VulkanBackend::initialize(const Config &config, std::string &error) {
         error = "invalid_extent";
         return false;
     }
+
+#if defined(__ANDROID__)
+    const gungnir::platform::VulkanLoaderResult loader =
+        gungnir::platform::initialize_vulkan_loader(config.driver);
+    impl_->driver_info = loader.info;
+    if (!loader.ok) {
+        error = loader.error;
+        return false;
+    }
+#endif
 
     VkApplicationInfo application{};
     application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -1010,6 +1064,7 @@ bool VulkanBackend::initialize(const Config &config, std::string &error) {
             if (std::strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") == 0) found = true;
         if (!found) {
             error = "validation_layer_unavailable";
+            shutdown();
             return false;
         }
         layers.push_back("VK_LAYER_KHRONOS_validation");
@@ -1022,6 +1077,9 @@ bool VulkanBackend::initialize(const Config &config, std::string &error) {
         shutdown();
         return false;
     }
+#if defined(__ANDROID__)
+    volkLoadInstance(impl_->instance);
+#endif
 
     if (!config.headless) {
         if (!config.create_surface) {
@@ -1108,6 +1166,11 @@ bool VulkanBackend::initialize(const Config &config, std::string &error) {
         return false;
     }
     vkGetDeviceQueue(impl_->device, impl_->queue_family, 0, &impl_->queue);
+#if defined(__ANDROID__)
+    volkLoadDevice(impl_->device);
+#endif
+    query_driver_info(impl_->physical_device, impl_->driver_info);
+    impl_->driver_info.loaded = true;
 
     VkCommandPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1583,6 +1646,9 @@ void VulkanBackend::shutdown() {
     impl_->draw_index_memory = VK_NULL_HANDLE;
     impl_->draw_index_capacity = 0;
     impl_->draw_resources_ready = false;
+#if defined(__ANDROID__)
+    gungnir::platform::shutdown_vulkan_loader();
+#endif
 }
 
 bool VulkanBackend::initialized() const {
@@ -1595,6 +1661,11 @@ bool VulkanBackend::headless() const {
 
 std::size_t VulkanBackend::pipeline_count() const {
     return impl_ ? impl_->draw_pipelines.size() : 0u;
+}
+
+const gungnir::platform::VulkanDriverInfo &VulkanBackend::driver_info() const {
+    static const gungnir::platform::VulkanDriverInfo empty;
+    return impl_ ? impl_->driver_info : empty;
 }
 
 } // namespace gungnir::ge

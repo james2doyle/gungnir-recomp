@@ -3,10 +3,15 @@ plugins {
 }
 
 val repoRoot = rootProject.projectDir.parentFile
-val sdlSource = file((project.findProperty("sdlSource") as String?) ?: "${repoRoot}/build/android-deps/sdl3-src")
+val depsDir = file((project.findProperty("gungnir.depsDir") as String?) ?: "${repoRoot}/build/android-deps")
+val sdlSource = file((project.findProperty("sdlSource") as String?) ?: "${depsDir}/sdl3-src")
+val adrenotoolsSource = file((project.findProperty("adrenotoolsSource") as String?) ?: "${depsDir}/libadrenotools-src")
 val o1Sources = (project.findProperty("gungnir.o1Sources") as String?) ?: ""
 check(sdlSource.isDirectory) {
     "sdl_source_missing: $sdlSource (run scripts/android/build.sh)"
+}
+check(adrenotoolsSource.isDirectory) {
+    "adrenotools_source_missing: $adrenotoolsSource (run scripts/android/build.sh)"
 }
 
 android {
@@ -29,6 +34,7 @@ android {
                 arguments.addAll(listOf(
                     "-DGUNGNIR_ROOT=${repoRoot.absolutePath}",
                     "-DGUNGNIR_SDL3_DIR=${sdlSource.absolutePath}",
+                    "-DGUNGNIR_ADRENOTOOLS_DIR=${adrenotoolsSource.absolutePath}",
                     "-DGUNGNIR_ANDROID_O1_SOURCES=$o1Sources",
                     "-DANDROID_STL=c++_static",
                     "-DCMAKE_CXX_STANDARD=20"))
