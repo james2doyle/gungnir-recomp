@@ -1,12 +1,10 @@
-# QA — driver fail-closed matrix and repository guard (T10e)
+# QA — driver fail-closed matrix, real Turnip load and repository guard (T10e)
 
 Date: 2026-10-31
-App commit: `cd19fb6` (APK built from that tree).
+App commit: `11137ce` (the APK was built from that tree).
 APK: debug, `com.gungnir.recomp`, versionName `0.1.0`.
-Sign-off: **PASS for TC-10.1, TC-10.3 and TC-10.4.** TC-10.2 is
-**NOT VERIFIED** because no real Turnip/custom driver archive was
-available; the synthetic package only exercises import, selection and
-fallback.
+Sign-off: **PASS for TC-10.1–TC-10.4.** TC-10.2 is verified with a real
+Rutabaga/Turnip package; v863.1 also loads.
 
 ## Devices
 
@@ -15,11 +13,11 @@ fallback.
 | Xiaomi M2102K1AC (Mi 11 Ultra) | Snapdragon / Adreno | arm64-v8a | 14 (API 34) | primary phone |
 | Android emulator `sdk_gphone64_x86_64` | SwiftShader / gfxstream | x86_64 | 17 (API 37) | non-Adreno path |
 
-The phone was unlocked. No driver archive was committed. The imported
-package was a locally generated synthetic zip (valid ELF64 container,
-`meta.json`, `libvulkan.so`) used only to exercise the code path; it is
-not a working driver and was removed after the session. Screenshots stay
-in gitignored `build/qa/android/`.
+The phone was unlocked. No driver archive was committed; the real packages
+were user-supplied and removed from the phone after the session. A locally
+generated synthetic zip (valid ELF64 container, `meta.json`,
+`libvulkan.so`) exercised the fail-closed paths only. Screenshots stay in
+gitignored `build/qa/android/`.
 
 ## 1 — TC-10.1 system and fallback boots
 
@@ -142,20 +140,47 @@ Mutation check: retaining the failed custom handle instead of closing it
 (rather than falling back cleanly) made `loader_tests` fail with
 `FAIL: failed custom handle is closed`, then the mutation was reverted.
 
-## 4 — TC-10.2 custom driver load
+## 4 — TC-10.2 real custom driver load
 
-**NOT VERIFIED.** No real Turnip/custom driver zip was supplied, so the
-only custom package exercised was the synthetic fixture. It imports,
-selects and fails closed as designed, but it cannot report a real
-`driverName`, `driverInfo` or Vulkan version. This remains the blocking
-item for closing T10e/T10.
+`Turnip-Rutabaga-v3.zip` (Rutabaga-26.10.10, Mesa 26.3.0-devel
+git-b00479181d) imported from the drop folder and loaded on the phone:
+
+```text
+I gungnir : driver_import_ok id=45b92cecfd9a862d soname=libvulkan_freedreno.so
+I hook_impl: loading custom driver: /data/user/0/com.gungnir.recomp/files/drivers/45b92cecfd9a862d/libvulkan_freedreno.so
+I gungnir : driver_active=custom name=rutabaga Mesa driver
+            info=Mesa 26.3.0-devel (git-b00479181d) api=4206951
+I gungnir : first frame 3063x1335
+```
+
+Three consecutive cold starts produced the same custom-driver line and
+first frame. `v863.1.zip` (Qualcomm Vulkan 1.4.295, soname
+`vulkan.ad0863.so`, multiple driver libraries) also loaded:
+
+```text
+I gungnir : driver_active=custom name=Qualcomm Technologies Inc. Adreno Vulkan Driver
+            info=Driver Build: ffdf890711, I896ce78af2, 1766558511 ... api=4198695
+I gungnir : first frame 3063x1335
+```
+
+`driverName`/`driverInfo` come from `VK_KHR_driver_properties` after
+instance creation; both packages reported a real version, so TC-10.2 is
+pass.
+
+The first real run failed with `driver_custom_open_failed` and no hook
+logs. `driver_linkernsbypass=1` proved `liblinkernsbypass` had loaded;
+the actual cause was that libadrenotools concatenates `customDriverDir`
+and the soname without a separator, while the selection file writes
+`driver_dir` without a trailing slash. The loader now appends the slash
+before calling libadrenotools, and the host loader test asserts the
+forwarded directory ends with `/`.
 
 ## Cleanup
 
-The imported synthetic driver directory, `selection.txt` and the drop
-zips were removed from the phone; the emulator's injected selection was
-removed. Both devices were left on the system driver and rebooted once
-with `driver_active=system` and a first frame.
+The imported real driver directories, `selection.txt` and the drop zips
+were removed from the phone; the emulator's injected selection was
+removed. Both devices were left on the system driver and rebooted with
+`driver_active=system` and a first frame.
 
 ## Host evidence
 
