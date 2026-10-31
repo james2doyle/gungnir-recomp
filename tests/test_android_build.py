@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""T9a — Android build skeleton, pins and clean-checkout APK contracts.
+
+The APK build is skipped by name when no usable Android SDK is present. The
+static contract checks (pins, no machine-local paths, named failures) always
+run.
+"""
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+ANDROID = REPO / "android"
+BUILD_SH = REPO / "scripts" / "android" / "build.sh"
+GRADLEW = ANDROID / "gradlew"
+WRAPPER = ANDROID / "gradle" / "wrapper" / "gradle-wrapper.properties"
+SDK = Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or "")
+
+DIST_SHA256 = "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6"
+FORBIDDEN_EXTENSIONS = (".iso", ".chd", ".cso", ".elf", ".prx", ".dar", ".tpl",
+                        ".zip", ".apk", ".jar", ".aab")
+
+
+def usable_java_home():
+    homes = []
+    configured = os.environ.get("JAVA_HOME")
+    if configured:
+        homes.append(Path(configured))
+    jvm_root = Path("/usr/lib/jvm")
+    if jvm_root.is_dir():
+        homes.extend(path.parent.parent for path in sorted(jvm_root.glob("*/bin/java")))
+    for home in homes:
+        java = home / "bin" / "java"
+        if not java.is_file():
+            continue
+        proc = subprocess.run([str(java), "-version"], capture_output=True, text=True)
+        match = re.search(r'version "([0-9]+)', proc.stdout + proc.stderr)
+        if match and 17 <= int(match.group(1)) <= 23:
+            return home
+    return None
+
+
+class TestAndroidBuildSkeleton(unittest.TestCase):
+    def test_wrapper_is_sha_pinned(self):
+        self.assertTrue(WRAPPER.is_file(), "gradle-wrapper.properties exists")
+        text = WRAPPER.read_text()
+        self.assertIn("distributionUrl=", text)
+        self.assertIn("gradle-8.11.1-bin.zip", text)
+        self.assertIn(f"distributionSha256Sum={DIST_SHA256}", text)
+        self.assertTrue(GRADLEW.is_file(), "gradlew bootstrap exists")
+        self.assertTrue(os.access(GRADLEW, os.X_OK), "gradlew is executable")
+
+    def test_toolchain_pins(self):
+        root = (ANDROID / "build.gradle.kts").read_text()
+        self.assertIn('version "8.10.1"', root)
+        app = (ANDROID / "app" / "build.gradle.kts").read_text()
+        for pin in ('compileSdk = 36', 'buildToolsVersion = "36.0.0"',
+                    'ndkVersion = "28.2.13676358"', "minSdk = 26", "targetSdk = 35",
+                    'version = "3.22.1"', '"arm64-v8a"', '"x86_64"',
+                    "-DANDROID_STL=c++_static", "-DCMAKE_CXX_STANDARD=20"):
+            self.assertIn(pin, app, f"missing pin: {pin}")
+
+    def test_no_machine_local_paths_tracked(self):
+        self.assertFalse((ANDROID / "local.properties").exists(),
+                         "no local.properties in the tree")
+        for path in (ANDROID / "settings.gradle.kts", ANDROID / "build.gradle.kts",
+                     ANDROID / "app" / "build.gradle.kts", BUILD_SH):
+            self.assertTrue(path.is_file(), f"{path.name} exists")
+            text = path.read_text()
+            self.assertNotIn("/opt/android-sdk", text, "no absolute SDK path")
+            self.assertNotIn("/home/", text, "no absolute home path")
+
+    def test_gitignore_covers_android_outputs(self):
+        text = (REPO / ".gitignore").read_text()
+        for pattern in ("local.properties", ".gradle/", ".cxx/", "build/"):
+            self.assertIn(pattern, text, f"ignore rule for {pattern}")
+
+    def test_build_help_documents_properties(self):
+        proc = subprocess.run([str(BUILD_SH), "--help"], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("-Pgungnir.sdkDir", proc.stdout)
+        self.assertIn("-Pgungnir.javaHome", proc.stdout)
+
+    def test_missing_sdk_is_a_named_error(self):
+        proc = subprocess.run([str(BUILD_SH), "-Pgungnir.sdkDir=/nonexistent/sdk"],
+                              capture_output=True, text=True)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("missing_sdk", proc.stderr)
+
+    def test_clean_checkout_builds_apk(self):
+        if not SDK.is_dir():
+            self.skipTest("android SDK not installed")
+        required = [SDK / "platforms" / "android-36", SDK / "build-tools" / "36.0.0",
+                    SDK / "ndk" / "28.2.13676358", SDK / "cmake" / "3.22.1"]
+        if not all(path.is_dir() for path in required):
+            self.skipTest("android SDK lacks the pinned components")
+        java_home = usable_java_home()
+        if java_home is None:
+            self.skipTest("no JDK 17-23 available for AGP 8.10")
+        with tempfile.TemporaryDirectory(prefix="gungnir-android-") as directory:
+            root = Path(directory)
+            ignore = shutil.ignore_patterns("build", ".cxx", ".gradle", "local.properties")
+            shutil.copytree(ANDROID, root / "android", ignore=ignore)
+            (root / "scripts" / "android").mkdir(parents=True)
+            shutil.copy2(BUILD_SH, root / "scripts" / "android" / "build.sh")
+            proc = subprocess.run([str(root / "scripts" / "android" / "build.sh"),
+                                   f"-Pgungnir.sdkDir={SDK}",
+                                   f"-Pgungnir.javaHome={java_home}"],
+                                  capture_output=True, text=True, timeout=900)
+            self.assertEqual(proc.returncode, 0,
+                             f"build failed:\n{proc.stdout[-4000:]}{proc.stderr[-4000:]}")
+            apk = (root / "android" / "app" / "build" / "outputs" / "apk" /
+                   "debug" / "app-debug.apk")
+            self.assertTrue(apk.is_file(), "debug APK exists")
+            self.assertGreater(apk.stat().st_size, 4096, "APK is not empty")
+            with zipfile.ZipFile(apk) as archive:
+                names = archive.namelist()
+        expected_libs = {f"lib/{abi}/libgungnir_probe.so" for abi in ("arm64-v8a", "x86_64")}
+        self.assertTrue(expected_libs.issubset(names), "both ABI probe libraries exist")
+        for name in names:
+            if name.startswith("lib/") and name.endswith(".so"):
+                self.assertIn(name, expected_libs, f"unexpected native library: {name}")
+            else:
+                self.assertFalse(name.lower().endswith(FORBIDDEN_EXTENSIONS),
+                                 f"no game/driver blob in the APK: {name}")
+
+
+if __name__ == "__main__":
+    unittest.main()
