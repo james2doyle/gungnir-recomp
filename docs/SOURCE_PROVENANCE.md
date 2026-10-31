@@ -116,3 +116,32 @@ on host and Android; no binary is committed.
 No upstream source, object or driver binary is committed. The fetched archives
 are verified before extraction under `build/android-deps/`; driver packages
 supplied by users remain app-private and are never bundled.
+
+## Reference review log
+
+### `BasedYuki/the-3rd-birthday-recomp` — GPL-2.0-or-later
+
+A Windows C toolkit whose runtime is explicitly PPSSPP-derived (`runtime/README.md`
+and `runtime/CREDITS.md`), so **no runtime code is vendored**: the toolchain,
+`sceAtrac` buffer model (`runtime/src/rt/atrac_hle.c`), savedata modes and SFO
+handling (`runtime/src/rt/savedata.c`) are behavioral references only.
+
+The project's PPSSPP automation is useful and independent of the product:
+`tools/ppsspp_ws.py` speaks PPSSPP 1.20's WebSocket debugger, `tools/drive.py`
+injects input/captures scenarios, `tools/oracle_save_dump.py` dumps loaded save
+buffers, and `tools/save_import.py` imports PPSSPP saves. The T12b PPSSPP oracle
+used `ppsspp_ws.py` out-of-tree (no file committed). Adopting any of these tools
+later requires a pin, GPL-2.0-or-later notice and a `third_party/` provenance
+entry; no code was copied into the runtime.
+
+Also useful for T13: clean-boot versus savestate oracle discipline, the
+screenshot/compare harness, and `tools/pace_test.py` for 59.94 Hz pacing.
+
+### `Tzeentchnet/MetalGearAcid2-Recomp` — GPL-2.0-or-later
+
+A Windows source-only build over `psp-recomp` (itself PPSSPP-derived), so it is
+not a portability source for Android. Behavioral references only: secure-save
+mode 4 and save import validation (`docs/FINDINGS.md`), fixed-profile benchmark
+and input-script patterns (`tools/mga2/*.pad`), xBRZ/texture-replacement and
+D3D12/Vulkan/software parity reporting, and the startup-skip UX. No code was
+adopted.

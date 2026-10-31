@@ -71,10 +71,14 @@ runtime. The user's exported saves live under gitignored `savestates/` and
 are never committed; tests copy them into a scratch root first.
 
 TC-12.5 mounts the exported SYSTEM/STORY saves, lists them, parses each
-`PARAM.SFO`, rewrites every file and compares bytes. TC-12.6 uses the
-exported `.ppst` only inside PPSSPP as an external oracle that reaches the
-save menu; the PPSSPP savestate container is not parsed here (implementing it
-would need explicit sign-off).
+`PARAM.SFO`, rewrites every file and compares bytes. TC-12.6 was run on
+PPSSPP 1.20.4 with a **clean boot** (not the supplied `.ppst`, which resumes
+before a battle and has no save menu): PPSSPP listed `ULUS10592GUN9THSYS` and
+`ULUS10592GUN9THSTORY00`, loaded the 61,888-byte STORY file and both icons,
+then did the same after the tree was rewritten by our store. Every rewritten
+file has the same SHA-256 as the export. Evidence:
+`docs/qa/2026-10-31-t12b-savedata.md`. The `.ppst` container itself is not
+parsed here; a reimplementation would need explicit sign-off.
 
 ## Named gaps
 
@@ -86,7 +90,7 @@ would need explicit sign-off).
 - On device the memory-stick root is supplied by the future Android wiring;
   the desktop runner takes `--ms`. Only host/PPSSPP interchange is verified
   today.
-- The `.ppst` oracle case is manual; there is no automated PPSSPP run.
+- The PPSSPP oracle is a manual clean-boot run; there is no CI PPSSPP run.
 
 ## Tests
 
