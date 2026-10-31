@@ -77,4 +77,9 @@ MixerStats MixerSink::stats() const {
     return stats_;
 }
 
+std::size_t MixerSink::available_frames() const {
+    std::lock_guard lock(mutex_);
+    return available_;
+}
+
 } // namespace gungnir::audio

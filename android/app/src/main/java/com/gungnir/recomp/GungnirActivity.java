@@ -49,7 +49,7 @@ public final class GungnirActivity extends SDLActivity {
 
     private static native String nativeDriverInfo();
 
-    private static native boolean nativeAudioSmoke();
+    private static native boolean nativeAudioSmoke(int durationMs);
 
     @Override
     protected String[] getLibraries() {
@@ -63,7 +63,8 @@ public final class GungnirActivity extends SDLActivity {
 
         if (getIntent().getBooleanExtra("audio_smoke", false)) {
             new Thread(() -> {
-                boolean ok = nativeAudioSmoke();
+                int durationMs = getIntent().getIntExtra("audio_smoke_ms", 500);
+                boolean ok = nativeAudioSmoke(durationMs);
                 Log.i("gungnir", "audio_smoke_result=" + ok);
             }, "audio-smoke").start();
         }

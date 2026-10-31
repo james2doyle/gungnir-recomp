@@ -36,6 +36,7 @@ void mixing_contracts() {
     MixerSink sink(16u);
     const std::vector<std::int16_t> stereo = {100, -100, 200, -200, 300, -300, 400, -400};
     check(sink.submit(buffer(stereo, 2u)), "stereo buffer accepted");
+    check(sink.available_frames() == 4u, "queued frames are visible to a producer");
     std::array<std::int16_t, 8> output{};
     check(sink.pull(output) == 4u, "pull serves the requested frames");
     check(output[0] == 100 && output[1] == -100 && output[7] == -400, "stereo bytes pass through at unity");

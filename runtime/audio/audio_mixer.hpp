@@ -34,6 +34,7 @@ public:
     void reset();
 
     [[nodiscard]] MixerStats stats() const;
+    [[nodiscard]] std::size_t available_frames() const;
     [[nodiscard]] std::size_t capacity_frames() const noexcept { return capacity_frames_; }
 
 private:

@@ -223,8 +223,9 @@ Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobj
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_gungnir_recomp_GungnirActivity_nativeAudioSmoke(JNIEnv *, jobject) {
-    const gungnir::platform::AudioSmokeResult result = gungnir::platform::run_audio_smoke();
+Java_com_gungnir_recomp_GungnirActivity_nativeAudioSmoke(JNIEnv *, jobject, jint duration_ms) {
+    const gungnir::platform::AudioSmokeResult result =
+        gungnir::platform::run_audio_smoke(static_cast<std::uint32_t>(duration_ms));
     return result.ok ? JNI_TRUE : JNI_FALSE;
 }
 
