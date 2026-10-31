@@ -118,7 +118,7 @@ still stops with `Missing HLE import …`. They are grouped as follows.
 | IoFileMgr `sceIoDread`/`sceIoIoctl` | 2 | implement with the first directory-scan/device-control use |
 | Kernel/ThreadMan/Utils/UMD small calls | 8 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI, UMD medium/waits |
 | sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); savedata SIZES is implemented |
-| ATRAC track | 6 | whole-file set (SetData/DecodeData/remain/loop) implemented in T12a; streaming calls remain counted gaps |
+| ATRAC track | 6 | whole-file prepare/decode/loop plus single-buffer streaming and buffer queries implemented in T12a |
 | SAS controls | 8 | ADSR/noise/reverb; wait for the first non-default control use |
 | sceMpeg | 24 | no movie at boot depth; decision-gated for M5/T12 |
 
