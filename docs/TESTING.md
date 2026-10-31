@@ -253,8 +253,9 @@ is `vulkan_loader_unavailable`; shutdown closes the active handle once.
 driver, a non-empty name and an API version after initialization. The Android
 system path was exercised on the x86_64 emulator, which logged
 `driver_active=system name=gfxstream (SwiftShader driver)` before the first
-frame. The arm64 phone was unavailable for this checkpoint; custom-driver
-device QA remains T10e.
+frame. The arm64 phone logged
+`driver_active=system name=Qualcomm Technologies Inc. Adreno Vulkan Driver`
+and `first frame 3063x1335`; a real custom driver remains T10e.
 
 `tests/test_driver_store.py` compiles `DriverStore.java` and its plain-JVM
 harness, then checks the installed-driver listing from `package.properties`,
@@ -263,6 +264,8 @@ nativeLibraryDir hooks and tmp dir), system-selection deletion, invalid-id
 refusal, recursive delete and drop-folder discovery. The emulator UI was
 exercised over adb: the Drivers button opened the dialog, which reported
 `Custom drivers require arm64-v8a. This device uses the system driver.`,
-while logcat still showed `driver_active=system` and the first frame. The
-arm64 phone was unavailable for the UI checkpoint; custom-driver device QA is
-T10e.
+while logcat still showed `driver_active=system` and the first frame. On the
+arm64 phone the dialog listed the system driver plus a synthetic imported
+package; selecting it produced `driver_fallback: driver_load_failed` and the
+system frame, SAF import reported `driver_import_ok`, and delete restored
+system. A real Turnip driver remains T10e.

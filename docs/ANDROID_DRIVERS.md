@@ -243,8 +243,10 @@ are covered by the ordinary build-output rules.
   its already-created instance.
 - Drop-folder imports are scanned at startup only, not while the dialog is
   open.
-- The arm64 phone was not available for the T10d UI checkpoint; the x86_64
-  emulator exercised the system-only dialog. Custom-driver device QA is T10e.
+- The arm64 phone exercised import/select/fallback/delete with a synthetic
+  package; a real Turnip driver load is still T10e.
+- The dialog list needed a single-choice list layout; the first build's
+  `setMessage` + `setItems` combination hid the rows. Fixed and re-verified.
 
 ## References
 
