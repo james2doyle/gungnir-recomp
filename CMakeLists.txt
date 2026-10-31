@@ -91,6 +91,44 @@ target_link_libraries(ge_software_tests PRIVATE gungnir_ge)
 set_target_properties(ge_software_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
+# --- Post-processing chain (T7g) ------------------------------------------
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(JSONC QUIET IMPORTED_TARGET json-c)
+endif()
+if(JSONC_FOUND)
+    add_library(gungnir_post STATIC runtime/post/post.cpp)
+    target_include_directories(gungnir_post PUBLIC runtime)
+    target_link_libraries(gungnir_post PUBLIC PkgConfig::JSONC)
+
+    add_executable(post_tests tests/post/post_tests.cpp)
+    target_link_libraries(post_tests PRIVATE gungnir_post)
+    set_target_properties(post_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/post)
+
+    find_program(POST_GLSL_COMPILER NAMES glslc)
+    if(POST_GLSL_COMPILER)
+        set(POST_SHADER_DIR ${CMAKE_BINARY_DIR}/shaders/post)
+        set(POST_SHADER_SOURCES
+            fullscreen.vert integer_scale.frag fsr_lite.frag scanlines.frag lcd_grid.frag)
+        set(POST_SHADER_SPV)
+        foreach(shader ${POST_SHADER_SOURCES})
+            get_filename_component(shader_name ${shader} NAME)
+            set(output ${POST_SHADER_DIR}/${shader_name}.spv)
+            add_custom_command(
+                OUTPUT ${output}
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${POST_SHADER_DIR}
+                COMMAND ${POST_GLSL_COMPILER} --target-env=vulkan1.1
+                        ${CMAKE_SOURCE_DIR}/assets/shaders/post/${shader} -o ${output}
+                DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/post/${shader}
+                VERBATIM)
+            list(APPEND POST_SHADER_SPV ${output})
+        endforeach()
+        add_custom_target(post_shaders DEPENDS ${POST_SHADER_SPV})
+        add_dependencies(post_tests post_shaders)
+    endif()
+endif()
+
 # --- Vulkan GE backend (T7e) ----------------------------------------------
 find_package(Python3 COMPONENTS Interpreter)
 find_package(Vulkan QUIET)
