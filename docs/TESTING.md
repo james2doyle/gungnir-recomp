@@ -140,3 +140,11 @@ and checks the renderer/shader documents. Synthetic fixtures only.
 Mutation evidence and the remaining named gaps (full GE state machine -> draw
 path wiring, DXT textures, Vulkan post passes, Android presentation,
 validation-layer availability) are recorded in `docs/RENDERER.md`.
+
+## Texture container gates (T8)
+
+`tests/test_tpl.py` builds and runs `tex_tpl_tests`: synthetic TPL containers
+(no game bytes) covering CLUT4 alpha ramps, RGB565 palettes, CLUT8 palettes,
+odd widths, multi-texture containers, counted auxiliary resources and named
+malformed-input failures. `docs/formats/TPL.md` records the layout and the one local named gap
+(`debugFont.tpl`, pixel format `0x0108`). T8f consolidates TC-8.1–TC-8.4.

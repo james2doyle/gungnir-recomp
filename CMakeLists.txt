@@ -91,6 +91,16 @@ target_link_libraries(ge_software_tests PRIVATE gungnir_ge)
 set_target_properties(ge_software_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
+# --- Texture containers (T8a) ---------------------------------------------
+add_library(gungnir_tex STATIC runtime/tex/tpl.cpp)
+target_include_directories(gungnir_tex PUBLIC runtime)
+target_link_libraries(gungnir_tex PUBLIC gungnir_ge)
+
+add_executable(tex_tpl_tests tests/tex/tpl_tests.cpp)
+target_link_libraries(tex_tpl_tests PRIVATE gungnir_tex)
+set_target_properties(tex_tpl_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tex)
+
 # --- Post-processing chain (T7g) ------------------------------------------
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)

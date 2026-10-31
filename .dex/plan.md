@@ -214,7 +214,7 @@ records what it used.
 - TC-8.3 2x/4x font atlas renders a fixed test string without glyph collisions; width-table regen passes ink-width assertions.
 - TC-8.4 Swizzle edge cases: odd widths, multi-texture containers (`n_tex > 1`), `bpp=4` alpha ramp and `bpp=5` CLUT decode.
 **Docs checkpoint:** `docs/formats/TPL.md`, `docs/formats/DAR.md` (from T3 knowledge), `docs/TEXTURE_REPLACEMENT.md` (user guide: dump layout, naming, scaling rules).
-**Refs:** gungnir-ptbr (TPL/DAR/font metric facts, round-trip proof discipline), sal063 (`pgf.c` parser reference for future sceLibFont), psprism/Yakumo (texture-cache + replacement precedents), psprecore (texture collection/replacement matching and HD layering — MIT).
+**Refs:** gungnir-ptbr (TPL/DAR/font metric facts, round-trip proof discipline), sal063 (`pgf.c` parser reference for future sceLibFont), psprism/Yakumo (texture-cache + replacement precedents), psprecore (texture collection/replacement matching and HD layering — MIT), marco-calautti/Rainbow (`TPLTexture.Serializer.cs`: multi-image table and named-error structure for the separate Nintendo TPL format — not the Gungnir PSP variant), LiinkPK/Texture-Replacement-Tool-for-PPSSPP (replacement-pack management and `textures.ini` UX; binary-only, no source adopted), PPSSPP PR #8715 + wiki (textures.ini sections, `[options]`, `[hashes]`, `[hashranges]`, hash behavior for T8c/T8d).
 **Gotchas:** §7B.2–B.4, §7F (font width collision, baked-in text).
 
 ### T9 — Android app shell + adb deployment
