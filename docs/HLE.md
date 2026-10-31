@@ -48,6 +48,7 @@ cross-library alias path, and a bound handler invocation.
 | sceAudio output channels (T6f boot discoveries) | VERIFIED | reserve/release, blocking and non-blocking single/panned output, both rest-length calls, data length, config and volume with the hardware check order; one buffer per channel, one parked waiter, 44.1 kHz virtual drain; explicit host sink seam (the boot runner records buffers) |
 | sceSasCore (T6g boot discoveries) | VERIFIED | MIT Yakumo VAG/ADPCM software mixer (32 voices, pitch, volume, simple ADSR, pause, grain/output mode, end flag, envelope heights); init validation and hand-computed VAG grain contract; reverb/ATRAC3/noise voices remain unbound and stop loudly |
 | sceAtrac3plus (T6h boot discoveries) | VERIFIED (ID lifecycle) | GetAtracID/Release with AT3 (0x1001) and AT3+ (0x1000) codec types; the FFmpeg n4.4 ATRAC3/3+ decoder subset is vendored with a public 4,149-check self-test. Track parse/decode handlers are added only as the title executes them; no decode call has run at this depth |
+| Async IoFileMgr (T6i boot discoveries) | VERIFIED | Open/read/write/lseek/close async variants plus poll, wait, waitCB and getAsyncStat; host I/O completes synchronously but the result is staged per descriptor and delivered only by Wait/Poll/GetAsyncStat, with one outstanding operation and kernel error codes. `sceIoLseek32Async` is covered too |
 | LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
@@ -65,8 +66,8 @@ dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
 |---|---:|
 | Module / entry | `9th`, `0x08972544` |
 | Load base / image end | `0x08804000` / `0x08B37DCC` |
-| Bound imports at this boot depth | 148 / 215 |
-| Executed imports | 77 (all bound) |
+| Bound imports at this boot depth | 154 / 215 |
+| Executed imports | 82 (all bound) |
 | Missing / silent NIDs | 0 |
 | First real flip | `0x04088000`, width 512, format 3 |
 
@@ -77,27 +78,28 @@ import and stop fields (TC-6.4).
 
 Deeper execution (after four vblanks) passes the former VFPU gap (T5a) and the
 ThreadMan object gap (T6e). The corpus contains no unlowered VFPU words, and
-every import executed at this depth is bound. The run now reaches 25,546
-dispatches, 15 vblanks and 17 flips, 148/215 imports bound and 77 executed,
+every import executed at this depth is bound. The run now reaches 26,058
+dispatches, 21 vblanks and 19 flips, 154/215 imports bound and 82 executed,
 with zero missing or silent NIDs. The executed set includes `__sceSasInit`,
-`__sceSasCore`, `sceAudioOutputPannedBlocking` and `sceAtracGetAtracID`, so
-the synth, output and ATRAC object paths ran. The next blocker is asynchronous
-file I/O: `Missing HLE import IoFileMgrForUser::sceIoLseekAsync
-(NID_0x71B19E77)`. Details are in `BRINGUP.md`.
+`__sceSasCore`, `sceAudioOutputPannedBlocking`, `sceAtracGetAtracID` and the
+async I/O path (`sceIoLseekAsync`, `sceIoReadAsync`, `sceIoPollAsync`), so the
+synth, output, ATRAC object and streaming-read paths ran. The next blocker is
+savedata: `Missing HLE import sceUtility::sceUtilitySavedataInitStart
+(NID_0x50C4CD57)`. Details are in `BRINGUP.md`.
 
 ## Remaining T6 boot-depth work (2026-10-30)
 
-Of the 215 imports in the main module, 148 are bound and 77 have executed at
-the current stop. The 67 unbound calls cluster into these workstreams; each is
+Of the 215 imports in the main module, 154 are bound and 82 have executed at
+the current stop. The 61 unbound calls cluster into these workstreams; each is
 implemented only when the bounded boot actually executes it, and anything that
 never executes before the T6 gate is closed as a counted gap rather than a
 stub:
 
 | Workstream | Imports | Trigger |
 |---|---:|---|
-| Async IoFileMgr | 8 | current stop: `sceIoLseekAsync`; lseek/read/write/open/close/poll/waitCB/Dread |
+| IoFileMgr `Dread`/`Ioctl` | 2 | first directory scan or device control call |
 | Kernel, ThreadMan and UMD small calls | 8 | `WaitEventFlagCB`, `KernelMemcpy`, profiler, GPI, UMD medium/waits |
-| sceUtility | 13 | MsgDialog, Savedata and GamedataInstall state machines |
+| sceUtility | 13 | current stop: savedata init; MsgDialog, GamedataInstall state machines |
 | ATRAC track | 6 | first BGM decode: SetData, DecodeData, streaming, loop, remain |
 | SAS controls | 8 | ADSR/mode/SL, noise and reverb controls |
 | sceMpeg | 24 | only if a movie plays before the T6 gate (H.264 surface) |
@@ -173,7 +175,10 @@ The kernel/HLE design is adopted from TeamGDB/Yakumo (MIT, pinned
 - a blocked waiter resumed by a signal;
 - VTimer expiry delivered through the interrupt path;
 - `disc0:/PSP_GAME/PARAM.SFO` open/read/close and a memory-stick
-  create/write/close/reopen round-trip.
+  create/write/close/reopen round-trip;
+- async `open`/`read`/`lseek`/`close` staging through Wait/Poll/GetAsyncStat,
+  the one-outstanding-operation busy error, failure results, and the
+  no-async/closed-descriptor errors.
 
 Pacing is disabled in unit fixtures (`Kernel::set_pacing_enabled(false)`) so
 two runs see identical virtual time; interactive boots keep 59.94 Hz pacing.

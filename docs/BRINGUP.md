@@ -433,3 +433,52 @@ has not asked for track data or decode at this depth.
 **Next blocker (asynchronous I/O).** The run stops at
 `Missing HLE import IoFileMgrForUser::sceIoLseekAsync (NID_0x71B19E77)`;
 async completion for the IO manager is the next boot-depth task (T6i).
+
+## 2026-10-30 — T6i: asynchronous IoFileMgr completion
+
+**Symptom.** After T6h the deeper boot stopped at
+`Missing HLE import IoFileMgrForUser::sceIoLseekAsync (NID_0x71B19E77)` after
+25,546 dispatches.
+
+**Reference review.** Code search for `IoFileMgrForUser` (the discovery step
+now recorded in AGENTS.md) found PPSSPP's async I/O implementation and its
+regression history (#12549, #12506, #136, #153), snuri00/psp-web-recomp's MIT
+static-recompiler `profile/host/io.cpp`, and psce4all/psprism's generated
+stub tables. PPSSPP defines the contract: `sceIoOpenAsync` returns a
+descriptor immediately; every async operation stages a 64-bit result that
+only Wait/Poll/GetAsyncStat makes visible; the descriptor stays busy until
+the result is collected; close defers descriptor release to that collection.
+psp-web-recomp independently confirms the wait/poll/close staging but
+completes inline, which is the model used here.
+
+**Root cause.** The IoFileMgr surface was synchronous-only. `sceIoOpen`,
+`sceIoRead`, `sceIoLseek` and `sceIoClose` existed, but the async family was
+unbound, and there was no per-descriptor result state or wait/poll path.
+
+**Fix.** `runtime/hle/hle_io.cpp` now stages async results per `OpenFile`:
+open/read/write/lseek/close set a result and mark the descriptor busy;
+`sceIoWaitAsync`, `sceIoWaitAsyncCB`, `sceIoPollAsync` and
+`sceIoGetAsyncStat` collect it and release a pending close. Host I/O is
+synchronous, so the result is ready at the initiating call; there is no
+sleep or wall-clock delay, and the pending branch still waits through the
+kernel's host-wait seam for a future backend that completes later. Failed
+async opens allocate a descriptor, return the error through Wait, and release
+it on collection. Busy, no-async, closed-descriptor and bad-whence errors use
+the kernel codes. `register_io` now clears the descriptor table so fixtures
+start clean.
+
+**Evidence.** Red-first `async_io_contracts` in `tests/hle/kernel_tests.cpp`
+failed at "async open returns a descriptor immediately" before the handlers
+were bound. It now covers open/read/lseek/close staging, poll and
+getAsyncStat, waitCB, the busy error, a failed open, missing-async and
+closed-descriptor errors, and invalid whence. The bounded boot advances to
+26,058 dispatches, 21 vblanks and 19 flips with 154/215 imports bound and 82
+executed, zero missing or silent NIDs. The executed async calls at this depth
+are `sceIoLseekAsync`, `sceIoReadAsync` and `sceIoPollAsync`;
+`sceIoOpenAsync`/`WaitAsync` are bound and tested but not executed by this
+title yet. `sceIoDread` and `sceIoIoctl` remain unbound and are recorded as
+the two remaining IoFileMgr gaps for the T6 closure audit.
+
+**Next blocker (savedata).** The run stops at
+`Missing HLE import sceUtility::sceUtilitySavedataInitStart
+(NID_0x50C4CD57)`, the first utility state-machine call.

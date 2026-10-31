@@ -92,7 +92,9 @@ skips when the private disc is absent; it never passes silently.
   unbound import stops with `Missing HLE import … (NID_0x…)`, never a silent
   zero. `tests/hle/kernel_tests.cpp` covers memory partitions, thread
   lifecycle/preemption/delay, semaphores, event flags, blocking waits, VTimer
-  interrupts, VPLs, lightweight mutexes, and ISO disc + memory-stick IO.
+  interrupts, VPLs, lightweight mutexes, ISO disc + memory-stick IO, and async
+  open/read/lseek/close staging through Wait/Poll/GetAsyncStat (busy, failure,
+  no-async, closed-descriptor and bad-whence errors).
   `tests/hle/media_tests.cpp` covers display mode/flip/vblank/multi-wait/
   frame-rate, controller sampling and vblank-blocking reads, GE callback and
   list completion, EDRAM, and the RTC tick. `tests/hle/module_tests.cpp`

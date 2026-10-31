@@ -748,6 +748,77 @@ void io_contracts(const std::filesystem::path &iso, const std::filesystem::path 
           "memory-stick file reopens");
 }
 
+
+void async_io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
+    Fixture f(test_nids_path(), iso, memory_stick);
+    auto &mem = f.runtime.memory();
+    const auto io = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("IoFileMgrForUser", name, args);
+    };
+    constexpr std::uint32_t kResult = Fixture::kOutput + 0x200u;
+    constexpr std::uint32_t kAsyncBusy = 0x80020329u;
+    constexpr std::uint32_t kNoAsync = 0x8002032Au;
+    constexpr std::uint32_t kKernelBadFd = 0x80020323u;
+
+    f.write_string(Fixture::kText, "disc0:/PSP_GAME/PARAM.SFO");
+    const std::uint32_t fd = io("sceIoOpenAsync", {Fixture::kText, 1u, 0u});
+    check(fd > 2u, "async open returns a descriptor immediately");
+    check(io("sceIoWaitAsync", {fd, kResult}) == 0u, "async open wait completes");
+    check(mem.load32(kResult) == fd && mem.load32(kResult + 4u) == 0u,
+          "async open result is the descriptor");
+
+    check(io("sceIoReadAsync", {fd, Fixture::kOutput, 4u}) == 0u, "async read starts");
+    check(io("sceIoPollAsync", {fd, kResult}) == 0u, "async poll completes the read");
+    check(mem.load32(kResult) == 4u, "async read reports four bytes");
+    check(mem.load32(Fixture::kOutput) == 0x46535000u, "async read copied the PARAM.SFO magic");
+
+    check(io("sceIoLseekAsync", {fd, 0u, 4u, 0u, 0u}) == 0u, "async seek starts");
+    check(io("sceIoWaitAsync", {fd, kResult}) == 0u, "async seek wait completes");
+    check(mem.load32(kResult) == 4u && mem.load32(kResult + 4u) == 0u, "async seek result is the offset");
+
+    check(io("sceIoReadAsync", {fd, Fixture::kOutput, 4u}) == 0u, "second async read starts");
+    check(io("sceIoReadAsync", {fd, Fixture::kOutput, 4u}) == kAsyncBusy, "busy async op is rejected");
+    check(io("sceIoWaitAsync", {fd, kResult}) == 0u, "busy read still completes");
+
+    check(io("sceIoCloseAsync", {fd}) == 0u, "async close starts");
+    check(io("sceIoWaitAsync", {fd, kResult}) == 0u, "async close wait completes");
+    check(mem.load32(kResult) == 0u, "async close result is zero");
+    check(io("sceIoWaitAsync", {fd, kResult}) == kKernelBadFd, "closed descriptor is rejected");
+
+    f.write_string(Fixture::kText, "disc0:/PSP_GAME/missing.bin");
+    const std::uint32_t missing = io("sceIoOpenAsync", {Fixture::kText, 1u, 0u});
+    check(missing > 2u, "failed async open still returns a descriptor");
+    check(io("sceIoWaitAsync", {missing, kResult}) == 0u, "failed open wait completes");
+    check(mem.load32(kResult) == 0x80010002u, "failed open result is file-not-found");
+    check(io("sceIoWaitAsync", {missing, kResult}) == kKernelBadFd, "failed descriptor is released");
+
+    f.write_string(Fixture::kText, "ms0:/async-test.bin");
+    const std::uint32_t sync_fd = io("sceIoOpen", {Fixture::kText, 0x0602u, 0u});
+    check(io("sceIoPollAsync", {sync_fd, kResult}) == kNoAsync, "poll without async reports NOASYNC");
+    check(io("sceIoWaitAsync", {sync_fd, kResult}) == kNoAsync, "wait without async reports NOASYNC");
+    check(io("sceIoClose", {sync_fd}) == 0u, "sync descriptor closes");
+
+    const std::uint32_t cb_fd = io("sceIoOpenAsync", {Fixture::kText, 0x0602u, 0u});
+    check(cb_fd > 2u, "waitCB open returns a descriptor");
+    check(io("sceIoWaitAsyncCB", {cb_fd, kResult}) == 0u, "waitCB completes");
+    check(mem.load32(kResult) == cb_fd, "waitCB result is the descriptor");
+    check(io("sceIoClose", {cb_fd}) == 0u, "waitCB descriptor closes");
+
+    const std::uint32_t stat_fd = io("sceIoOpenAsync", {Fixture::kText, 0x0602u, 0u});
+    check(io("sceIoGetAsyncStat", {stat_fd, 0u, kResult}) == 0u, "getAsyncStat waits and completes");
+    check(mem.load32(kResult) == stat_fd, "getAsyncStat result is the descriptor");
+    check(io("sceIoClose", {stat_fd}) == 0u, "stat descriptor closes");
+
+    check(io("sceIoPollAsync", {0xFFFFu, kResult}) == kKernelBadFd, "invalid descriptor poll is rejected");
+    check(io("sceIoReadAsync", {0xFFFFu, Fixture::kOutput, 4u}) == kKernelBadFd,
+          "invalid descriptor read is rejected");
+
+    const std::uint32_t seek_fd = io("sceIoOpenAsync", {Fixture::kText, 0x0602u, 0u});
+    check(io("sceIoWaitAsync", {seek_fd, kResult}) == 0u, "seek fixture open completes");
+    check(io("sceIoLseekAsync", {seek_fd, 0u, 0u, 0u, 9u}) == 0x80010016u, "bad whence is rejected");
+    check(io("sceIoClose", {seek_fd}) == 0u, "seek fixture closes");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -783,6 +854,7 @@ int main(int argc, char **argv) {
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);
             io_contracts(iso, memory_stick);
+            async_io_contracts(iso, memory_stick);
         }
         std::cout << "hle_kernel_tests: OK\n";
         return 0;

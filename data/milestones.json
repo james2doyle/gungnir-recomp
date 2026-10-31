@@ -101,8 +101,8 @@
         "GE fixtures pass on Vulkan (T7)"
       ],
       "evidence": {
-        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 148/215 imports bound at boot depth, 77 executed all bound, zero missing/silent NIDs, first presentable frame buffer 0x04088000 512x272 format 3; VFPU, ThreadMan, sceAudio, SAS and ATRAC object gaps fixed, deeper run now stops at sceIoLseekAsync after 25,546 dispatches (17 flips)",
-        "tests": "63 tests green; tests/test_boot.py (TC-6.2 first flip, TC-6.4 identical bounded reports), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp",
+        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 154/215 imports bound at boot depth, 82 executed all bound, zero missing/silent NIDs, first presentable frame buffer 0x04088000 512x272 format 3; VFPU, ThreadMan, sceAudio, SAS, ATRAC object and async IoFileMgr gaps fixed, deeper run now stops at sceUtilitySavedataInitStart after 26,058 dispatches (19 flips)",
+        "tests": "64 tests green; tests/test_boot.py (TC-6.2 first flip, TC-6.4 identical bounded reports), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp, tests/hle/kernel_tests.cpp async IoFileMgr contracts",
         "gates": [
           "tools/repository_check.py PASS (101 files, 17 ignore probes)",
           "tools/deps.py verify OK (yakumo-framework-subset @ b61852af, pspsdk-nids @ c3da4314)"
@@ -127,8 +127,9 @@
       ],
       "open": [
         "T7 Vulkan GE renderer + GE fixtures (required to close M3)",
-        "deeper boot past the asynchronous I/O gap at sceIoLseekAsync (NID_0x71B19E77), tracked as T6i",
-        "ATRAC track parse/decode handlers when the title starts decoding (decoder is vendored and self-tested)"
+        "deeper boot past the savedata gap at sceUtilitySavedataInitStart (NID_0x50C4CD57), tracked as T6k",
+        "ATRAC track parse/decode handlers when the title starts decoding (decoder is vendored and self-tested)",
+        "IoFileMgr sceIoDread/sceIoIoctl remain unbound; record as counted gaps if the title does not execute them before the T6 gate"
       ]
     },
     "M4": {
