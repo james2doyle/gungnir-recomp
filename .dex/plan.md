@@ -246,15 +246,15 @@ records what it used.
 
 ### T11 — Input + haptics
 **Depends on:** T9 (T6 for sceCtrl surface)
-**Work:** `runtime/input/` + `runtime/haptics/`: (1) touch overlay — floating analog stick, d-pad, face buttons, L/R, START/SELECT, editable drag/resize layout persisted as JSON (independent implementation; behavioral inspiration from reVC/Vita3K layouts only — **no GPL code**); (2) gamepad backend (SDL3 gamepad API, Android defaults + per-device profile JSON in `assets/input_profiles/` for Ayn/Ayaneo-class built-in controllers; remap UI; overlay hides while pad active); (3) keyboard/mouse for desktop dev; (4) haptics: SDL gamepad rumble + Android `Vibrator`/`VibrationEffect` (API 26+) fallback, driven by sceRumble-class events surfaced through HLE (Gungnir's actual rumble usage discovered during T6 bring-up).
+**Work:** `runtime/input/` + `runtime/haptics/`: (1) touch overlay — floating analog stick, d-pad, face buttons, L/R, START/SELECT, editable drag/resize layout persisted as JSON (independent implementation; behavioral inspiration from reVC/Vita3K layouts only — **no GPL code**); each button/d-pad touch-down fires one short haptic tick through Android `VibratorManager`/`Vibrator` + `VibrationEffect` (API 26+), the analog stick and overlay drag/resize stay silent, and the system touch-haptics setting is respected; (2) gamepad backend (SDL3 gamepad API, Android defaults + per-device profile JSON in `assets/input_profiles/` for Ayn/Ayaneo-class built-in controllers; remap UI; overlay hides while pad active); (3) keyboard/mouse for desktop dev; (4) haptics: **touch-control feedback only in T11**. No-op when haptics are disabled or the device has no vibrator; a failed vibration never blocks input. Physical gamepad rumble may be plumbed through SDL3 but is not driven by Gungnir yet. `sceRumble`-class game/battle haptics are deferred to T13/M5 after bring-up discovers the title's actual usage.
 **Test cases:**
 - TC-11.1 Input unit tests: physical events → sceCtrl bitmask/analog mapping table.
 - TC-11.2 On-device: touch overlay navigates the synthetic fixture; paired gamepad navigates the same; overlay hides when pad active.
-- TC-11.3 Rumble test HLE call fires pad rumble and phone vibration on their respective paths.
+- TC-11.3 Touch haptics: host policy tests prove a button/d-pad down requests exactly one short tick while stick movement, drag/resize and release request none; disabled or absent vibrator is a no-op; on the physical phone each touch control press produces a short tick and input still works. The x86_64 emulator has no vibrator, so it only proves the no-op path. Gamepad rumble and battle haptics are not T11 acceptance.
 - TC-11.4 Profile round-trip: remap → save JSON → reload → identical binding.
-**Docs checkpoint:** `docs/INPUT.md` (overlay editor, profiles, key maps, haptics notes).
-**Refs:** codepdbh/alexandercorp (touch UX behaviors — reimplement), Yakumo (`touch_controls`/`touch_editor`), SDL3 docs (gamepad/rumble).
-**Gotchas:** §7E.8 (GPL-tainted UX lineage), §7F.6 (Gungnir rumble unknowns).
+**Docs checkpoint:** `docs/INPUT.md` (overlay editor, profiles, key maps, touch-haptics behavior, system-setting fallback, and the deferred battle-rumble note).
+**Refs:** codepdbh/alexandercorp (touch UX behaviors — reimplement), Yakumo (`touch_controls`/`touch_editor`), SDL3 docs (gamepad/rumble), Android `VibratorManager`/`VibrationEffect` docs.
+**Gotchas:** §7E.8 (GPL-tainted UX lineage), §7F.6 (Gungnir rumble unknowns; touch haptics land in T11, battle mapping later).
 
 ### T12 — Audio + savedata + DAR asset support
 **Depends on:** T6
@@ -351,7 +351,7 @@ Milestone discipline (hst-decomp ratchet): every milestone is *measured*, record
 3. Dialog text = TPL font atlases with ink-width metrics (regenerating widths wrong causes collisions/clipping); UI text baked into TPL images needs image replacement, not font work — hence two-front text upscaling (T8).
 4. TPL `bpp=5` CLUT layout is unmapped even in the ptbr tooling (grayscale only) — expected to matter little for text but must be decoded for correctness.
 5. Audio decode quirk seen in PPSSPP logs (one reported error) — watch ATRAC edge cases in T12 soak tests.
-6. Rumble: Gungnir's actual sceRumble-class usage is unknown until bring-up; haptics plumbing lands generic in T11, Gungnir mapping in T13/M5.
+6. Rumble: T11 lands **touch-control haptics** only (one short tick per button/d-pad touch-down; stick and drag/resize silent; system setting respected). Gungnir's actual sceRumble-class usage is unknown until bring-up; game/battle haptics and Gungnir mapping are T13/M5.
 7. PPSSPP is the behavioral oracle (Perfect→Playable) — used for **diffing only, never linked or vendored** (sp00nznet's rule).
 
 ## 8. Cross-cutting test strategy
@@ -380,7 +380,7 @@ Automated tests never close a device-facing milestone. Manual QA is a structured
 
 - **QA matrix per device-facing milestone (M4/M5):** at minimum one **Adreno** device (for driver-loader validation) and one **non-Adreno or handheld** device (Ayn/Ayaneo-class where possible) + the x86_64 emulator. Each cell records: device model, Android version, GPU/driver (system or custom zip + version), build ID (git SHA), date, tester.
 - **Emulator vs device:** emulators are fine during initial feature bring-up and fast iteration, but never close a device-facing feature sprint. Physical-device manual QA is required at sprint end; emulator evidence supplements it. Start the reproducible x86_64 emulator with `scripts/android/emulator.sh` (AVD `gungnir`, port 5554, headless SwiftShader, `-no-snapshot -wipe-data -no-audio -no-boot-anim -netdelay none -netspeed full`); `-wipe-data` resets the AVD, so re-push user data.
-- **Standard QA script** (`docs/QA.md`, kept current): cold boot to title; menu navigation via touch; menu navigation via gamepad (paired + built-in handheld controller); overlay hide-on-pad; suspend/resume (background/foreground) rendering recovery; rotation ignored; save/load if enabled; rumble feedback; audio smoke; 30-minute soak for crashes/thermal. T13 adds the Gungnir-specific script: title → menu → first gameplay transition.
+- **Standard QA script** (`docs/QA.md`, kept current): cold boot to title; menu navigation via touch; menu navigation via gamepad (paired + built-in handheld controller); overlay hide-on-pad; suspend/resume (background/foreground) rendering recovery; rotation ignored; save/load if enabled; touch-control haptic tick on the phone and no-op on the emulator; battle/game rumble if enabled later; audio smoke; 30-minute soak for crashes/thermal. T13 adds the Gungnir-specific script: title → menu → first gameplay transition.
 - **Red-first applies to QA findings too:** a device bug becomes a reproducible case (steps, build, device) and, wherever host-testable, a red test before the fix.
 - **Evidence:** QA reports live in `docs/qa/` (markdown, one file per session, dated) with **counts and pass/fail only** — no game screenshots in-repo; screenshot hashes recorded instead (images stay in gitignored `build/qa/`).
 - **Sign-off:** M4 and M5 close only with an accepted QA report per device in the matrix. "Works on my machine once" is not evidence; "CI is green" is not evidence; three consecutive cold boots on each device are.
