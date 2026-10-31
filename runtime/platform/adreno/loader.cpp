@@ -7,6 +7,7 @@
 #include <vector>
 
 #if defined(__ANDROID__)
+#include <android/log.h>
 #include <dlfcn.h>
 #include <volk.h>
 #elif defined(_WIN32)
@@ -17,6 +18,7 @@
 
 #if defined(GUNGNIR_HAVE_ADRENOTOOLS) && GUNGNIR_HAVE_ADRENOTOOLS
 #include <adrenotools/driver.h>
+extern "C" bool linkernsbypass_load_status();
 #endif
 
 namespace gungnir::platform {
@@ -53,7 +55,13 @@ void default_close(void *handle) {
 
 void *default_open_custom(const VulkanDriverSelection &selection) {
 #if defined(GUNGNIR_HAVE_ADRENOTOOLS) && GUNGNIR_HAVE_ADRENOTOOLS
-    return adrenotools_open_libvulkan(
+#if defined(__ANDROID__)
+    if (!linkernsbypass_load_status()) {
+        __android_log_print(ANDROID_LOG_ERROR, "gungnir",
+                            "driver_linkernsbypass_unavailable\n");
+    }
+#endif
+    void *handle = adrenotools_open_libvulkan(
         RTLD_NOW | RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM,
         selection.tmp_lib_dir.empty() ? nullptr : selection.tmp_lib_dir.c_str(),
         selection.hook_lib_dir.c_str(), selection.custom_driver_dir.c_str(),
@@ -61,6 +69,13 @@ void *default_open_custom(const VulkanDriverSelection &selection) {
         selection.file_redirect_dir.empty() ? nullptr
                                             : selection.file_redirect_dir.c_str(),
         nullptr);
+#if defined(__ANDROID__)
+    if (handle == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, "gungnir",
+                            "driver_custom_open_failed\n");
+    }
+#endif
+    return handle;
 #else
     (void)selection;
     return nullptr;
@@ -133,17 +148,25 @@ VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selecti
         } else if (!resolved.open_custom) {
             custom_error = "driver_abi_unsupported";
         } else {
-            custom_error = resolved.check_driver_dir(selection.custom_driver_dir);
+            VulkanDriverSelection active = selection;
+            if (!active.custom_driver_dir.empty() && active.custom_driver_dir.back() != '/') {
+                active.custom_driver_dir.push_back('/');
+            }
+            custom_error = resolved.check_driver_dir(active.custom_driver_dir);
             if (custom_error.empty()) {
-                custom_error = resolved.check_hook_dir(selection.hook_lib_dir);
+                custom_error = resolved.check_hook_dir(active.hook_lib_dir);
             }
             if (custom_error.empty()) {
-                void *handle = resolved.open_custom(selection);
+                void *handle = resolved.open_custom(active);
                 if (handle == nullptr) {
                     custom_error = "driver_load_failed";
                 } else {
                     void *symbol = resolved.symbol(handle, "vkGetInstanceProcAddr");
                     if (symbol == nullptr) {
+#if defined(__ANDROID__)
+                        __android_log_print(ANDROID_LOG_ERROR, "gungnir",
+                                            "driver_custom_symbol_missing\n");
+#endif
                         resolved.close(handle);
                         custom_error = "driver_load_failed";
                     } else {

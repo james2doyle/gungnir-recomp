@@ -165,6 +165,9 @@ void custom_path() {
                 "selection is forwarded");
     check_equal(recorder.last_selection.hook_lib_dir, selection.hook_lib_dir,
                 "hook dir is forwarded");
+    check_equal(recorder.last_selection.custom_driver_dir,
+                selection.custom_driver_dir + "/",
+                "custom driver dir has the trailing slash libadrenotools requires");
 
     Recorder fallback;
     const VulkanLoaderResult fell_back =

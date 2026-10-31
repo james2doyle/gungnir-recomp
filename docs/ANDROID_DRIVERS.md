@@ -96,14 +96,19 @@ instance exists. The system path tries `libvulkan.so.1`, then `libvulkan.so`
 (Windows: `vulkan-1.dll`; macOS: the MoltenVK names) and never calls the
 custom opener. Before calling libadrenotools it verifies that the private
 driver directory is readable and that `nativeLibraryDir` contains all four
-hook libraries (`driver_storage_unavailable` / `driver_hook_library_missing`),
-then calls
+hook libraries (`driver_storage_unavailable` / `driver_hook_library_missing`).
+`driver_dir` in the selection file has no trailing slash; the loader appends
+one because libadrenotools concatenates the directory and soname directly.
+The custom path then calls
 `adrenotools_open_libvulkan(RTLD_NOW|RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM,
 tmpLibDir, nativeLibraryDir, privateDriverDir, soname, nullptr, nullptr)` and
 uses the returned `vkGetInstanceProcAddr`. If the custom path fails, the
 requested error is retained and the system loader is opened instead; the app
 logs `driver_fallback: <named error>` and boots on the system driver. No
-Vulkan instance is created while the driver choice is unresolved.
+Vulkan instance is created while the driver choice is unresolved. Android
+diagnostics distinguish the stages: `driver_linkernsbypass_unavailable`
+(linker bypass failed), `driver_custom_open_failed` (libadrenotools returned
+null) and `driver_custom_symbol_missing` (no `vkGetInstanceProcAddr`).
 
 Android arm64 uses the vendored Volk table for both paths; `volkLoadInstance`
 and `volkLoadDevice` populate the entry points after creation. Desktop builds
@@ -240,16 +245,16 @@ output, not drivers, and are covered by the ordinary build-output rules.
 - ADPKG packages are not accepted.
 - 32-bit and x86_64 custom drivers are not supported.
 - API 26–27 devices are system-only.
-- Only Mesa Turnip-style packages have been exercised; Qualcomm packages with
-  a different layout may be rejected.
+- Mesa Turnip (Rutabaga-26.10.10) and one Qualcomm v863.1 package have been
+  exercised. Other package layouts may still be rejected.
 - No driver auto-update, repository browser or signature verification.
 - File redirect and BCn toggles are not exposed.
 - Selecting a driver requires restarting the app; the current session keeps
   its already-created instance.
 - Drop-folder imports are scanned at startup only, not while the dialog is
   open.
-- The arm64 phone exercised import/select/fallback/delete with a synthetic
-  package; a real Turnip driver load is still T10e.
+- The arm64 phone loads a real Rutabaga/Turnip package through libadrenotools
+  and reports `rutabaga Mesa driver` / Mesa 26.3.0-devel; v863.1 also loaded.
 - The dialog list needed a single-choice list layout; the first build's
   `setMessage` + `setItems` combination hid the rows. Fixed and re-verified.
 

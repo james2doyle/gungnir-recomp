@@ -245,11 +245,13 @@ both make the suite die for the intended case.
 
 `tests/test_vulkan_loader.py` runs `loader_tests` with injected openers: the
 system path never calls the custom opener and tries the system names in
-order; a custom selection forwards its dirs/soname and succeeds; custom
-failure (missing ABI support, missing/unreadable driver directory, missing
-hook library, null handle, missing entry point, invalid selection) falls back
-to system with the named error retained; total failure is
-`vulkan_loader_unavailable`; shutdown closes the active handle once.
+order; a custom selection forwards its dirs/soname and succeeds; the driver
+directory is normalized with a trailing slash because libadrenotools
+concatenates it with the soname; custom failure (missing ABI support,
+missing/unreadable driver directory, missing hook library, null handle,
+missing entry point, invalid selection) falls back to system with the named
+error retained; total failure is `vulkan_loader_unavailable`; shutdown closes
+the active handle once.
 `tests/ge/vulkan_tests.cpp` also asserts `driver_info()` reports a loaded
 driver, a non-empty name and an API version after initialization. The Android
 system path was exercised on the x86_64 emulator, which logged
@@ -269,7 +271,8 @@ while logcat still showed `driver_active=system` and the first frame. On the
 arm64 phone the dialog listed the system driver plus a synthetic imported
 package; selecting it produced `driver_fallback: driver_load_failed` and the
 system frame, SAF import reported `driver_import_ok`, and delete restored
-system. A real Turnip driver remains T10e.
+system. The arm64 phone then loaded a real Rutabaga/Turnip package and
+v863.1; the QA matrix is in `docs/qa/2026-10-31-t10e-driver-matrix.md`.
 
 `tests/test_repository_check.py` adds T10e probes for driver payloads:
 ZIP magic catches a renamed archive, and the root `drivers/`, asset-side
@@ -278,5 +281,7 @@ evidence for the fail-closed matrix is in
 `docs/qa/2026-10-31-t10e-driver-matrix.md`: three phone cold boots on the
 system driver, named fallback for `driver_load_failed`,
 `driver_hook_library_missing` and `driver_storage_unavailable`, malformed and
-wrong-ABI imports, and the x86_64 `driver_abi_unsupported` path. TC-10.2
-(a real Turnip load) is still not verified.
+wrong-ABI imports, the x86_64 `driver_abi_unsupported` path, and three cold
+boots loading a real Rutabaga/Turnip package. The device run found and fixed
+the missing trailing slash in the driver directory passed to
+libadrenotools.
