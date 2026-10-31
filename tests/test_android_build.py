@@ -5,8 +5,10 @@ The APK build is skipped by name when no usable Android SDK is present. The
 static contract checks (pins, no machine-local paths, named failures) always
 run.
 """
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -117,7 +119,8 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             proc = subprocess.run([str(root / "scripts" / "android" / "build.sh"),
                                    f"-Pgungnir.sdkDir={SDK}",
                                    f"-Pgungnir.javaHome={java_home}",
-                                   f"-Pgungnir.depsDir={REPO / 'build' / 'android-deps'}"],
+                                   f"-Pgungnir.depsDir={REPO / 'build' / 'android-deps'}",
+                                   f"-Pgungnir.o1Sources={root / 'runtime' / 'ge' / 'vertex.cpp'}"],
                                   capture_output=True, text=True, timeout=900)
             self.assertEqual(proc.returncode, 0,
                              f"build failed:\n{proc.stdout[-4000:]}{proc.stderr[-4000:]}")
@@ -144,6 +147,22 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
                 symbols = subprocess.run(["readelf", "-Ws", str(lib_path)],
                                          capture_output=True, text=True)
                 self.assertIn("SDL_main", symbols.stdout, "libmain exports SDL_main")
+
+            commands = list((root / "android" / "app" / ".cxx").rglob("compile_commands.json"))
+            self.assertTrue(commands, "CMake compile commands exist")
+            entries = json.loads(commands[0].read_text())
+            def flags(suffix):
+                entry = next(item for item in entries if item["file"].endswith(suffix))
+                arguments = entry.get("arguments") or shlex.split(entry["command"])
+                return arguments
+            vertex = flags("vertex.cpp")
+            backend = flags("vulkan_backend.cpp")
+            self.assertIn("-O2", backend, "runtime TUs compile at -O2 in debug")
+            self.assertIn("-fno-lto", backend, "LTO is disabled for the runtime target")
+            self.assertIn("-O2", vertex, "runtime TUs still default to -O2")
+            self.assertIn("-O1", vertex, "the named override compiles at -O1")
+            self.assertGreater(vertex.index("-O1"), vertex.index("-O2"),
+                               "the per-unit -O1 override wins over the target -O2")
         for name in names:
             if name.startswith("lib/") and name.endswith(".so"):
                 self.assertIn(name, expected_libs, f"unexpected native library: {name}")

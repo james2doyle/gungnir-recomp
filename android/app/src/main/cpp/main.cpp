@@ -4,6 +4,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include "ge/vulkan_backend.hpp"
+#include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/game_data.hpp"
 
@@ -237,6 +238,18 @@ int main(int, char **) {
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
+    }
+
+    const gungnir::platform::CpuTuning tuning = gungnir::platform::tune_current_thread();
+    if (tuning.affinity_ok) {
+        GUNGNIR_LOGI("affinity_applied cpu=%d\n", tuning.cpu);
+    } else {
+        GUNGNIR_LOGI("affinity_unavailable: %s\n", tuning.affinity_error.c_str());
+    }
+    if (tuning.priority_ok) {
+        GUNGNIR_LOGI("priority_applied nice=%d\n", tuning.nice_value);
+    } else {
+        GUNGNIR_LOGI("priority_unavailable: %s\n", tuning.priority_error.c_str());
     }
 
     LifecycleState lifecycle;

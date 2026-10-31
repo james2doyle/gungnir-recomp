@@ -71,10 +71,24 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/ge/vulkan_backend.cpp"
         "${ARG_ROOT}/runtime/platform/android/game_data.cpp"
         "${ARG_ROOT}/runtime/platform/android/assets.cpp"
+        "${ARG_ROOT}/runtime/platform/android/affinity.cpp"
         "${gen_dir}/vulkan_shaders.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/main.cpp")
     target_include_directories(${target} PRIVATE "${ARG_ROOT}/runtime" "${CMAKE_BINARY_DIR}/generated")
     target_compile_features(${target} PRIVATE cxx_std_20)
-    target_compile_options(${target} PRIVATE -Wall -Wextra)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
     target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log z)
+
+    set(GUNGNIR_ANDROID_O1_SOURCES "" CACHE STRING
+        "Semicolon-separated runtime sources compiled at -O1")
+    foreach(source IN LISTS GUNGNIR_ANDROID_O1_SOURCES)
+        if(NOT IS_ABSOLUTE "${source}")
+            set(source "${ARG_ROOT}/${source}")
+        endif()
+        if(NOT EXISTS "${source}")
+            message(FATAL_ERROR "GUNGNIR_ANDROID_O1_SOURCES entry does not exist: ${source}")
+        endif()
+        set_source_files_properties("${source}" PROPERTIES COMPILE_OPTIONS "-O1")
+        message(STATUS "gungnir: -O1 override for ${source}")
+    endforeach()
 endfunction()

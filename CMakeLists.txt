@@ -130,13 +130,19 @@ endif()
 find_package(ZLIB REQUIRED)
 add_library(gungnir_platform STATIC
     runtime/platform/android/game_data.cpp
-    runtime/platform/android/assets.cpp)
+    runtime/platform/android/assets.cpp
+    runtime/platform/android/affinity.cpp)
 target_include_directories(gungnir_platform PUBLIC runtime)
 target_link_libraries(gungnir_platform PUBLIC ZLIB::ZLIB)
 
 add_executable(game_data_tests tests/platform/game_data_tests.cpp)
 target_link_libraries(game_data_tests PRIVATE gungnir_platform)
 set_target_properties(game_data_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
+
+add_executable(affinity_tests tests/platform/affinity_tests.cpp)
+target_link_libraries(affinity_tests PRIVATE gungnir_platform)
+set_target_properties(affinity_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
 
 # --- Post-processing chain (T7g) ------------------------------------------

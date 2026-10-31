@@ -4,6 +4,7 @@ plugins {
 
 val repoRoot = rootProject.projectDir.parentFile
 val sdlSource = file((project.findProperty("sdlSource") as String?) ?: "${repoRoot}/build/android-deps/sdl3-src")
+val o1Sources = (project.findProperty("gungnir.o1Sources") as String?) ?: ""
 check(sdlSource.isDirectory) {
     "sdl_source_missing: $sdlSource (run scripts/android/build.sh)"
 }
@@ -28,6 +29,7 @@ android {
                 arguments.addAll(listOf(
                     "-DGUNGNIR_ROOT=${repoRoot.absolutePath}",
                     "-DGUNGNIR_SDL3_DIR=${sdlSource.absolutePath}",
+                    "-DGUNGNIR_ANDROID_O1_SOURCES=$o1Sources",
                     "-DANDROID_STL=c++_static",
                     "-DCMAKE_CXX_STANDARD=20"))
             }

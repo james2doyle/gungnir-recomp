@@ -122,6 +122,7 @@ python3 -m unittest tests.test_nids tests.test_hle -v  # T6a/T6b registry + kern
 python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skeleton
 python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scripts
 python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity gate
+python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -202,6 +203,14 @@ candidate skip with a valid fallback, missing-data naming, and runtime
 asset-stamp matching. The device check additionally pushed the real disc ISO
 to `getExternalFilesDir()/game/` and exercised the SAF picker; both paths
 reported `game_data_ok` with size 262766592 and CRC32 `183F3EDC`.
+
+`tests/test_affinity.py` runs `affinity_tests`: CPU-list parsing, highest-
+allowed-CPU selection, injected affinity/priority success and denial, and
+missing status/list named errors. `tests/test_android_build.py` also checks
+the generated CMake compile commands: the runtime target carries `-O2` and
+`-fno-lto` even in debug, and the `-Pgungnir.o1Sources` named unit carries a
+later `-O1`. Device evidence: the phone and emulator both logged
+`affinity_applied` and `priority_applied`; denial is logged, never fatal.
 
 `tests/test_android_suite.py` will consolidate host checks for TC-9.2–TC-9.4
 (probe frame, both game-data paths, hash-gate rejection, lifecycle
