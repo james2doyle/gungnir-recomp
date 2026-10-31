@@ -101,6 +101,22 @@ target_link_libraries(tex_tpl_tests PRIVATE gungnir_tex)
 set_target_properties(tex_tpl_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tex)
 
+find_package(PNG QUIET)
+if(PNG_FOUND)
+    add_library(gungnir_tex_png STATIC runtime/tex/png.cpp)
+    target_include_directories(gungnir_tex_png PUBLIC runtime)
+    target_link_libraries(gungnir_tex_png PUBLIC PNG::PNG)
+
+    add_library(gungnir_tex_dump STATIC runtime/tex/dump.cpp)
+    target_include_directories(gungnir_tex_dump PUBLIC runtime)
+    target_link_libraries(gungnir_tex_dump PUBLIC gungnir_tex gungnir_tex_png)
+
+    add_executable(tex_dump_tests tests/tex/dump_tests.cpp)
+    target_link_libraries(tex_dump_tests PRIVATE gungnir_tex_dump)
+    set_target_properties(tex_dump_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/tex)
+endif()
+
 # --- Post-processing chain (T7g) ------------------------------------------
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)

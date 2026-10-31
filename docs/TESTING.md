@@ -150,4 +150,10 @@ malformed-input failures. Writer tests assert byte-identical decode -> encode,
 single-byte texel/palette edits, and rejected inconsistent models. The local
 ASan/UBSan scan round-tripped 1,304 containers byte-identically;
 `docs/formats/TPL.md` records the layout and the one local named gap
-(`debugFont.tpl`, pixel format `0x0108`). T8f consolidates TC-8.1–TC-8.4.
+(`debugFont.tpl`, pixel format `0x0108`).
+
+`tests/test_tex_dump.py` runs `tex_dump_tests` (built when libpng is
+available): content-key stability/sensitivity and sampler independence, RGBA8
+PNG round-trip, `textures.ini` creation/de-duplication, CLUT-change dumps,
+existing-file collision and corrupt-file rejection. `docs/TEXTURE_REPLACEMENT.md`
+records the dump layout and key rules. T8f consolidates TC-8.1–TC-8.4.
