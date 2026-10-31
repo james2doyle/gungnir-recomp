@@ -55,6 +55,9 @@ void load_nid_registry(psprecomp::Runtime &runtime, const std::filesystem::path 
 // Returns the number of bytes read; 0 when the descriptor is unknown.
 std::size_t read_open_file(std::uint32_t fd, std::uint64_t offset, std::uint8_t *output, std::size_t size);
 
+// Host directory backing ms0: (set by register_io).
+std::filesystem::path io_memory_stick_path();
+
 // Kernel-object tracing: GUNGNIR_TRACE_SYNC gates one-line activity logs.
 [[nodiscard]] bool trace_sync();
 void log_sync(const std::string &message);

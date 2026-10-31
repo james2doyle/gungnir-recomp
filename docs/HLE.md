@@ -49,6 +49,7 @@ cross-library alias path, and a bound handler invocation.
 | sceSasCore (T6g boot discoveries) | VERIFIED | MIT Yakumo VAG/ADPCM software mixer (32 voices, pitch, volume, simple ADSR, pause, grain/output mode, end flag, envelope heights); init validation and hand-computed VAG grain contract; reverb/ATRAC3/noise voices remain unbound and stop loudly |
 | sceAtrac3plus (T6h boot discoveries) | VERIFIED (ID lifecycle) | GetAtracID/Release with AT3 (0x1001) and AT3+ (0x1000) codec types; the FFmpeg n4.4 ATRAC3/3+ decoder subset is vendored with a public 4,149-check self-test. Track parse/decode handlers are added only as the title executes them; no decode call has run at this depth |
 | Async IoFileMgr (T6i boot discoveries) | VERIFIED | Open/read/write/lseek/close async variants plus poll, wait, waitCB and getAsyncStat; host I/O completes synchronously but the result is staged per descriptor and delivered only by Wait/Poll/GetAsyncStat, with one outstanding operation and kernel error codes. `sceIoLseek32Async` is covered too |
+| sceUtility savedata (T6k boot discoveries) | VERIFIED (SIZES) | InitStart/Update/GetStatus/ShutdownStart state machine; SIZES fills the guest `msFree`/`msData`/`utilityData` blocks from the virtual memory-stick directory and reports `NO_DATA` for a missing save. MsgDialog, GamedataInstall and the other savedata modes remain unbound/unsupported and are counted gaps |
 | LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
@@ -66,8 +67,8 @@ dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
 |---|---:|
 | Module / entry | `9th`, `0x08972544` |
 | Load base / image end | `0x08804000` / `0x08B37DCC` |
-| Bound imports at this boot depth | 154 / 215 |
-| Executed imports | 82 (all bound) |
+| Bound imports at this boot depth | 158 / 215 |
+| Executed imports | 85 (all bound) |
 | Missing / silent NIDs | 0 |
 | First real flip | `0x04088000`, width 512, format 3 |
 
@@ -78,28 +79,29 @@ import and stop fields (TC-6.4).
 
 Deeper execution (after four vblanks) passes the former VFPU gap (T5a) and the
 ThreadMan object gap (T6e). The corpus contains no unlowered VFPU words, and
-every import executed at this depth is bound. The run now reaches 26,058
-dispatches, 21 vblanks and 19 flips, 154/215 imports bound and 82 executed,
-with zero missing or silent NIDs. The executed set includes `__sceSasInit`,
-`__sceSasCore`, `sceAudioOutputPannedBlocking`, `sceAtracGetAtracID` and the
-async I/O path (`sceIoLseekAsync`, `sceIoReadAsync`, `sceIoPollAsync`), so the
-synth, output, ATRAC object and streaming-read paths ran. The next blocker is
-savedata: `Missing HLE import sceUtility::sceUtilitySavedataInitStart
-(NID_0x50C4CD57)`. Details are in `BRINGUP.md`.
+every import executed at this depth is bound. The deterministic 200,000-dispatch run reaches 2,178 vblanks, 738 flips and
+36,345,296 us of virtual time, with 158/215 imports bound and 85 executed,
+zero missing or silent NIDs; it stops at the dispatch bound (`0x0899C3DC`),
+not at an HLE gap. The executed set includes `__sceSasInit`, `__sceSasCore`,
+`sceAudioOutputPannedBlocking`, `sceAtracGetAtracID`, the async I/O path
+(`sceIoLseekAsync`, `sceIoReadAsync`, `sceIoPollAsync`) and the savedata state
+machine (`sceUtilitySavedataInitStart`, `Update`, `GetStatus`,
+`ShutdownStart`). The title is in its main loop. A 30-second unpaced run
+reaches 1,810,000 dispatches and 7,394 flips before the wall-clock bound.
+Details are in `BRINGUP.md`.
 
 ## Remaining T6 boot-depth work (2026-10-30)
 
-Of the 215 imports in the main module, 154 are bound and 82 have executed at
-the current stop. The 61 unbound calls cluster into these workstreams; each is
-implemented only when the bounded boot actually executes it, and anything that
-never executes before the T6 gate is closed as a counted gap rather than a
-stub:
+Of the 215 imports in the main module, 158 are bound and 85 have executed at
+the current stop. The 57 unbound calls cluster into these workstreams; each is
+implemented only when the title actually executes it, and anything that never
+executes before the T6 gate is closed as a counted gap rather than a stub:
 
 | Workstream | Imports | Trigger |
 |---|---:|---|
 | IoFileMgr `Dread`/`Ioctl` | 2 | first directory scan or device control call |
 | Kernel, ThreadMan and UMD small calls | 8 | `WaitEventFlagCB`, `KernelMemcpy`, profiler, GPI, UMD medium/waits |
-| sceUtility | 13 | current stop: savedata init; MsgDialog, GamedataInstall state machines |
+| sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); not executed at this depth |
 | ATRAC track | 6 | first BGM decode: SetData, DecodeData, streaming, loop, remain |
 | SAS controls | 8 | ADSR/mode/SL, noise and reverb controls |
 | sceMpeg | 24 | only if a movie plays before the T6 gate (H.264 surface) |
@@ -107,8 +109,10 @@ stub:
 T6 closes when "module init complete" has a named gate in the boot report
 (loader thread returns or the game's main loop starts), the deepest run is
 deterministic across two runs, and every unexecuted counterpart above is
-recorded as a counted gap. The decoder needed by the ATRAC track is already
-vendored and self-tested; the renderer work (T7) is independent.
+recorded as a counted gap. The title now reaches its main loop; the remaining
+T6 work is the completion audit (T6o), not another boot-depth import. The
+decoder needed by the ATRAC track is already vendored and self-tested; the
+renderer work (T7) is independent.
 
 ## Module registry (T6d, VERIFIED)
 

@@ -3,6 +3,7 @@
 // part of sceUtility. sceWlanDrv is with the ad hoc calls in hle_adhoc.cpp.
 #include "hle/hle_common.hpp"
 #include "hle/hle_module.hpp"
+#include "hle/hle_utility.hpp"
 
 
 #include "psprecomp/common.hpp"
@@ -183,6 +184,7 @@ void register_system(HleRegistrar &hle) {
     register_modulemgr(hle);
     register_interrupts(hle);
     register_platform(hle);
+    register_utility(hle);
 }
 
 } // namespace gungnir::hle

@@ -152,8 +152,12 @@ class TestBoundedBoot(unittest.TestCase):
                         "frame buffer should be in the VRAM window")
 
     def test_two_bounded_runs_produce_identical_reports(self):
-        first_proc, first = self.run_boot("--no-stop-at-flip")
-        second_proc, second = self.run_boot("--no-stop-at-flip")
+        # The title now enters its main loop, so a wall-clock stop is not a
+        # deterministic comparison point. Bound both runs by dispatches.
+        first_proc, first = self.run_boot(
+            "--no-stop-at-flip", "--max-dispatches", "200000", "--wall-seconds", "120")
+        second_proc, second = self.run_boot(
+            "--no-stop-at-flip", "--max-dispatches", "200000", "--wall-seconds", "120")
         self.assertIsNotNone(first, first_proc.stderr[-4000:])
         self.assertIsNotNone(second, second_proc.stderr[-4000:])
         stable = ("module", "entry", "gp", "image_end", "functions", "dispatches",

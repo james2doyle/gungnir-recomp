@@ -351,6 +351,10 @@ std::uint32_t poll_async(std::uint32_t fd, psprecomp::GuestMemory &memory, std::
 
 } // namespace
 
+std::filesystem::path io_memory_stick_path() {
+    return io().memory_stick;
+}
+
 std::size_t read_open_file(std::uint32_t fd, std::uint64_t offset, std::uint8_t *output, std::size_t size) {
     const auto found = io().files.find(fd);
     if (found == io().files.end()) return 0u;
@@ -375,7 +379,10 @@ void register_io(
     HleRegistrar &hle, const std::filesystem::path &disc_image, const std::filesystem::path &memory_stick) {
     io().files.clear();
     io().next_fd = 3u;
-    if (!disc_image.empty()) io().disc = std::make_unique<IsoImage>(disc_image);
+    if (!disc_image.empty())
+        io().disc = std::make_unique<IsoImage>(disc_image);
+    else
+        io().disc.reset();
     io().memory_stick = memory_stick;
 
     hle.add("IoFileMgrForUser", "sceIoOpen", [](Runtime &rt, AllegrexContext &ctx) {

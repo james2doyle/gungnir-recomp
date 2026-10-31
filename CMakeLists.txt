@@ -37,6 +37,7 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_threadman.cpp
     runtime/hle/hle_system.cpp
     runtime/hle/hle_io.cpp
+    runtime/hle/hle_utility.cpp
     runtime/hle/hle_media.cpp
     runtime/hle/hle_module.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)

@@ -94,7 +94,9 @@ skips when the private disc is absent; it never passes silently.
   lifecycle/preemption/delay, semaphores, event flags, blocking waits, VTimer
   interrupts, VPLs, lightweight mutexes, ISO disc + memory-stick IO, and async
   open/read/lseek/close staging through Wait/Poll/GetAsyncStat (busy, failure,
-  no-async, closed-descriptor and bad-whence errors).
+  no-async, closed-descriptor and bad-whence errors), and the sceUtility
+  savedata SIZES state machine (filled usage blocks, missing-save NO_DATA, bad
+  param size and path traversal).
   `tests/hle/media_tests.cpp` covers display mode/flip/vblank/multi-wait/
   frame-rate, controller sampling and vblank-blocking reads, GE callback and
   list completion, EDRAM, and the RTC tick. `tests/hle/module_tests.cpp`
@@ -105,7 +107,8 @@ skips when the private disc is absent; it never passes silently.
   `sceDisplaySetFrameBuf`, with every executed import bound and no missing or
   silent NID. Two `--no-stop-at-flip` runs must produce identical deterministic
   fields (dispatches, virtual time, vblanks, flips, import lists, stop
-  reason/PC) — TC-6.4.
+  reason/PC) — TC-6.4. The determinism runs are bounded by 200,000 dispatches,
+  not wall time, because the title now enters its main loop.
 
 ## Commands
 

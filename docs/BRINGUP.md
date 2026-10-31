@@ -482,3 +482,48 @@ the two remaining IoFileMgr gaps for the T6 closure audit.
 **Next blocker (savedata).** The run stops at
 `Missing HLE import sceUtility::sceUtilitySavedataInitStart
 (NID_0x50C4CD57)`, the first utility state-machine call.
+
+## 2026-10-30 — T6k: sceUtility savedata SIZES and the main-loop gate
+
+**Symptom.** After T6i the run stopped at
+`Missing HLE import sceUtility::sceUtilitySavedataInitStart
+(NID_0x50C4CD57)` after 26,058 dispatches.
+
+**Reference review.** Code search found PPSSPP's `sceUtility` and
+`SavedataParam` implementation, its save dialog state machine, and psprism /
+PCSP savedata stubs. The PSPSDK `SceUtilitySavedataParam` layout was checked
+against the live guest structure: the title uses the 0x600-byte layout with
+mode 8 (SIZES), game `ULUS10592`, save `GUN9THSYS`, file `SYSTEM`, and the
+`msFree`/`msData`/`utilityData` output pointers. The first field dump also
+confirmed the SFO title `Gungnir`; no game content was copied.
+
+**Root cause.** No sceUtility dialog state machine. The game asks for save
+sizes during boot and polls status until the utility reports completion.
+
+**Fix.** `runtime/hle/hle_utility.*` adds the savedata
+InitStart/Update/GetStatus/ShutdownStart state machine. SIZES fills the guest
+`msFree`, `msData` and `utilityData` blocks from the virtual memory stick:
+free clusters/space from the modeled card, used clusters and KB from the
+actual `ms0:/PSP/SAVEDATA/<game><save>` directory, and the utility estimate
+from the data and icon sizes. A missing save returns
+`SCE_UTILITY_SAVEDATA_ERROR_SIZES_NO_DATA` (0x801103C7) with zeroed usage.
+Game/save/file components are validated before touching host paths; only the
+0x600-byte layout is accepted so a different version fails closed. Other
+savedata modes log once and return a named error rather than fake success;
+MsgDialog and GamedataInstall remain unbound counted gaps.
+
+**Evidence.** Red-first `savedata_contracts` failed at "second init rejected
+while active" before the handlers were bound. It now covers the SIZES
+completion sequence, filled usage blocks, missing-save NO_DATA, bad param
+size, path traversal and repeated init. The deterministic 200,000-dispatch
+run reaches 2,178 vblanks and 738 flips, 158/215 imports bound and 85
+executed, zero missing or silent NIDs, and stops at the dispatch bound
+(`0x0899C3DC`). The savedata InitStart/Update/GetStatus/ShutdownStart calls
+all executed. A 30-second unpaced run reaches 1,810,000 dispatches and 7,394
+flips, i.e. the title is in its main loop. The two-run determinism check now
+uses a 200,000-dispatch bound because a wall-clock stop is no longer a
+deterministic comparison point.
+
+**Next gate.** There is no missing HLE import at this depth. T6o owns the
+named module-init-completion gate, the counted-gap audit and the deepest-run
+determinism closure; T7 still owns the first rendered GE frame.

@@ -87,7 +87,8 @@ class TestKernelHle(unittest.TestCase):
         args = [str(KERNEL_BINARY), "--nids", str(NIDS)]
         with tempfile.TemporaryDirectory(prefix="gungnir-ms-") as ms:
             if GAME_ISO.exists():
-                args += ["--iso", str(GAME_ISO), "--ms", ms]
+                args += ["--iso", str(GAME_ISO)]
+            args += ["--ms", ms]
             proc = subprocess.run(args, capture_output=True, text=True, timeout=120)
         self.assertEqual(proc.returncode, 0,
                          f"kernel HLE contracts failed:\n{proc.stdout}{proc.stderr}")

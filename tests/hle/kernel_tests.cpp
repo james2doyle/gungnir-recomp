@@ -7,6 +7,7 @@
 #include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
+#include "hle/hle_utility.hpp"
 #include "hle/kernel.hpp"
 
 #include "psprecomp/allegrex_context.hpp"
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
 #include <map>
@@ -57,12 +59,13 @@ public:
         HleRegistrar hle(runtime);
         gungnir::hle::reset_audio_state();
         gungnir::hle::reset_atrac_state();
+        gungnir::hle::reset_utility_state();
         gungnir::hle::register_sysmem(hle);
         gungnir::hle::register_threadman(hle);
         gungnir::hle::register_audio(hle);
         gungnir::hle::register_atrac(hle);
         gungnir::hle::register_system(hle);
-        if (!iso.empty()) gungnir::hle::register_io(hle, iso, memory_stick);
+        if (!iso.empty() || !memory_stick.empty()) gungnir::hle::register_io(hle, iso, memory_stick);
         kernel().start_loader_thread(ctx, 0x08820000u, 0u);
         write_string(kText, "contract");
     }
@@ -749,6 +752,86 @@ void io_contracts(const std::filesystem::path &iso, const std::filesystem::path 
 }
 
 
+void savedata_contracts(const std::filesystem::path &memory_stick) {
+    Fixture f(test_nids_path(), {}, memory_stick);
+    auto &mem = f.runtime.memory();
+    constexpr std::uint32_t kParam = 0x08830000u;
+    constexpr std::uint32_t kMsFree = 0x08831000u;
+    constexpr std::uint32_t kMsData = 0x08831100u;
+    constexpr std::uint32_t kUtility = 0x08831200u;
+    constexpr std::uint32_t kData = 0x08831300u;
+    const auto zero = [&mem](std::uint32_t address, std::uint32_t size) {
+        for (std::uint32_t i = 0; i < size; ++i) mem.store8(address + i, 0u);
+    };
+    const auto text = [&mem](std::uint32_t address, std::uint32_t offset, std::uint32_t size, std::string_view value) {
+        for (std::uint32_t i = 0; i < size; ++i)
+            mem.store8(address + offset + i, i < value.size() ? static_cast<std::uint8_t>(value[i]) : 0u);
+    };
+    const auto param = [&](std::string_view save_name) {
+        zero(kParam, 0x600u);
+        zero(kMsFree, 0x100u);
+        zero(kMsData, 0x100u);
+        zero(kUtility, 0x100u);
+        mem.store32(kParam + 0x00u, 0x600u);
+        mem.store32(kParam + 0x30u, 8u); // SIZES
+        text(kParam, 0x3Cu, 13u, "ULUS10592");
+        text(kParam, 0x4Cu, 20u, save_name);
+        text(kParam, 0x64u, 13u, "SYSTEM");
+        mem.store32(kParam + 0x74u, kData);
+        mem.store32(kParam + 0x78u, 0x48u);
+        mem.store32(kParam + 0x7Cu, 0x48u);
+        mem.store32(kParam + 0x5D0u, kMsFree);
+        mem.store32(kParam + 0x5D4u, kMsData);
+        mem.store32(kParam + 0x5D8u, kUtility);
+        text(kMsData, 0x00u, 13u, "ULUS10592");
+        text(kMsData, 0x10u, 20u, save_name);
+    };
+    const auto util = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceUtility", name, args);
+    };
+
+    const std::filesystem::path save_dir = memory_stick / "PSP" / "SAVEDATA" / "ULUS10592GUN9THSYS";
+    std::filesystem::create_directories(save_dir);
+    {
+        std::ofstream system_file(save_dir / "SYSTEM", std::ios::binary);
+        system_file << std::string(72u, 'x');
+        std::ofstream sfo_file(save_dir / "PARAM.SFO", std::ios::binary);
+        sfo_file << std::string(100u, 's');
+        std::ofstream icon_file(save_dir / "ICON0.PNG", std::ios::binary);
+        icon_file << std::string(2000u, 'i');
+    }
+
+    param("GUN9THSYS");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "sizes init accepted");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0x80110001u, "second init rejected while active");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "sizes update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "sizes reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "sizes result is success");
+    check(mem.load32(kMsFree + 0x04u) != 0u, "free clusters filled");
+    check(mem.load32(kMsData + 0x24u) != 0u, "used clusters filled from the save directory");
+    check(mem.load32(kUtility + 0x00u) != 0u, "utility used clusters filled");
+    check(util("sceUtilitySavedataShutdownStart") == 0u, "sizes shutdown accepted");
+    check(util("sceUtilitySavedataGetStatus") == 4u, "sizes reaches shutdown");
+
+    gungnir::hle::reset_utility_state();
+    param("MISSING");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "missing-save init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "missing-save update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "missing-save reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0x801103C7u, "missing save reports no data");
+    check(util("sceUtilitySavedataShutdownStart") == 0u, "missing-save shutdown accepted");
+    check(util("sceUtilitySavedataGetStatus") == 4u, "missing-save reaches shutdown");
+
+    gungnir::hle::reset_utility_state();
+    param("GUN9THSYS");
+    mem.store32(kParam, 0x123u);
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0x80110004u, "bad param size rejected");
+
+    gungnir::hle::reset_utility_state();
+    param("..");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0x80110004u, "path traversal rejected");
+}
+
 void async_io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), iso, memory_stick);
     auto &mem = f.runtime.memory();
@@ -851,10 +934,13 @@ int main(int argc, char **argv) {
         sas_contracts();
         atrac_contracts();
         lwmutex_contracts();
-        if (!iso.empty()) {
+        if (!memory_stick.empty()) {
             std::filesystem::create_directories(memory_stick);
-            io_contracts(iso, memory_stick);
-            async_io_contracts(iso, memory_stick);
+            if (!iso.empty()) {
+                io_contracts(iso, memory_stick);
+                async_io_contracts(iso, memory_stick);
+            }
+            savedata_contracts(memory_stick);
         }
         std::cout << "hle_kernel_tests: OK\n";
         return 0;
