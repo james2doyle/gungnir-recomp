@@ -85,6 +85,29 @@ the synth, output and ATRAC object paths ran. The next blocker is asynchronous
 file I/O: `Missing HLE import IoFileMgrForUser::sceIoLseekAsync
 (NID_0x71B19E77)`. Details are in `BRINGUP.md`.
 
+## Remaining T6 boot-depth work (2026-10-30)
+
+Of the 215 imports in the main module, 148 are bound and 77 have executed at
+the current stop. The 67 unbound calls cluster into these workstreams; each is
+implemented only when the bounded boot actually executes it, and anything that
+never executes before the T6 gate is closed as a counted gap rather than a
+stub:
+
+| Workstream | Imports | Trigger |
+|---|---:|---|
+| Async IoFileMgr | 8 | current stop: `sceIoLseekAsync`; lseek/read/write/open/close/poll/waitCB/Dread |
+| Kernel, ThreadMan and UMD small calls | 8 | `WaitEventFlagCB`, `KernelMemcpy`, profiler, GPI, UMD medium/waits |
+| sceUtility | 13 | MsgDialog, Savedata and GamedataInstall state machines |
+| ATRAC track | 6 | first BGM decode: SetData, DecodeData, streaming, loop, remain |
+| SAS controls | 8 | ADSR/mode/SL, noise and reverb controls |
+| sceMpeg | 24 | only if a movie plays before the T6 gate (H.264 surface) |
+
+T6 closes when "module init complete" has a named gate in the boot report
+(loader thread returns or the game's main loop starts), the deepest run is
+deterministic across two runs, and every unexecuted counterpart above is
+recorded as a counted gap. The decoder needed by the ATRAC track is already
+vendored and self-tested; the renderer work (T7) is independent.
+
 ## Module registry (T6d, VERIFIED)
 
 Gungnir imports five ModuleMgrForUser calls and none of them loads a module:
