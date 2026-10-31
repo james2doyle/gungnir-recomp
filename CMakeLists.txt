@@ -66,6 +66,7 @@ set_target_properties(hle_import_tests PROPERTIES
 # --- GE command stream (T7a) ----------------------------------------------
 add_library(gungnir_ge STATIC
     runtime/ge/display_list.cpp
+    runtime/ge/software.cpp
     runtime/ge/texture.cpp
     runtime/ge/vertex.cpp)
 target_include_directories(gungnir_ge PUBLIC runtime)
@@ -83,6 +84,11 @@ set_target_properties(ge_vertex_tests PROPERTIES
 add_executable(ge_texture_tests tests/ge/texture_tests.cpp)
 target_link_libraries(ge_texture_tests PRIVATE gungnir_ge)
 set_target_properties(ge_texture_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
+add_executable(ge_software_tests tests/ge/software_tests.cpp)
+target_link_libraries(ge_software_tests PRIVATE gungnir_ge)
+set_target_properties(ge_software_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
 # --- ATRAC3/3+ decoder (FFmpeg n4.4 subset, vendored via Nakagawa) ----------

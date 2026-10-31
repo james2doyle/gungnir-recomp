@@ -13,6 +13,7 @@ BUILD = REPO / "build"
 BINARY = BUILD / "tests" / "ge" / "ge_display_list_tests"
 VERTEX_BINARY = BUILD / "tests" / "ge" / "ge_vertex_tests"
 TEXTURE_BINARY = BUILD / "tests" / "ge" / "ge_texture_tests"
+SOFTWARE_BINARY = BUILD / "tests" / "ge" / "ge_software_tests"
 
 
 def setUpModule():
@@ -23,7 +24,7 @@ def setUpModule():
         raise RuntimeError(f"cmake configure failed:\n{cfg.stderr}")
     bld = subprocess.run(
         ["cmake", "--build", str(BUILD), "--target", "ge_display_list_tests", "ge_vertex_tests",
-         "ge_texture_tests"],
+         "ge_texture_tests", "ge_software_tests"],
         capture_output=True, text=True)
     if bld.returncode != 0:
         raise RuntimeError(f"GE test build failed:\n{bld.stdout[-4000:]}{bld.stderr[-4000:]}")
@@ -47,6 +48,12 @@ class TestGeDisplayList(unittest.TestCase):
         self.assertEqual(proc.returncode, 0,
                          f"GE texture contracts failed:\n{proc.stdout}{proc.stderr}")
         self.assertIn("ge_texture_tests: OK", proc.stdout)
+
+    def test_software_contracts(self):
+        proc = subprocess.run([str(SOFTWARE_BINARY)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0,
+                         f"GE software contracts failed:\n{proc.stdout}{proc.stderr}")
+        self.assertIn("ge_software_tests: OK", proc.stdout)
 
 
 if __name__ == "__main__":
