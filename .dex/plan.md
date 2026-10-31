@@ -276,6 +276,9 @@ records what it used.
 **Test cases:**
 - TC-12.3 Save→load round-trip byte-stable; PARAM.SFO opens in PPSSPP.
 - TC-12.4 `dar.py` lists/extracts the user's `ini.dar`; a repack round-trips byte-identically; the `stored_size==0` entries survive.
+- TC-12.5 PPSSPP memstick interchange: copy the user's exported saves under `savestates/` (the SYSTEM and STORY save directories) into a scratch `ms0:/PSP/SAVEDATA/` root, list both through the virtual memstick, parse each PARAM.SFO, and parse→serialize each file byte-identically; save→load→save leaves every save file byte-identical and the export is never mutated. A runtime-written save is listed and loadable by PPSSPP.
+- TC-12.6 PPSSPP savestate anchor: `savestates/ULUS10592_1.00_0.ppst` (PPSSPP 1.20.4) is used in PPSSPP as the external state that reaches the in-game save menu, confirming the exported saves load and a runtime-written save is accepted. The `.ppst` container is never parsed in-repo (a reimplementation needs explicit sign-off); this is a labeled manual/oracle case.
+**Local fixtures:** the savestate and both memstick saves are the user's own data under gitignored `savestates/`, never committed, and copied to a temp memstick for tests; needing cases skip with the named reason `savedata_fixture_missing`.
 **Docs checkpoint:** `docs/SAVEDATA.md`, `docs/formats/DAR.md` (extended from T3/T8).
 **Refs:** sal063 (savedata.c/PARAM.SFO), gungnir-ptbr (DAR traps), psprecore (savedata modes/focus/status — MIT; its save layout omits the `PSP/` prefix), PPSSPP (PARAM.SFO/save-layout oracle, behavioral only — no code).
 **Gotchas:** §7B.1 (DAR `stored_size==0`), §7B.2 (in-place rewrite), §7B.3 (script `.bin` sizes), §7B.4 (both-endian ISO sizes).
