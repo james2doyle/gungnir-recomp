@@ -196,6 +196,10 @@ Each task: dependencies, work, deliverables, test cases (TC), docs checkpoint, r
 - TC-7.4 Feedback path (render to area containing texture) invalidates cache — targeted regression from Gungnir's PPSSPP quirk log.
 **Docs checkpoint:** `docs/RENDERER.md` (backend interface, texture cache keys, known approximations), `docs/SHADERS.md` (preset format, authoring rules).
 **Refs:** sal063 (`ge.c` + `gpu_sdl3vk` ubershader + CLUT- hash), codepdbh (Vulkan backend shape, present-path caution), wizardengineer (bufw bug class, SIGNAL gaps), Yakumo (`vulkan_renderer.cpp`), snuri00 (surfaces/stale-rects).
+**Tracking:** work is decomposed in dex into T7a–T7h (decoder, vertex/clip,
+software oracle, textures, Vulkan first triangle, draw path, post, closure).
+Each starts with the repository code-search/issue-search reference step and
+records what it used.
 **Gotchas:** §7D.2–D.4, §7E.5.
 
 ### T8 — Texture pipeline: dump/replace + TPL decode + text upscaling
