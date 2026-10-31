@@ -91,6 +91,24 @@ version reported by the running session. Zips dropped in
 reports that custom drivers require arm64 and keeps the system driver. See
 [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the package contract.
 
+## Audio smoke
+
+The runtime now links an AAudio low-latency 44.1 kHz stereo backend. A normal
+launch still plays the SDL lifecycle tone; a debug smoke can be run without
+touching the UI:
+
+```sh
+adb shell am force-stop com.gungnir.recomp
+adb shell am start -n com.gungnir.recomp/.GungnirActivity --ez audio_smoke true
+adb logcat -d | grep audio_smoke
+```
+
+The native smoke opens AAudio, submits a 440 Hz tone and a synthetic VAG
+through `SasCore`, then logs `audio_smoke ok/vag/pulled/underrun/xruns`. It is
+for backend bring-up, not a soak: the short queue drains before the wait ends.
+The partial phone evidence is in `docs/qa/2026-10-31-t12a-audio.md`; the 60 s
+no-underrun soak and game audio remain T12/T13 work.
+
 ## Input
 
 Touch overlay, the Menu settings surface, layout JSON, keyboard/mouse maps,
@@ -161,7 +179,7 @@ Each mutation was applied locally and the named gate failed for that reason:
 ## Current limits
 
 - No game rendering yet; the title screen is T13.
-- Audio is a lifecycle tone, not game audio (T12).
+- Audio is a lifecycle tone plus the AAudio/SAS smoke; game audio is T12/T13.
 - Custom Adreno drivers are complete for arm64/API 28+; packages are
   user-supplied and never bundled. See
   [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the contract and named gaps.
