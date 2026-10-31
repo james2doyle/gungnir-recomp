@@ -233,14 +233,14 @@ records what it used.
 
 ### T10 — Adreno custom Vulkan driver loader
 **Depends on:** T9
-**Work:** `runtime/platform/adreno/` + Android glue: user picks a driver `.zip` (Mesa Turnip-style Vulkan ICD package) in settings or drops it in a documented folder; extract to app-private storage; validate (entry `libvulkan.so`, ELF machine matches app ABI); load through a custom Vulkan loader that `dlopen`s the ICD instead of the system one (evaluate MIT-licensed libadrenotools vs a minimal own loader — record choice in provenance ledger). Per-driver selection + version display; "system driver" default; fail-closed fallback with a named error. Driver zips/blobs: **user-supplied, gitignored, never bundled** (repository_check excludes the driver directory).
+**Work:** `runtime/platform/adreno/` + Android glue: user picks a driver `.zip` (Mesa Turnip-style Vulkan ICD package) in settings or drops it in a documented folder; extract to app-private storage; validate (`meta.json` soname or a bare `libvulkan.so`, ELF machine matches app ABI); load through libadrenotools (BSD-2-Clause; adopted in T10a instead of a clean-room loader) that `dlopen`s the ICD instead of the system one. Per-driver selection + version display; "system driver" default; fail-closed fallback with a named error. Driver zips/blobs: **user-supplied, gitignored, never bundled** (repository_check excludes the driver directory).
 **Test cases:**
 - TC-10.1 Stock-driver boot unaffected on any device (loader bypass path).
 - TC-10.2 On an Adreno device, a user-supplied zip loads and reports its version via logcat.
 - TC-10.3 Malformed zip / wrong-ABI ELF fails closed with clear error, app still boots on system driver.
 - TC-10.4 `repository_check` rejects a `.zip`/`.so` committed under the driver paths.
 **Docs checkpoint:** `docs/ANDROID_DRIVERS.md` (what zips are, where to get them, risks, selection UI).
-**Refs:** libadrenotools (evaluate), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt), ff7ccrecomp (`useLegacyPackaging` and libadrenotools native-library loading).
+**Refs:** libadrenotools (adopted, BSD-2-Clause), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt), ff7ccrecomp (`useLegacyPackaging` and libadrenotools native-library loading).
 **Tracking:** work is decomposed in dex into T10a–T10f (package contract + adoption decision, host package inspector, ICD loader + runtime dispatch, Android import UI + packaging, fail-closed matrix + repository guard + device QA, docs + closure). Each starts with the repository code-search/issue-search reference step and records what it used.
 **Gotchas:** §7E.6–E.7.
 

@@ -83,3 +83,24 @@ from at all because of §1 or `docs/LEGAL.md`:
 - [ ] Original headers preserved; no relicense
 - [ ] No game-derived bytes anywhere in the import (`repository_check` green)
 - [ ] No prebuilt binaries
+
+## 7. Adopted Vulkan loader (T10)
+
+The Adreno custom-driver loader is **libadrenotools**, adopted rather than
+reimplemented (hard limit #0). Record:
+
+| Item | Value |
+|---|---|
+| Upstream | `bylaws/libadrenotools` |
+| Commit | `8fae8ce254dfc1344527e05301e43f37dea2df80` |
+| License | BSD-2-Clause |
+| Transitive | `bylaws/liblinkernsbypass` @ `aa3975893d83ef1bc84c321ec60c65fbf1287887`, BSD-2-Clause |
+| Local patches | none |
+| Rationale | mature ICD loader already used by PPSSPP, Dolphin, Vita3K, Flycast, Strato and Azahar; BSD-2-Clause is GPL-3.0-compatible; a clean-room loader is forbidden without sign-off |
+| Pin/digest | `dependencies.json` (`type: fetch`, commit-archive SHA-256) |
+| Per-subtree detail | `third_party/libadrenotools/PROVENANCE.md`, `third_party/liblinkernsbypass/PROVENANCE.md` |
+| Driver-package contract | [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) |
+
+No upstream source, object or driver binary is committed. The fetched archives
+are verified before extraction under `build/android-deps/`; driver packages
+supplied by users remain app-private and are never bundled.

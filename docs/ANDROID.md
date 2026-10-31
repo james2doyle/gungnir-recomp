@@ -120,7 +120,8 @@ Each mutation was applied locally and the named gate failed for that reason:
 
 - No game rendering yet; the title screen is T13.
 - Audio is a lifecycle tone, not game audio (T12).
-- Custom Adreno driver selection is T10.
+- Custom Adreno driver selection is T10; the package contract and loader
+  decision are in [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md).
 - The affinity heuristic uses the highest allowed CPU, not topology/frequency.
 - Debug APK only; release signing is not configured.
 

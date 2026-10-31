@@ -124,6 +124,7 @@ python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scr
 python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity gate
 python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
 python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
+python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pins
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -218,3 +219,11 @@ SDL3, game-data and affinity modules, checks `docs/ANDROID.md` and the T9 QA
 report, and verifies that screenshots land under the gitignored `build/qa/`
 tree. Device and emulator evidence is in
 `docs/qa/2026-10-30-t9-android-shell.md`; tests never substitute for it.
+
+`tests/test_adreno_docs.py` is the T10a contract gate. It asserts the
+libadrenotools and liblinkernsbypass fetch pins (commit, archive SHA-256,
+license, path), their license/provenance files, and the driver contract in
+`docs/ANDROID_DRIVERS.md`: the adoption decision, both package shapes,
+`meta.json` fields, private-storage and packaging constraints, the named-error
+table, and the no-bundling policy. No driver archive is downloaded or
+committed by the test.

@@ -15,6 +15,8 @@ verified by `tools/deps.py verify` (TC-2.1) and by
 | `third_party/pspsdk-nids` | pspdev/pspsdk | `c3da4314` | BSD-3-Clause (in-tree `LICENSE`) | generated NID facts (`configs/nids.csv`); no upstream source vendored | `third_party/pspsdk-nids/PROVENANCE.md` |
 | `third_party/yakumo` | TeamGDB/Yakumo | `b61852af` (full pin in dependencies.json) | MIT (in-tree `LICENSE`) | subset (readers + framework core + CLI tooling), **7 recorded local patches**; kernel/HLE adapted outside the tree | per-file mapping, patch list, adapted-file list, game-content audit: `third_party/yakumo/PROVENANCE.md` |
 | `third_party/atrac3p` | Jstar269/nakagawa-recomp (FFmpeg n4.4 subset) | `1117d635` (FFmpeg tag/blob pins inside) | LGPL-2.1-or-later (in-tree `LICENSE.LGPLv2.1.txt`) | decoder subset byte-identical; one additive `extern "C"` guard in the authored API header | FFmpeg blob manifest, local deltas, boundaries: `third_party/atrac3p/PROVENANCE.md` |
+| `third_party/libadrenotools` | bylaws/libadrenotools | `8fae8ce2` (full pin in dependencies.json) | BSD-2-Clause (in-tree `LICENSE`) | adopted, **fetch-only**; built from source for Android arm64, no source or binary committed | ICD loading, linker-namespace hooks; submodule composition and constraints: `third_party/libadrenotools/PROVENANCE.md` |
+| `third_party/liblinkernsbypass` | bylaws/liblinkernsbypass | `aa397589` (full pin in dependencies.json) | BSD-2-Clause (in-tree `LICENSE`) | adopted, **fetch-only**; transitive submodule of libadrenotools, no source or binary committed | private linker namespace + soname patching: `third_party/liblinkernsbypass/PROVENANCE.md` |
 
 ## Rules this ledger enforces
 
@@ -71,3 +73,12 @@ Android Gradle build compiles SDL's Java layer from the same pinned tree.
 `tools/deps.py` verifies the archive when it is materialized and reports the
 pin as not materialized otherwise — never a silent skip. Only the license and
 provenance note live under `third_party/sdl3/`.
+
+libadrenotools and its `liblinkernsbypass` submodule (T10) follow the same
+fetch-only rule: each commit-archive SHA-256 is pinned in `dependencies.json`,
+and the Android build verifies both archives before unpacking them under
+`build/android-deps`. GitHub commit archives exclude submodule content, so
+liblinkernsbypass is a separate pinned entry that is unpacked into
+`libadrenotools/lib/linkernsbypass/`. No upstream source, object, or driver
+binary is committed; only licenses and provenance notes live under
+`third_party/libadrenotools/` and `third_party/liblinkernsbypass/`.
