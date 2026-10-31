@@ -91,6 +91,13 @@ version reported by the running session. Zips dropped in
 reports that custom drivers require arm64 and keeps the system driver. See
 [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the package contract.
 
+## Input
+
+Touch overlay, the Menu settings surface, layout JSON, keyboard/mouse maps,
+gamepad profiles/remap and touch haptics are documented in
+[`docs/INPUT.md`](INPUT.md). The physical-device evidence is in
+`docs/qa/2026-10-31-t11-*.md`.
+
 ## Lifecycle and orientation
 
 The Activity is fixed to landscape (`LandscapeLeft`), so user rotation locks
