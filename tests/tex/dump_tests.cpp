@@ -217,6 +217,26 @@ void dump_writes_png_and_manifest() {
     fs::remove_all(directory, error);
 }
 
+void two_run_dump_is_deterministic() {
+    const TplTexture texture = clut4_texture();
+    const fs::path first = make_temp_dir();
+    const fs::path second = make_temp_dir();
+    const auto one = dump_textures(std::span<const TplTexture>(&texture, 1), {first});
+    const auto two = dump_textures(std::span<const TplTexture>(&texture, 1), {second});
+    check(one.ok && two.ok, "both dumps succeed");
+    check(one.entries.size() == 1 && two.entries.size() == 1, "both dumps have one entry");
+    check(one.entries[0].key == two.entries[0].key, "two runs produce the same key");
+    const PngReadResult png_one = read_png(first / one.entries[0].filename);
+    const PngReadResult png_two = read_png(second / two.entries[0].filename);
+    check(png_one.ok && png_two.ok, "both PNGs read");
+    check(png_one.image.rgba == png_two.image.rgba, "two runs produce the same pixels");
+    check(read_text(first / "textures.ini") == read_text(second / "textures.ini"),
+          "two runs produce the same manifest");
+    std::error_code error;
+    fs::remove_all(first, error);
+    fs::remove_all(second, error);
+}
+
 void dump_multiple_textures() {
     TplTexture first = clut4_texture();
     TplTexture second = first;
@@ -319,6 +339,7 @@ int main() {
         key_is_content_addressed();
         png_round_trip_and_errors();
         dump_writes_png_and_manifest();
+        two_run_dump_is_deterministic();
         dump_multiple_textures();
         clut_change_creates_second_dump();
         existing_mismatch_is_named();

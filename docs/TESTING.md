@@ -165,4 +165,9 @@ replacement isolation and invalid inputs.
 
 `tests/test_font_repack.py` covers the font-atlas tool: identity gate,
 2x/4x scaling, ink-width regeneration, a collision-free test string and
-refusals that leave no output. T8f consolidates TC-8.1–TC-8.4.
+refusals that leave no output.
+
+`tests/test_texture_suite.py` is the consolidated TC-8.1–TC-8.4 gate over the
+four groups above. It also checks the TPL/DAR/replacement documents, the
+mutation ledger and the named-gap list. `docs/TEXTURE_REPLACEMENT.md` is the
+user-facing dump/replacement/font guide.

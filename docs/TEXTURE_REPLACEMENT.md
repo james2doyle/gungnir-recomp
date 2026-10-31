@@ -167,6 +167,46 @@ Limitations: nearest-neighbour scaling only (no outline rasterizer), and the
 input must be the single-texture 4bpp font shape. No game font, glyph bitmap
 or translated string is committed; the glyph source is user-supplied.
 
+## Acceptance matrix
+
+| Gate | Fixtures | Gate |
+|---|---|---|
+| TC-8.1 | synthetic TPL containers decode and re-encode byte-identically | `tex_tpl_tests` |
+| TC-8.2 | dump -> replace -> reload with 2x/4x PNGs and a software-rasterizer scene | `tex_dump_tests`, `tex_replace_tests` |
+| TC-8.3 | 2x/4x font atlas, ink-width table, collision-free fixed string | `tests/test_font_repack.py` |
+| TC-8.4 | odd widths, multi-texture containers, bpp=4 alpha ramp, bpp=5 CLUT | `tex_tpl_tests` |
+
+The consolidated entry point is `tests/test_texture_suite.py`.
+
+## Mutation evidence
+
+Each semantic mutation was applied locally and the named check failed for
+that reason:
+
+| Area | Mutation | Failing check |
+|---|---|---|
+| T8a | CLUT mask fixed at 16 entries | `CLUT mask selects all 256 entries` |
+| T8b | writer returns the original bytes | `writer writes the modified texel` |
+| T8c | palette bytes omitted from the content key | `CLUT bytes change the key` |
+| T8d | replacement dimensions dropped | `replacement state uses the image dimensions` |
+| T8e | ink width changed to `right - left + 2` | `width == expected_width * scale` |
+
+## Named gaps
+
+- DXT formats 8-10 are not decoded; they fail with
+  `unsupported_pixel_format`.
+- `debugFont.tpl` uses pixel format `0x0108` and fails closed.
+- bpp=5 (CLUT8) decode uses the container's palette descriptor; there is no
+  independent PPSSPP pixel oracle for those textures, so their colours are
+  HYPOTHESIS until a dump diff is recorded.
+- Keys are 16-hex content keys, not PPSSPP's 24-hex address+CLUT+content
+  hashes. Existing PPSSPP packs do not match by name.
+- PPSSPP `[hashranges]`, `[filtering]`, mipmap levels, empty-filename skip,
+  KTX2/DDS/ZIM and async replacement loading are not implemented.
+- Font repacking is nearest-neighbour only and accepts only the
+  single-texture 4bpp font container; no outline rasterizer.
+- DAR extraction/repack (`tools/dar.py`) is T12.
+
 ## Tests
 
 `tests/test_tex_dump.py` runs `tex_dump_tests` over hand-authored linear
