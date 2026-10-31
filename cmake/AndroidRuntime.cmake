@@ -64,6 +64,9 @@ function(gungnir_add_runtime_library target)
         VERBATIM)
 
     add_library(${target} SHARED
+        "${ARG_ROOT}/runtime/input/input_state.cpp"
+        "${ARG_ROOT}/runtime/input/keyboard_map.cpp"
+        "${ARG_ROOT}/runtime/input/sdl_input.cpp"
         "${ARG_ROOT}/runtime/ge/display_list.cpp"
         "${ARG_ROOT}/runtime/ge/software.cpp"
         "${ARG_ROOT}/runtime/ge/texture.cpp"
@@ -89,6 +92,7 @@ function(gungnir_add_runtime_library target)
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
     target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log z)
+    target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_SDL3=1)
     if(ARG_ADRENOTOOLS_TARGET)
         target_link_libraries(${target} PRIVATE ${ARG_ADRENOTOOLS_TARGET})
         target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_ADRENOTOOLS=1)

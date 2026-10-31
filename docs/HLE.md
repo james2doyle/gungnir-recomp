@@ -169,7 +169,9 @@ Gungnir's actual import set for the next stage:
 - `sceGe_user`: EdramGetAddr/GetSize/SetAddrTranslation, Set/UnsetCallback,
   ListEnQueue/EnQueueHead/UpdateStallAddr, ListSync, DrawSync, Break, Continue.
 - `sceCtrl`: SetSamplingMode/Cycle, SetIdleCancelThreshold,
-  ReadBufferPositive.
+  Read/PeekBufferPositive, Read/PeekLatch. T11a feeds the pad from
+  `runtime/input/` (button bits, merged analog, make/break latch); the latch
+  samples on each positive-buffer read.
 - `sceRtcGetCurrentTick` is imported but not yet handled.
 
 ## Provenance

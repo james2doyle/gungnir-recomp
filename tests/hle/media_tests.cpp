@@ -6,6 +6,7 @@
 #include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
 #include "hle/kernel.hpp"
+#include "input/input_state.hpp"
 
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
@@ -45,6 +46,7 @@ public:
 
     explicit Fixture(const std::filesystem::path &nids) : runtime(32u * 1024u * 1024u) {
         gungnir::hle::reset_media_state();
+        gungnir::input::reset_state();
         kernel() = Kernel{};
         kernel().install(runtime, 0x08801000u, 0x08820000u);
         kernel().set_pacing_enabled(false);
@@ -61,6 +63,7 @@ public:
         kernel() = Kernel{};
         psprecomp::set_runtime_starvation_hook(nullptr, 0);
         gungnir::hle::reset_media_state();
+        gungnir::input::reset_state();
     }
 
     std::uint32_t call(const std::string &library, const std::string &name,
@@ -137,6 +140,48 @@ void controller_contracts() {
               "secondary stick is centred");
     }
     check(mem.load32(Fixture::kOutput) >= before, "sample time is current virtual time");
+
+    auto &input = gungnir::input::state();
+    const gungnir::input::ButtonMask cross = gungnir::input::button_mask(gungnir::input::Button::Cross);
+    const gungnir::input::ButtonMask up = gungnir::input::button_mask(gungnir::input::Button::Up);
+
+    input.set_buttons(gungnir::input::Source::Touch, 0, 1, cross | up);
+    input.set_analog(gungnir::input::Source::Touch, 0, 1, {0.5f, -0.5f});
+    check(f.call("sceCtrl", "sceCtrlPeekBufferPositive", {Fixture::kOutput, 2u}) == 2u,
+          "peek returns the requested samples");
+    check(mem.load32(Fixture::kOutput + 4u) == (cross | up), "peek exposes held buttons");
+    check(mem.load8(Fixture::kOutput + 8u) == 183u && mem.load8(Fixture::kOutput + 9u) == 73u,
+          "peek exposes the merged analog through the dead zone");
+    check(mem.load8(Fixture::kOutput + 10u) == 0x80u && mem.load8(Fixture::kOutput + 11u) == 0x80u,
+          "unused secondary stick stays centred");
+
+    input.release_all();
+    check(f.call("sceCtrl", "sceCtrlPeekBufferPositive", {Fixture::kOutput, 1u}) == 1u,
+          "peek after release returns");
+    check(mem.load32(Fixture::kOutput + 4u) == 0u, "release-all clears the guest buttons");
+    check(mem.load8(Fixture::kOutput + 8u) == 0x80u && mem.load8(Fixture::kOutput + 9u) == 0x80u,
+          "release-all centres the guest analog");
+
+    gungnir::hle::reset_media_state();
+    const std::uint32_t latch = Fixture::kOutput + 0x40u;
+    check(f.call("sceCtrl", "sceCtrlReadLatch", {latch}) == 0u, "a fresh latch has no samples");
+    input.set_buttons(gungnir::input::Source::Touch, 0, 1, cross);
+    check(f.call("sceCtrl", "sceCtrlPeekBufferPositive", {Fixture::kOutput, 1u}) == 1u,
+          "peek samples for the latch");
+    check(f.call("sceCtrl", "sceCtrlReadLatch", {latch}) == 1u, "read latch returns the sample count");
+    check(mem.load32(latch) == cross, "latch records the make edge");
+    check(mem.load32(latch + 4u) == 0u, "latch has no break edge");
+    check(mem.load32(latch + 8u) == cross, "latch records the pressed state");
+    check(f.call("sceCtrl", "sceCtrlReadLatch", {latch}) == 0u, "read latch resets the history");
+    check(mem.load32(latch) == 0u && mem.load32(latch + 8u) == 0u, "reset latch is empty");
+
+    input.release(gungnir::input::Source::Touch, 0, 1);
+    check(f.call("sceCtrl", "sceCtrlReadBufferPositive", {Fixture::kOutput, 1u}) == 1u,
+          "buffer read returns after a vblank");
+    check(f.call("sceCtrl", "sceCtrlReadLatch", {latch}) == 1u, "buffer read samples the latch");
+    check(mem.load32(latch) == 0u, "latch has no make edge after release");
+    check(mem.load32(latch + 4u) == cross, "latch records the break edge");
+    check(mem.load32(latch + 12u) == ~0u, "latch records release as the inverse mask");
 }
 
 int g_signal_calls = 0;

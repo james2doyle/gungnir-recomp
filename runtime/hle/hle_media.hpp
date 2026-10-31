@@ -4,8 +4,8 @@
 //
 // The timing and callback semantics are adapted from TeamGDB/Yakumo's MIT
 // `profiles/mhp3rd/host/hle/hle_media.cpp` at the pinned commit recorded in
-// third_party/yakumo/PROVENANCE.md. That file also contains the renderer,
-// audio and input implementation; those stay out of this profile until T7/T12.
+// third_party/yakumo/PROVENANCE.md. The renderer and audio stay out of this
+// profile until T12; pad state comes from runtime/input (T11a).
 
 #include "hle/hle_common.hpp"
 

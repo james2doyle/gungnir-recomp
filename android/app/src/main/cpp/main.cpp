@@ -5,6 +5,8 @@
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include "input/input_state.hpp"
+#include "input/sdl_input.hpp"
 #include "platform/adreno/package.hpp"
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
@@ -115,11 +117,14 @@ struct LifecycleState {
     std::atomic<bool> background{false};
     std::atomic<bool> resume{false};
     std::atomic<SDL_AudioStream *> tone{nullptr};
+    gungnir::input::SdlInput *sdl_input{};
 };
 
 bool lifecycle_watch(void *userdata, SDL_Event *event) {
     auto *state = static_cast<LifecycleState *>(userdata);
     if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+        if (state->sdl_input != nullptr) state->sdl_input->release_held();
+        gungnir::input::state().release_all();
         state->background.store(true);
         if (SDL_AudioStream *tone = state->tone.load(); tone != nullptr) {
             if (!SDL_PauseAudioStreamDevice(tone))
@@ -128,6 +133,10 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
                 GUNGNIR_LOGI("audio_paused\n");
         }
         GUNGNIR_LOGI("lifecycle_paused\n");
+    }
+    if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+        if (state->sdl_input != nullptr) state->sdl_input->release_held();
+        gungnir::input::state().release_all();
     }
     if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         state->background.store(false);
@@ -337,6 +346,8 @@ int main(int, char **) {
     }
 
     LifecycleState lifecycle;
+    gungnir::input::SdlInput sdl_input;
+    lifecycle.sdl_input = &sdl_input;
     SDL_AudioStream *tone = open_tone();
     lifecycle.tone.store(tone);
     SDL_AddEventWatch(lifecycle_watch, &lifecycle);
@@ -351,6 +362,7 @@ int main(int, char **) {
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            sdl_input.handle(event);
             if (event.type == SDL_EVENT_QUIT ||
                 event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
                 running = false;

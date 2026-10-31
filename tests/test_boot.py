@@ -117,7 +117,8 @@ class TestBoundedBoot(unittest.TestCase):
 
         binary = WORK / "boot_runner"
         objects = sorted(cls.obj_dir.glob("generated_unit_*.o")) + [
-            registry_obj, runner_obj, BUILD / "libgungnir_hle.a", BUILD / "libgungnir_ge.a", BUILD / "libyakumo.a"]
+            registry_obj, runner_obj, BUILD / "libgungnir_hle.a", BUILD / "libgungnir_input.a",
+            BUILD / "libgungnir_ge.a", BUILD / "libyakumo.a"]
         proc = subprocess.run([*cls.compiler, "-o", str(binary), *map(str, objects)],
                               capture_output=True, text=True)
         if proc.returncode != 0:

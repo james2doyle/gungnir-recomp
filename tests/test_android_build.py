@@ -112,6 +112,7 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copy2(BUILD_SH, root / "scripts" / "android" / "build.sh")
             shutil.copytree(REPO / "cmake", root / "cmake")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
+            shutil.copytree(REPO / "runtime" / "input", root / "runtime" / "input")
             shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")
             shutil.copytree(REPO / "third_party" / "miniz", root / "third_party" / "miniz")
             shutil.copytree(REPO / "third_party" / "nlohmann-json",

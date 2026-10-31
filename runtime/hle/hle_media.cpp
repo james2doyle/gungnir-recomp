@@ -1,6 +1,7 @@
 #include "hle/hle_media.hpp"
 
 #include "ge/display_list.hpp"
+#include "input/input_state.hpp"
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
@@ -47,6 +48,12 @@ struct MediaState {
     std::uint32_t ctrl_cycle{};
     std::uint32_t ctrl_mode{};
     std::uint32_t ctrl_reads{};
+    std::uint32_t ctrl_last_buttons{};
+    std::uint32_t ctrl_latch_make{};
+    std::uint32_t ctrl_latch_break{};
+    std::uint32_t ctrl_latch_press{};
+    std::uint32_t ctrl_latch_release{};
+    std::uint32_t ctrl_latch_samples{};
     std::map<std::int32_t, GeCallback> ge_callbacks;
     std::int32_t next_ge_callback{};
     std::map<std::uint32_t, GeList> ge_lists;
@@ -126,18 +133,54 @@ void run_ge_list(Runtime &rt, std::uint32_t id) {
 
 void write_pad_state(psprecomp::GuestMemory &memory, std::uint32_t address, std::uint32_t count,
     std::uint64_t now_us) {
+    const gungnir::input::PadState pad = gungnir::input::state().pad();
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t entry = address + i * 16u;
         memory.store32(entry, static_cast<std::uint32_t>(now_us));
-        memory.store32(entry + 4u, 0u);
-        // Both sticks report their centre. The guest subtracts 128 from Lx and
-        // Ly, so 0x80 is neutral in analog and digital sampling modes alike.
-        memory.store8(entry + 8u, 0x80u);
-        memory.store8(entry + 9u, 0x80u);
-        memory.store8(entry + 10u, 0x80u);
-        memory.store8(entry + 11u, 0x80u);
+        memory.store32(entry + 4u, pad.buttons);
+        // The guest subtracts 128 from Lx/Ly, so 0x80 is neutral in analog and
+        // digital sampling modes alike.
+        memory.store8(entry + 8u, pad.lx);
+        memory.store8(entry + 9u, pad.ly);
+        memory.store8(entry + 10u, pad.rx);
+        memory.store8(entry + 11u, pad.ry);
         for (std::uint32_t j = 12u; j < 16u; ++j) memory.store8(entry + j, 0u);
     }
+}
+
+// sceCtrl keeps a make/break/press/release latch. The PSP samples it every
+// vblank; here a buffer read is the sample point (the guest's frame loop), so
+// the latch reflects input at the same moments the guest sees the pad.
+void sample_ctrl_latch() {
+    MediaState &state = media();
+    const std::uint32_t buttons = gungnir::input::state().buttons();
+    const std::uint32_t changed = buttons ^ state.ctrl_last_buttons;
+    state.ctrl_latch_make |= buttons & changed;
+    state.ctrl_latch_break |= state.ctrl_last_buttons & changed;
+    state.ctrl_latch_press |= buttons;
+    state.ctrl_latch_release |= ~buttons;
+    state.ctrl_last_buttons = buttons;
+    ++state.ctrl_latch_samples;
+}
+
+void write_ctrl_latch(psprecomp::GuestMemory &memory, std::uint32_t address) {
+    const MediaState &state = media();
+    memory.store32(address, state.ctrl_latch_make);
+    memory.store32(address + 4u, state.ctrl_latch_break);
+    memory.store32(address + 8u, state.ctrl_latch_press);
+    memory.store32(address + 12u, state.ctrl_latch_release);
+}
+
+std::uint32_t take_ctrl_latch(psprecomp::GuestMemory &memory, std::uint32_t address) {
+    const std::uint32_t previous = media().ctrl_latch_samples;
+    write_ctrl_latch(memory, address);
+    MediaState &state = media();
+    state.ctrl_latch_make = 0u;
+    state.ctrl_latch_break = 0u;
+    state.ctrl_latch_press = 0u;
+    state.ctrl_latch_release = 0u;
+    state.ctrl_latch_samples = 0u;
+    return previous;
 }
 
 void register_display(HleRegistrar &hle) {
@@ -208,6 +251,7 @@ void register_ctrl(HleRegistrar &hle) {
     hle.add("sceCtrl", "sceCtrlReadBufferPositive", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t address = arg(ctx, 0);
         const std::uint32_t count = std::clamp<std::uint32_t>(arg(ctx, 1), 1u, 64u);
+        sample_ctrl_latch();
         write_pad_state(rt.memory(), address, count, kernel().now_us());
         ++media().ctrl_reads;
         WaitState wait{};
@@ -218,8 +262,17 @@ void register_ctrl(HleRegistrar &hle) {
     hle.add("sceCtrl", "sceCtrlPeekBufferPositive", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t address = arg(ctx, 0);
         const std::uint32_t count = std::clamp<std::uint32_t>(arg(ctx, 1), 1u, 64u);
+        sample_ctrl_latch();
         write_pad_state(rt.memory(), address, count, kernel().now_us());
         kernel().finish(ctx, count);
+    });
+    hle.add("sceCtrl", "sceCtrlReadLatch", [](Runtime &rt, AllegrexContext &ctx) {
+        kernel().finish(ctx, take_ctrl_latch(rt.memory(), arg(ctx, 0)));
+    });
+    hle.add("sceCtrl", "sceCtrlPeekLatch", [](Runtime &rt, AllegrexContext &ctx) {
+        sample_ctrl_latch();
+        write_ctrl_latch(rt.memory(), arg(ctx, 0));
+        kernel().finish(ctx, media().ctrl_latch_samples);
     });
 }
 
