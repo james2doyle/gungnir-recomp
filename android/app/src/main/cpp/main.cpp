@@ -7,11 +7,14 @@
 
 #include "input/input_state.hpp"
 #include "input/sdl_input.hpp"
+#include "input/touch_layout_store.hpp"
+#include "input/touch_overlay.hpp"
 #include "platform/adreno/package.hpp"
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/game_data.hpp"
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -38,6 +41,7 @@ namespace {
 
 std::mutex g_driver_info_mutex;
 std::string g_driver_info;
+std::mutex g_touch_mutex;
 
 std::string read_asset(const char *name) {
     SDL_IOStream *stream = SDL_IOFromFile(name, "rb");
@@ -251,6 +255,116 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_gungnir_recomp_GungnirActivity_nativeDriverInfo(JNIEnv *env, jobject) {
     std::lock_guard<std::mutex> lock(g_driver_info_mutex);
     return env->NewStringUTF(g_driver_info.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeViewport(
+    JNIEnv *, jclass, jint width, jint height, jint left, jint top, jint right, jint bottom) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    gungnir::input::touch_overlay().set_viewport(width, height,
+        gungnir::input::TouchInsets{static_cast<float>(left), static_cast<float>(top),
+            static_cast<float>(right), static_cast<float>(bottom)});
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeTouch(
+    JNIEnv *, jclass, jint action, jint pointer, jfloat x, jfloat y) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    auto &overlay = gungnir::input::touch_overlay();
+    switch (action) {
+    case 0:
+        overlay.touch_down(pointer, x, y);
+        break;
+    case 1:
+        overlay.touch_move(pointer, x, y);
+        break;
+    case 2:
+        overlay.touch_up(pointer);
+        break;
+    default:
+        overlay.cancel();
+        break;
+    }
+    overlay.publish();
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeSnapshot(JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    const auto snapshot = gungnir::input::touch_overlay().snapshot();
+    std::array<jfloat, gungnir::input::kTouchControls * 5u> values{};
+    for (std::size_t i = 0; i < snapshot.size(); ++i) {
+        values[i * 5u + 0u] = snapshot[i].cx;
+        values[i * 5u + 1u] = snapshot[i].cy;
+        values[i * 5u + 2u] = snapshot[i].radius;
+        values[i * 5u + 3u] = snapshot[i].visible ? 1.0f : 0.0f;
+        values[i * 5u + 4u] = snapshot[i].pressed ? 1.0f : 0.0f;
+    }
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(values.size()));
+    if (result != nullptr)
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    return result;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeDpadBits(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    return static_cast<jint>(gungnir::input::touch_overlay().dpad_bits());
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeStick(JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    const gungnir::input::ActiveStick stick = gungnir::input::touch_overlay().active_stick();
+    const std::array<jfloat, 6u> values{stick.active ? 1.0f : 0.0f, stick.origin_x, stick.origin_y,
+        stick.thumb_x, stick.thumb_y, stick.reach};
+    jfloatArray result = env->NewFloatArray(static_cast<jsize>(values.size()));
+    if (result != nullptr)
+        env->SetFloatArrayRegion(result, 0, static_cast<jsize>(values.size()), values.data());
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeEditing(JNIEnv *, jclass, jboolean editing) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    gungnir::input::touch_overlay().set_editing(editing == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeLoadLayout(JNIEnv *env, jclass, jstring path) {
+    const std::string file = jstring_to_string(env, path);
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    const gungnir::input::TouchLayoutResult result =
+        gungnir::input::load_touch_layout(file, gungnir::input::touch_overlay());
+    switch (result.status) {
+    case gungnir::input::TouchLayoutStatus::Ok:
+        return 0;
+    case gungnir::input::TouchLayoutStatus::Missing:
+        return 1;
+    case gungnir::input::TouchLayoutStatus::Older:
+        return 2;
+    case gungnir::input::TouchLayoutStatus::Corrupt:
+        return 3;
+    default:
+        return 4;
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeSaveLayout(JNIEnv *env, jclass, jstring path) {
+    const std::string file = jstring_to_string(env, path);
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    const gungnir::input::TouchLayoutResult result =
+        gungnir::input::save_touch_layout(file, gungnir::input::touch_overlay());
+    return result.status == gungnir::input::TouchLayoutStatus::Ok ? 0 : 1;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_TouchOverlayView_nativeResetLayout(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> lock(g_touch_mutex);
+    auto &overlay = gungnir::input::touch_overlay();
+    overlay.reset_layout();
+    overlay.publish();
 }
 #endif
 

@@ -78,6 +78,7 @@ InputState::Slot &InputState::claim(Source source, int device, int pointer) noex
 }
 
 void InputState::set_buttons(Source source, int device, int pointer, ButtonMask buttons) {
+    std::lock_guard<std::mutex> lock(mutex_);
     Slot &slot = claim(source, device, pointer);
     slot.buttons = buttons;
     slot.revision = ++revision_;
@@ -85,6 +86,7 @@ void InputState::set_buttons(Source source, int device, int pointer, ButtonMask 
 }
 
 void InputState::set_analog(Source source, int device, int pointer, Analog analog) {
+    std::lock_guard<std::mutex> lock(mutex_);
     Slot &slot = claim(source, device, pointer);
     slot.analog = Analog{std::clamp(analog.x, -1.0f, 1.0f), std::clamp(analog.y, -1.0f, 1.0f)};
     slot.revision = ++revision_;
@@ -92,6 +94,7 @@ void InputState::set_analog(Source source, int device, int pointer, Analog analo
 }
 
 void InputState::release(Source source, int device, int pointer) {
+    std::lock_guard<std::mutex> lock(mutex_);
     Slot *slot = find(source, device, pointer);
     if (slot == nullptr) return;
     slot->used = false;
@@ -99,6 +102,7 @@ void InputState::release(Source source, int device, int pointer) {
 }
 
 void InputState::release_source(Source source) {
+    std::lock_guard<std::mutex> lock(mutex_);
     bool changed = false;
     for (Slot &slot : slots_) {
         if (slot.used && slot.source == source) {
@@ -110,11 +114,17 @@ void InputState::release_source(Source source) {
 }
 
 void InputState::release_all() {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (Slot &slot : slots_) slot.used = false;
     refresh_edges();
 }
 
-Analog InputState::analog() const noexcept {
+Analog InputState::analog() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return analog_locked();
+}
+
+Analog InputState::analog_locked() const noexcept {
     for (const Source source : kAnalogPriority) {
         const Slot *best = nullptr;
         for (const Slot &slot : slots_) {
@@ -126,11 +136,13 @@ Analog InputState::analog() const noexcept {
     return {};
 }
 
-PadState InputState::pad() const noexcept {
-    return to_pad(merged_, analog());
+PadState InputState::pad() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return to_pad(merged_, analog_locked());
 }
 
-bool InputState::source_active(Source source) const noexcept {
+bool InputState::source_active(Source source) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     for (const Slot &slot : slots_) {
         if (!slot.used || slot.source != source) continue;
         if (slot.buttons != 0u || source_engaged(slot.analog)) return true;
@@ -138,10 +150,34 @@ bool InputState::source_active(Source source) const noexcept {
     return false;
 }
 
-Edges InputState::take_edges() noexcept {
+ButtonMask InputState::buttons() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return merged_;
+}
+
+bool InputState::held(Button button) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return (merged_ & button_mask(button)) != 0u;
+}
+
+Edges InputState::take_edges() {
+    std::lock_guard<std::mutex> lock(mutex_);
     const Edges result = edges_;
     edges_ = {};
     return result;
+}
+
+void InputState::clear_edges() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    edges_ = {};
+}
+
+void InputState::reset() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    slots_ = {};
+    merged_ = 0u;
+    edges_ = {};
+    revision_ = 0u;
 }
 
 void InputState::refresh_edges() noexcept {
@@ -160,7 +196,7 @@ InputState &state() noexcept {
 }
 
 void reset_state() {
-    state() = InputState{};
+    state().reset();
 }
 
 } // namespace gungnir::input

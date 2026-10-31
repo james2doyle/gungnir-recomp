@@ -23,6 +23,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace gungnir::input {
 
@@ -111,18 +112,19 @@ public:
     // Drops every source (window focus lost, app backgrounded).
     void release_all();
 
-    [[nodiscard]] ButtonMask buttons() const noexcept { return merged_; }
-    [[nodiscard]] bool held(Button button) const noexcept {
-        return (merged_ & button_mask(button)) != 0u;
-    }
-    [[nodiscard]] Analog analog() const noexcept;
-    [[nodiscard]] PadState pad() const noexcept;
-    [[nodiscard]] bool source_active(Source source) const noexcept;
+    [[nodiscard]] ButtonMask buttons() const;
+    [[nodiscard]] bool held(Button button) const;
+    [[nodiscard]] Analog analog() const;
+    [[nodiscard]] PadState pad() const;
+    [[nodiscard]] bool source_active(Source source) const;
 
     // Press/release edges since the previous take. Consuming edges does not
     // change the held state.
-    [[nodiscard]] Edges take_edges() noexcept;
-    void clear_edges() noexcept { edges_ = {}; }
+    [[nodiscard]] Edges take_edges();
+    void clear_edges();
+
+    // Clears every slot and the edge history.
+    void reset();
 
 private:
     struct Slot {
@@ -141,7 +143,9 @@ private:
     [[nodiscard]] const Slot *find(Source source, int device, int pointer) const noexcept;
     Slot &claim(Source source, int device, int pointer) noexcept;
     void refresh_edges() noexcept;
+    [[nodiscard]] Analog analog_locked() const noexcept;
 
+    mutable std::mutex mutex_;
     std::array<Slot, kMaxSlots> slots_{};
     ButtonMask merged_{};
     Edges edges_{};

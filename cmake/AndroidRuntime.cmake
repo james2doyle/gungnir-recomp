@@ -67,6 +67,8 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/input/input_state.cpp"
         "${ARG_ROOT}/runtime/input/keyboard_map.cpp"
         "${ARG_ROOT}/runtime/input/sdl_input.cpp"
+        "${ARG_ROOT}/runtime/input/touch_layout_store.cpp"
+        "${ARG_ROOT}/runtime/input/touch_overlay.cpp"
         "${ARG_ROOT}/runtime/ge/display_list.cpp"
         "${ARG_ROOT}/runtime/ge/software.cpp"
         "${ARG_ROOT}/runtime/ge/texture.cpp"

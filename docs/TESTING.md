@@ -129,6 +129,8 @@ python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
 python3 -m unittest tests.test_vulkan_loader -v     # T10c loader selection/fallback
 python3 -m unittest tests.test_driver_store -v      # T10d driver inventory/selection
 python3 -m unittest tests.test_adreno_suite -v      # consolidated T10 gate
+python3 -m unittest tests.test_input -v            # T11a input core + sceCtrl mapping
+python3 -m unittest tests.test_touch_overlay -v    # T11b layout/pointer/edit/JSON
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 

@@ -13,6 +13,8 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import com.gungnir.recomp.input.TouchOverlayView;
+
 import org.libsdl.app.SDLActivity;
 
 import java.io.File;
@@ -28,6 +30,8 @@ public final class GungnirActivity extends SDLActivity {
 
     private Button pickerButton;
     private Button driversButton;
+    private Button layoutButton;
+    private TouchOverlayView touchOverlay;
     private DriverStore driverStore;
     private boolean customDriversSupported;
 
@@ -48,6 +52,10 @@ public final class GungnirActivity extends SDLActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+
+        touchOverlay = new TouchOverlayView(this);
+        addContentView(touchOverlay, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         SharedPreferences preferences = getSharedPreferences("gungnir", MODE_PRIVATE);
         driverStore = new DriverStore(getFilesDir(), new DriverStore.Preferences() {
@@ -74,14 +82,47 @@ public final class GungnirActivity extends SDLActivity {
         driversButton.setOnClickListener(view -> showDriversDialog());
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.gravity = Gravity.TOP | Gravity.END;
-        params.topMargin = 24;
+        params.gravity = Gravity.BOTTOM | Gravity.END;
+        params.bottomMargin = 24;
         params.rightMargin = 24;
         addContentView(driversButton, params);
+
+        layoutButton = new Button(this);
+        layoutButton.setText("Controls");
+        layoutButton.setOnClickListener(view -> toggleLayoutEditing());
+        layoutButton.setOnLongClickListener(view -> {
+            touchOverlay.resetLayout();
+            Toast.makeText(this, "Touch layout reset", Toast.LENGTH_SHORT).show();
+            return true;
+        });
+        FrameLayout.LayoutParams layoutParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        layoutParams.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+        layoutParams.bottomMargin = 24;
+        addContentView(layoutButton, layoutParams);
 
         if (customDriversSupported) {
             new Thread(this::importDropFolder, "driver-drop-import").start();
         }
+    }
+
+    private void toggleLayoutEditing() {
+        if (touchOverlay == null) return;
+        boolean editing = !touchOverlay.isEditing();
+        touchOverlay.setEditing(editing);
+        layoutButton.setText(editing ? "Done" : "Controls");
+        Toast.makeText(this, editing
+                ? "Drag controls; the corner handle resizes"
+                : "Touch layout saved", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    protected void onPause() {
+        if (touchOverlay != null) {
+            touchOverlay.releaseAll();
+            touchOverlay.saveLayout();
+        }
+        super.onPause();
     }
 
     public void showGameDataPicker() {
