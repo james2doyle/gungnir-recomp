@@ -90,29 +90,42 @@ machine (`sceUtilitySavedataInitStart`, `Update`, `GetStatus`,
 reaches 1,810,000 dispatches and 7,394 flips before the wall-clock bound.
 Details are in `BRINGUP.md`.
 
-## Remaining T6 boot-depth work (2026-10-30)
+## T6 completion audit (T6o, VERIFIED)
 
-Of the 215 imports in the main module, 158 are bound and 85 have executed at
-the current stop. The 57 unbound calls cluster into these workstreams; each is
-implemented only when the title actually executes it, and anything that never
-executes before the T6 gate is closed as a counted gap rather than a stub:
+`tests/hle/boot_runner.cpp` names the module-init gate and reports the stop
+cause and the kernel thread table. The gate is
+`module_init_complete = flips > 0 && buffer_width != 0 && no missing import`:
+a real presented frame proves module_start returned or the title reached its
+own loop. The deterministic 200,000-dispatch run reports `true` /
+`dispatch_limit` and the thread table:
 
-| Workstream | Imports | Trigger |
+```
+uid=258 user_main              waiting wait=vblank
+uid=301 SOUND thread(sas)      running
+uid=306 at3mem thread          waiting wait=delay
+uid=316 SOUND thread(UMD)      waiting wait=delay
+```
+
+Two 200,000-dispatch runs produce identical reports (TC-6.4). A 30-second
+unpaced run reaches 1,810,000 dispatches and 7,394 flips without a missing
+import.
+
+The remaining 57 imports are **counted gaps**, not stubs: any that executes
+still stops with `Missing HLE import …`. They are grouped as follows.
+
+| Group | Imports | Disposition |
 |---|---:|---|
-| IoFileMgr `Dread`/`Ioctl` | 2 | first directory scan or device control call |
-| Kernel, ThreadMan and UMD small calls | 8 | `WaitEventFlagCB`, `KernelMemcpy`, profiler, GPI, UMD medium/waits |
-| sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); not executed at this depth |
-| ATRAC track | 6 | first BGM decode: SetData, DecodeData, streaming, loop, remain |
-| SAS controls | 8 | ADSR/mode/SL, noise and reverb controls |
-| sceMpeg | 24 | only if a movie plays before the T6 gate (H.264 surface) |
+| IoFileMgr `sceIoDread`/`sceIoIoctl` | 2 | implement with the first directory-scan/device-control use |
+| Kernel/ThreadMan/Utils/UMD small calls | 8 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI, UMD medium/waits |
+| sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); savedata SIZES is implemented |
+| ATRAC track | 6 | decoder vendored and self-tested; handlers wait for the first decode |
+| SAS controls | 8 | ADSR/noise/reverb; wait for the first non-default control use |
+| sceMpeg | 24 | no movie at boot depth; decision-gated for M5/T12 |
 
-T6 closes when "module init complete" has a named gate in the boot report
-(loader thread returns or the game's main loop starts), the deepest run is
-deterministic across two runs, and every unexecuted counterpart above is
-recorded as a counted gap. The title now reaches its main loop; the remaining
-T6 work is the completion audit (T6o), not another boot-depth import. The
-decoder needed by the ATRAC track is already vendored and self-tested; the
-renderer work (T7) is independent.
+Other savedata modes (LOAD/SAVE/LIST/...) are modes of the four bound
+savedata imports; they currently return a named error rather than fake
+success and move to T12/M5 with the first non-SIZES use. T6 closes on this
+audit; T7 remains required for M3 because no GE frame is rendered yet.
 
 ## Module registry (T6d, VERIFIED)
 

@@ -101,7 +101,7 @@
         "GE fixtures pass on Vulkan (T7)"
       ],
       "evidence": {
-        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 158/215 imports bound, 85 executed all bound, zero missing/silent NIDs; deterministic run stops at 200,000 dispatches (2,178 vblanks, 738 flips, 36,345,296 us), a 30 s unpaced run reaches 1,810,000 dispatches and 7,394 flips in the title's main loop; VFPU, ThreadMan, sceAudio, SAS, ATRAC object, async IoFileMgr and savedata SIZES gaps fixed",
+        "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 158/215 imports bound, 85 executed all bound, zero missing/silent NIDs; module_init_complete=true, stop_cause=dispatch_limit, thread table shows user_main / SOUND thread(sas) / at3mem thread / SOUND thread(UMD); deterministic 200,000-dispatch run is 2,178 vblanks, 738 flips, 36,345,296 us; 30 s unpaced run reaches 1,810,000 dispatches and 7,394 flips. T6 gaps are counted in HLE.md",
         "tests": "64 tests green; tests/test_boot.py (TC-6.2 first flip, TC-6.4 identical 200,000-dispatch reports), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp, tests/hle/kernel_tests.cpp async IoFileMgr and savedata SIZES contracts",
         "gates": [
           "tools/repository_check.py PASS (177 files, 17 ignore probes)",
@@ -127,10 +127,7 @@
       ],
       "open": [
         "T7 Vulkan GE renderer + GE fixtures (required to close M3)",
-        "T6o module-init completion gate, counted-gap audit and deepest-run determinism closure",
-        "ATRAC track parse/decode handlers when the title starts decoding (decoder is vendored and self-tested)",
-        "sceUtility MsgDialog/GamedataInstall and other savedata modes remain counted gaps; implement only if executed",
-        "IoFileMgr sceIoDread/sceIoIoctl remain unbound; record as counted gaps if the title does not execute them before the T6 gate"
+        "first rendered GE frame on the Linux runtime (T7)"
       ]
     },
     "M4": {

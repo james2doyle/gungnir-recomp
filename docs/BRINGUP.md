@@ -527,3 +527,34 @@ deterministic comparison point.
 **Next gate.** There is no missing HLE import at this depth. T6o owns the
 named module-init-completion gate, the counted-gap audit and the deepest-run
 determinism closure; T7 still owns the first rendered GE frame.
+
+## 2026-10-30 — T6o: module-init gate, determinism and counted gaps
+
+**Symptom.** T6k left no missing HLE import: the 200,000-dispatch run stopped
+at the dispatch bound with the title in its main loop. The remaining T6 needs
+were evidence, not another handler.
+
+**Gate.** `boot_runner` now reports `module_init_complete`, `stop_cause` and
+the kernel thread table. The gate is `flips > 0 && buffer_width != 0 && no
+missing import`; a real presented frame proves module_start returned or the
+title reached its own loop. The 200,000-dispatch run reports `true` /
+`dispatch_limit` with `user_main`, `SOUND thread(sas)`, `at3mem thread` and
+`SOUND thread(UMD)` in the table. A 30-second unpaced run reaches 1,810,000
+dispatches and 7,394 flips.
+
+**Determinism.** The two-run check now bounds both sides by 200,000
+dispatches instead of wall time. The stable comparison includes the gate,
+stop cause, thread table, dispatch/vblank/flip counts, import lists and stop
+PC; both runs are identical.
+
+**Counted gaps.** 57 imports remain unbound and are recorded in `HLE.md`:
+IoFileMgr Dread/Ioctl (2), kernel/ThreadMan/Utils/UMD small calls (8),
+sceUtility MsgDialog/GamedataInstall (9), ATRAC track (6), SAS controls (8)
+and sceMpeg (24). They are absent handlers, not stubs: if one executes, the
+run still stops with its NID. Other savedata modes return a named error and
+move to T12/M5 with the first non-SIZES use. No ATRAC track decode, SAS
+control or movie call executed at this depth.
+
+**Closure.** T6 is complete: module init and the main loop are evidenced,
+the deepest bounded run is deterministic, and every unexecuted counterpart
+is counted. T7 remains required for M3 because no GE frame is rendered yet.

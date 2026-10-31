@@ -214,6 +214,16 @@ int main(int argc, char **argv) {
         const bool stopped_at_flip = reason.starts_with("first sceDisplaySetFrameBuf");
         const bool missing_import = reason.find("Missing HLE import") != std::string::npos;
         const auto &display = gungnir::hle::display_state();
+        // Named T6 gate: a real (non-zero-width) frame proves module init
+        // completed and the title reached its own loop. A missing import
+        // before any flip leaves the gate false.
+        const bool module_init_complete = display.flips > 0u && display.buffer_width != 0u && !missing_import;
+        std::string stop_cause = "guest_stop";
+        if (stopped_at_flip) stop_cause = "first_flip";
+        else if (missing_import) stop_cause = "missing_import";
+        else if (reason.starts_with("Dispatch limit")) stop_cause = "dispatch_limit";
+        else if (reason.find("wall-clock") != std::string::npos) stop_cause = "wall_clock";
+        else if (reason.find("scheduler deadlock") != std::string::npos) stop_cause = "scheduler_deadlock";
 
         std::ofstream out;
         if (!trace_path.empty()) {
@@ -236,6 +246,9 @@ int main(int argc, char **argv) {
                << "  \"first_frame_buf\": \"" << hex32(display.framebuffer) << "\",\n"
                << "  \"display_width\": " << display.buffer_width << ",\n"
                << "  \"display_format\": " << display.pixel_format << ",\n"
+               << "  \"module_init_complete\": " << (module_init_complete ? "true" : "false") << ",\n"
+               << "  \"stop_cause\": \"" << stop_cause << "\",\n"
+               << "  \"threads\": \"" << json_escape(gungnir::hle::kernel().describe_threads()) << "\",\n"
                << "  \"audio_buffers\": " << audio_sink.buffers << ",\n"
                << "  \"audio_frames\": " << audio_sink.frames << ",\n"
                << "  \"audio_peak\": " << audio_sink.peak << ",\n"

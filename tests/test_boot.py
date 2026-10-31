@@ -147,6 +147,8 @@ class TestBoundedBoot(unittest.TestCase):
         self.assertTrue(report["reached_first_frame_buf"], report["stop_reason"])
         self.assertTrue(report["stop_reason"].startswith("first sceDisplaySetFrameBuf"),
                         report["stop_reason"])
+        self.assertTrue(report["module_init_complete"], report["threads"])
+        self.assertEqual(report["stop_cause"], "first_flip")
         self.assertGreater(report["display_width"], 0)
         self.assertTrue(report["first_frame_buf"].startswith("0x04"),
                         "frame buffer should be in the VRAM window")
@@ -163,11 +165,14 @@ class TestBoundedBoot(unittest.TestCase):
         stable = ("module", "entry", "gp", "image_end", "functions", "dispatches",
                   "vblanks", "virtual_us", "flips", "first_frame_buf", "display_width",
                   "hle_bound", "imports_total", "imports_bound", "imports_unbound",
-                  "imports_executed", "stop_reason", "stop_pc")
+                  "imports_executed", "module_init_complete", "stop_cause", "threads",
+                  "stop_reason", "stop_pc")
         differences = {key: (first[key], second[key]) for key in stable
                        if first[key] != second[key]}
         self.assertEqual(differences, {}, "bounded runs diverged")
         self.assertEqual(first["stop_reason"], second["stop_reason"])
+        self.assertEqual(first["stop_cause"], "dispatch_limit")
+        self.assertTrue(first["module_init_complete"], first["threads"])
         self.assertGreater(first["dispatches"], 0)
 
     def test_no_unbound_import_executed_and_no_silent_nid(self):
@@ -180,6 +185,7 @@ class TestBoundedBoot(unittest.TestCase):
                          "an import executed without an HLE binding")
         self.assertGreater(report["imports_bound"], 100)
         self.assertGreater(len(executed), 20, "boot should exercise the HLE boot set")
+        self.assertTrue(report["module_init_complete"], report["threads"])
         self.assertGreater(report["dispatches"], 0)
 
 
