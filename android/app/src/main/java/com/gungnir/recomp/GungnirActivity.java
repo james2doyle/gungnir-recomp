@@ -1,7 +1,9 @@
 package com.gungnir.recomp;
 
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
+import android.os.Bundle;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.Toast;
@@ -24,6 +26,12 @@ public final class GungnirActivity extends SDLActivity {
     @Override
     protected String[] getLibraries() {
         return new String[] {"main"};
+    }
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
     }
 
     public void showGameDataPicker() {

@@ -78,7 +78,7 @@ class TestAndroidScripts(unittest.TestCase):
 
     def test_deploy_scripts_exist(self):
         scripts = REPO / "scripts" / "android"
-        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh"):
+        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh", "lifecycle.sh"):
             path = scripts / name
             self.assertTrue(path.is_file(), f"{name} exists")
             self.assertTrue(path.stat().st_mode & 0o111, f"{name} is executable")

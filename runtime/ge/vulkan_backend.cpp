@@ -1453,6 +1453,29 @@ bool VulkanBackend::render_swapchain(std::string &error) {
                      error);
 }
 
+bool VulkanBackend::recreate_surface(std::string &error) {
+    if (!impl_ || !impl_->initialized || impl_->config.headless) {
+        error = "not_a_swapchain_backend";
+        return false;
+    }
+    if (!impl_->config.create_surface) {
+        error = "missing_surface_factory";
+        return false;
+    }
+    vkDeviceWaitIdle(impl_->device);
+    impl_->destroy_swapchain();
+    if (impl_->surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(impl_->instance, impl_->surface, nullptr);
+        impl_->surface = VK_NULL_HANDLE;
+    }
+    impl_->surface = impl_->config.create_surface(impl_->instance);
+    if (impl_->surface == VK_NULL_HANDLE) {
+        error = "surface_recreate_failed";
+        return false;
+    }
+    return impl_->create_swapchain(error);
+}
+
 bool VulkanBackend::recreate_swapchain(int width, int height, std::string &error) {
     if (!impl_ || !impl_->initialized || impl_->config.headless) {
         error = "not_a_swapchain_backend";

@@ -5,7 +5,8 @@ The runtime is the MIT PSPRecomp framework core (vendored at
 plus project glue built around it from T5 onward: the profile/codegen driver,
 the adapted kernel/HLE boot set, the GE front end and Vulkan backend with the
 post-processing chain, and the texture dump/replace pipeline. The Android shell
-is T9.
+(T9) adds SDL3 presentation, identity-gated game-data intake and lifecycle
+recovery.
 
 ## Layers
 
@@ -20,6 +21,7 @@ runtime/ge/            display lists, vertex/T&L, software oracle, textures,
                        Vulkan backend, swapchain presentation
 runtime/post/          composable post passes and preset JSON
 runtime/tex/           TPL decode/write, content-keyed dump, PNG replacements
+runtime/platform/android/  game-data identity gate, asset stamps (T9c)
 android/               Gradle + SDL3 Activity shell and JNI entry (T9)
 tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
                        (our authorship; .mips text sources, ELF built into build/)

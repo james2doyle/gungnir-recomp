@@ -142,8 +142,8 @@ and checks the renderer/shader documents. Synthetic fixtures only.
 - TC-7.4: texture-range and CLUT re-upload invalidation.
 
 Mutation evidence and the remaining named gaps (full GE state machine -> draw
-path wiring, DXT textures, Vulkan post passes, Android presentation,
-validation-layer availability) are recorded in `docs/RENDERER.md`.
+path wiring, DXT textures, Vulkan post passes, validation-layer availability)
+are recorded in `docs/RENDERER.md`.
 
 ## Texture container gates (T8)
 
@@ -186,7 +186,15 @@ libraries, statically linked SDL3, the packaged SDL Java layer and an exported
 
 `tests/test_android_app.py` checks the SDL3 `release-3.4.18` pin against
 `cmake/Deps.cmake`, fetch reuse from a verified archive, tampered-archive
-rejection and the deploy scripts.
+rejection and the deploy/lifecycle scripts.
+
+`tests/test_ge_suite.py` exercises the windowed swapchain path, including
+`VulkanBackend::recreate_surface` (destroy/rebuild the VkSurfaceKHR and
+swapchain) before rendering again. On device, `scripts/android/lifecycle.sh`
+backgrounds and foregrounds the app three times, requires
+`lifecycle_resumed` after each cycle, verifies that frames remain landscape
+even with `user_rotation 0`, and checks audio pause/resume when the tone probe
+is available. The phone run passed with 3063x1335 frames.
 
 `tests/test_game_data.py` runs `game_data_tests`: synthetic `game/*.iso`
 discovery (case-insensitive, sorted), size and CRC32 gate rejection, corrupt

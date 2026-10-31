@@ -101,6 +101,7 @@ public:
     bool render_headless_draws(std::span<const VulkanDrawCall> calls, VulkanFrame &frame, std::string &error);
     bool render_swapchain(std::string &error);
     bool recreate_swapchain(int width, int height, std::string &error);
+    bool recreate_surface(std::string &error);
     void invalidate_texture(std::uint64_t key);
     void wait_idle();
     void shutdown();

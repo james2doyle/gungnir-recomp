@@ -92,8 +92,9 @@ Unimplemented or unexercised GE paths, counted as named gaps:
 3. Texture formats 0-7 are decoded; PSP DXT formats 8-10 are not.
 4. The post chain is the CPU oracle. GLSL post shaders compile, but are not
    yet recorded into the Vulkan present path.
-5. Windowed presentation is tested with a hidden SDL3 window; Android
-   `ANativeWindow` presentation is T9.
+5. Windowed presentation is tested with a hidden SDL3 window on desktop and
+   with SDL3's Android Vulkan surface on the emulator and phone (T9b); the
+   software oracle remains the parity path.
 6. No validation-layer binary is available in this environment.
 
 ## M3 evidence
@@ -102,5 +103,5 @@ Unimplemented or unexercised GE paths, counted as named gaps:
   deterministic 200,000-dispatch report.
 - GE fixtures: `tests/test_ge_suite.py` — TC-7.1–TC-7.4 over synthetic
   fixtures, 75-test repository suite green, `repository_check` PASS (211 files).
-- T7 closure: `data/milestones.json` M3 entry. Android presentation and device
-  QA remain M4/T9 work.
+- T7 closure: `data/milestones.json` M3 entry. Android presentation landed in
+  T9b; device QA and the title-screen milestone remain M4/T13 work.

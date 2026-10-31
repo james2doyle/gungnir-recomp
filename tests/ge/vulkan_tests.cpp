@@ -332,6 +332,8 @@ void windowed_swapchain() {
     check(backend.render_swapchain(error), error.c_str());
     check(backend.recreate_swapchain(320, 240, error), error.c_str());
     check(backend.render_swapchain(error), error.c_str());
+    check(backend.recreate_surface(error), error.c_str());
+    check(backend.render_swapchain(error), error.c_str());
     backend.shutdown();
     SDL_DestroyWindow(window);
     SDL_Quit();
