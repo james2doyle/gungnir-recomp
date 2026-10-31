@@ -121,6 +121,7 @@ python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
 python3 -m unittest tests.test_nids tests.test_hle -v  # T6a/T6b registry + kernel/HLE
 python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skeleton
 python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scripts
+python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity gate
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
@@ -185,8 +186,17 @@ libraries, statically linked SDL3, the packaged SDL Java layer and an exported
 
 `tests/test_android_app.py` checks the SDL3 `release-3.4.18` pin against
 `cmake/Deps.cmake`, fetch reuse from a verified archive, tampered-archive
-rejection and the deploy scripts. `tests/test_android_suite.py` will
-consolidate host checks for TC-9.2–TC-9.4 (probe frame, both game-data paths,
-hash-gate rejection, lifecycle transitions) with named skips when no SDK or
-device is present. Device and emulator runs are recorded per plan §8.3; tests
-never substitute for that evidence.
+rejection and the deploy scripts.
+
+`tests/test_game_data.py` runs `game_data_tests`: synthetic `game/*.iso`
+discovery (case-insensitive, sorted), size and CRC32 gate rejection, corrupt
+candidate skip with a valid fallback, missing-data naming, and runtime
+asset-stamp matching. The device check additionally pushed the real disc ISO
+to `getExternalFilesDir()/game/` and exercised the SAF picker; both paths
+reported `game_data_ok` with size 262766592 and CRC32 `183F3EDC`.
+
+`tests/test_android_suite.py` will consolidate host checks for TC-9.2–TC-9.4
+(probe frame, both game-data paths, hash-gate rejection, lifecycle
+transitions) with named skips when no SDK or device is present. Device and
+emulator runs are recorded per plan §8.3; tests never substitute for that
+evidence.

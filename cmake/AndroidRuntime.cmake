@@ -69,10 +69,12 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/ge/texture.cpp"
         "${ARG_ROOT}/runtime/ge/vertex.cpp"
         "${ARG_ROOT}/runtime/ge/vulkan_backend.cpp"
+        "${ARG_ROOT}/runtime/platform/android/game_data.cpp"
+        "${ARG_ROOT}/runtime/platform/android/assets.cpp"
         "${gen_dir}/vulkan_shaders.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/main.cpp")
     target_include_directories(${target} PRIVATE "${ARG_ROOT}/runtime" "${CMAKE_BINARY_DIR}/generated")
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra)
-    target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log)
+    target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log z)
 endfunction()

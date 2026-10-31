@@ -110,6 +110,7 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copy2(BUILD_SH, root / "scripts" / "android" / "build.sh")
             shutil.copytree(REPO / "cmake", root / "cmake")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
+            shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")
             shutil.copytree(REPO / "assets" / "shaders" / "ge", root / "assets" / "shaders" / "ge")
             (root / "tools").mkdir()
             shutil.copy2(REPO / "tools" / "embed_shaders.py", root / "tools" / "embed_shaders.py")
@@ -136,6 +137,7 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             self.assertIn(b"com/gungnir/recomp/GungnirActivity", dex_bytes,
                           "the app Activity is packaged")
             self.assertIn(b"libmain", dex_bytes, "SDLActivity loads libmain")
+            self.assertIn("assets/runtime/version.txt", names, "runtime asset stamp is packaged")
             if shutil.which("readelf"):
                 lib_path = root / "libmain.so"
                 lib_path.write_bytes(libmain)
