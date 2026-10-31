@@ -27,6 +27,7 @@ constexpr std::uint32_t kNoFreeId = 0x80630003u;
 constexpr std::uint32_t kAllDataLoaded = 0x80630009u;
 constexpr std::uint32_t kSizeTooSmall = 0x80630011u;
 constexpr std::uint32_t kAddDataTooBig = 0x80630018u;
+constexpr std::uint32_t kSecondBufferNotNeeded = 0x80630022u;
 constexpr std::uint32_t kBufferEmpty = 0x80630023u;
 constexpr std::uint32_t kBadAlignment = 0x80630014u;
 constexpr std::uint32_t kAllDataDecoded = 0x80630024u;
@@ -500,6 +501,43 @@ void add_stream_data(AllegrexContext &ctx) {
     finish(ctx, 0u);
 }
 
+void get_buffer_info_for_resetting(AllegrexContext &ctx) {
+    Slot *target = slot(arg(ctx, 0));
+    if (target == nullptr || target->track == nullptr) {
+        finish(ctx, kBadAtracId);
+        return;
+    }
+    auto &rt = kernel().runtime();
+    for (std::uint32_t offset = 0u; offset < 32u; offset += 4u)
+        write32(rt, arg(ctx, 2) + offset, 0u);
+    finish(ctx, 0u);
+}
+
+void get_second_buffer_info(AllegrexContext &ctx) {
+    Slot *target = slot(arg(ctx, 0));
+    if (target == nullptr || target->track == nullptr) {
+        finish(ctx, kBadAtracId);
+        return;
+    }
+    auto &rt = kernel().runtime();
+    write32(rt, arg(ctx, 1), 0u);
+    write32(rt, arg(ctx, 2), 0u);
+    finish(ctx, kSecondBufferNotNeeded);
+}
+
+void set_second_buffer(AllegrexContext &ctx) {
+    Slot *target = slot(arg(ctx, 0));
+    if (target == nullptr || target->track == nullptr) {
+        finish(ctx, kBadAtracId);
+        return;
+    }
+    finish(ctx, kSecondBufferNotNeeded);
+}
+
+void entry_guard(AllegrexContext &ctx) {
+    finish(ctx, 0u);
+}
+
 void get_internal_error(AllegrexContext &ctx) {
     Slot *target = slot(arg(ctx, 0));
     if (target == nullptr) {
@@ -554,6 +592,16 @@ void register_atrac(HleRegistrar &hle) {
         [](Runtime &, AllegrexContext &ctx) { get_stream_data_info(ctx); });
     hle.add("sceAtrac3plus", "sceAtracAddStreamData",
         [](Runtime &, AllegrexContext &ctx) { add_stream_data(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracGetBufferInfoForReseting",
+        [](Runtime &, AllegrexContext &ctx) { get_buffer_info_for_resetting(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracGetSecondBufferInfo",
+        [](Runtime &, AllegrexContext &ctx) { get_second_buffer_info(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracSetSecondBuffer",
+        [](Runtime &, AllegrexContext &ctx) { set_second_buffer(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracStartEntry",
+        [](Runtime &, AllegrexContext &ctx) { entry_guard(ctx); });
+    hle.add("sceAtrac3plus", "sceAtracEndEntry",
+        [](Runtime &, AllegrexContext &ctx) { entry_guard(ctx); });
 }
 
 } // namespace gungnir::hle

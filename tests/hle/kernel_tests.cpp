@@ -796,6 +796,18 @@ void atrac_contracts() {
         "ATRAC reports all data decoded");
     check(mem.load32(kValue) == 0u && mem.load32(kValue + 4u) == 1u,
         "ATRAC end writes zero samples");
+    check(atrac("sceAtracGetSecondBufferInfo", {id, kValue, kValue + 4u}) == 0x80630022u,
+        "ATRAC reports no second buffer");
+    check(mem.load32(kValue) == 0u && mem.load32(kValue + 4u) == 0u,
+        "second-buffer info is zeroed");
+    check(atrac("sceAtracSetSecondBuffer", {id, kPcm, 0x1000u}) == 0x80630022u,
+        "second buffer is not needed");
+    check(atrac("sceAtracGetBufferInfoForReseting", {id, 0u, kValue}) == 0u,
+        "reset buffer info succeeds");
+    check(mem.load32(kValue) == 0u && mem.load32(kValue + 28u) == 0u,
+        "reset buffer info is zeroed");
+    check(atrac("sceAtracStartEntry") == 0u && atrac("sceAtracEndEntry") == 0u,
+        "ATRAC entry guards succeed");
     check(atrac("sceAtracResetPlayPosition", {id, 0u, 0u, 0u}) == 0u, "ATRAC reset accepted");
     check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u,
         "ATRAC decodes again after reset");
