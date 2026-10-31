@@ -61,6 +61,13 @@ drivers/
 *.[aA][pP][kK]
 *.[aA][aA][bB]
 
+# --- Driver payloads in APK-facing paths (T10e) ---
+# User-supplied driver zips/ICDs never enter APK assets or a source jniLibs
+# tree. repository_check rejects these locations by path even if force-added;
+# this block keeps them invisible to git in the first place.
+android/app/src/main/assets/drivers/
+android/app/src/main/jniLibs/
+
 # --- Generated recompilation output (a derivative of the copyrighted
 #     executable): AOT C/C++ units, analysis reports, manifests ---
 generated/

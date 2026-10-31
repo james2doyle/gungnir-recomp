@@ -246,9 +246,10 @@ both make the suite die for the intended case.
 `tests/test_vulkan_loader.py` runs `loader_tests` with injected openers: the
 system path never calls the custom opener and tries the system names in
 order; a custom selection forwards its dirs/soname and succeeds; custom
-failure (missing ABI support, null handle, missing entry point, invalid
-selection) falls back to system with the named error retained; total failure
-is `vulkan_loader_unavailable`; shutdown closes the active handle once.
+failure (missing ABI support, missing/unreadable driver directory, missing
+hook library, null handle, missing entry point, invalid selection) falls back
+to system with the named error retained; total failure is
+`vulkan_loader_unavailable`; shutdown closes the active handle once.
 `tests/ge/vulkan_tests.cpp` also asserts `driver_info()` reports a loaded
 driver, a non-empty name and an API version after initialization. The Android
 system path was exercised on the x86_64 emulator, which logged

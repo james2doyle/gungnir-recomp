@@ -9,11 +9,13 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
 
 using namespace gungnir::platform;
+namespace fs = std::filesystem;
 
 void check(bool condition, const std::string &contract) {
     if (!condition) throw std::runtime_error(contract);
@@ -22,6 +24,64 @@ void check(bool condition, const std::string &contract) {
 void check_equal(const std::string &actual, const std::string &expected,
                  const std::string &contract) {
     check(actual == expected, contract + ": expected " + expected + ", got " + actual);
+}
+
+struct TempTree {
+    fs::path root;
+
+    TempTree() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        root = fs::temp_directory_path() /
+               ("gungnir_loader_" + std::to_string(stamp));
+        std::error_code error;
+        fs::remove_all(root, error);
+        fs::create_directories(root);
+    }
+    ~TempTree() {
+        std::error_code error;
+        fs::remove_all(root, error);
+    }
+    TempTree(const TempTree &) = delete;
+    TempTree &operator=(const TempTree &) = delete;
+};
+
+void write_file(const fs::path &path) {
+    std::ofstream output(path, std::ios::binary);
+    output << "synthetic";
+    check(static_cast<bool>(output), "fixture file writes: " + path.string());
+}
+
+fs::path make_driver_dir(const fs::path &root) {
+    const fs::path directory = root / "drivers" / "abc";
+    fs::create_directories(directory);
+    write_file(directory / "vulkan.ad07XX.so");
+    return directory;
+}
+
+fs::path make_hook_dir(const fs::path &root, const std::string &omitted = {}) {
+    const fs::path directory = root / "lib" / "arm64";
+    fs::create_directories(directory);
+    if (!omitted.empty()) {
+        std::error_code error;
+        fs::remove(directory / omitted, error);
+    }
+    for (const char *name : {"libmain_hook.so", "libfile_redirect_hook.so",
+                             "libgsl_alloc_hook.so", "libhook_impl.so"}) {
+        if (omitted == name) continue;
+        write_file(directory / name);
+    }
+    return directory;
+}
+
+VulkanDriverSelection custom_selection(const fs::path &root) {
+    VulkanDriverSelection selection;
+    selection.custom = true;
+    selection.custom_driver_dir = (root / "drivers" / "abc").string();
+    selection.custom_driver_name = "vulkan.ad07XX.so";
+    selection.hook_lib_dir = (root / "lib" / "arm64").string();
+    selection.tmp_lib_dir = (root / "cache").string();
+    selection.file_redirect_dir = (root / "vk").string();
+    return selection;
 }
 
 void *fake_symbol(void *handle, const char *name) {
@@ -89,14 +149,11 @@ void system_path() {
 }
 
 void custom_path() {
+    TempTree tree;
+    make_driver_dir(tree.root);
+    make_hook_dir(tree.root);
     Recorder recorder;
-    VulkanDriverSelection selection;
-    selection.custom = true;
-    selection.custom_driver_dir = "/data/user/0/com.gungnir.recomp/files/drivers/abc";
-    selection.custom_driver_name = "vulkan.ad07XX.so";
-    selection.hook_lib_dir = "/data/app/lib/arm64";
-    selection.tmp_lib_dir = "/data/user/0/com.gungnir.recomp/cache";
-    selection.file_redirect_dir = "/data/user/0/com.gungnir.recomp/files/vk";
+    const VulkanDriverSelection selection = custom_selection(tree.root);
 
     const VulkanLoaderResult result =
         initialize_vulkan_loader(selection, hooks(recorder, true, false));
@@ -106,7 +163,7 @@ void custom_path() {
     check(recorder.system_names.empty(), "custom success does not open the system loader");
     check_equal(recorder.last_selection.custom_driver_name, "vulkan.ad07XX.so",
                 "selection is forwarded");
-    check_equal(recorder.last_selection.hook_lib_dir, "/data/app/lib/arm64",
+    check_equal(recorder.last_selection.hook_lib_dir, selection.hook_lib_dir,
                 "hook dir is forwarded");
 
     Recorder fallback;
@@ -151,12 +208,11 @@ void custom_path() {
 }
 
 void total_failure_and_close() {
+    TempTree tree;
+    make_driver_dir(tree.root);
+    make_hook_dir(tree.root);
     Recorder recorder;
-    VulkanDriverSelection selection;
-    selection.custom = true;
-    selection.custom_driver_dir = "/drivers/abc";
-    selection.custom_driver_name = "vulkan.ad07XX.so";
-    selection.hook_lib_dir = "/lib";
+    const VulkanDriverSelection selection = custom_selection(tree.root);
     LoaderHooks failing = hooks(recorder, false, false);
     failing.open_system = [&recorder](const char *name) -> void * {
         recorder.system_names.emplace_back(name);
@@ -244,6 +300,35 @@ void selection_file() {
     std::filesystem::remove_all(directory, fs_error);
 }
 
+void environment_errors() {
+    TempTree tree;
+    const VulkanDriverSelection selection = custom_selection(tree.root);
+    make_hook_dir(tree.root);
+
+    Recorder missing_driver;
+    const VulkanLoaderResult no_driver =
+        initialize_vulkan_loader(selection, hooks(missing_driver, true, true));
+    check(no_driver.ok, "missing driver directory still boots on system");
+    check_equal(no_driver.info.fallback_error, "driver_storage_unavailable",
+                "missing driver directory is named");
+    check(missing_driver.custom_calls == 0,
+          "missing driver directory never calls the custom opener");
+
+    make_driver_dir(tree.root);
+    make_hook_dir(tree.root, "libmain_hook.so");
+
+    Recorder missing_hook;
+    const VulkanLoaderResult no_hook =
+        initialize_vulkan_loader(selection, hooks(missing_hook, true, true));
+    check(no_hook.ok, "missing hook library still boots on system");
+    check_equal(no_hook.info.fallback_error, "driver_hook_library_missing",
+                "missing hook library is named");
+    check(missing_hook.custom_calls == 0,
+          "missing hook library never calls the custom opener");
+
+    shutdown_vulkan_loader();
+}
+
 } // namespace
 
 int main() {
@@ -252,6 +337,7 @@ int main() {
         custom_path();
         total_failure_and_close();
         selection_file();
+        environment_errors();
         std::cout << "loader_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

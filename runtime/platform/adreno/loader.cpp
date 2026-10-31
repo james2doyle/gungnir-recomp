@@ -80,6 +80,33 @@ bool valid_custom_selection(const VulkanDriverSelection &selection) {
            !selection.hook_lib_dir.empty();
 }
 
+std::string require_readable_directory(const std::string &path) {
+    std::error_code error;
+    const std::filesystem::directory_iterator probe(path, error);
+    if (error) return "driver_storage_unavailable";
+    return {};
+}
+
+std::string require_hook_libraries(const std::string &path) {
+    constexpr const char *kLibraries[] = {
+        "libmain_hook.so",
+        "libfile_redirect_hook.so",
+        "libgsl_alloc_hook.so",
+        "libhook_impl.so",
+    };
+    std::error_code error;
+    if (!std::filesystem::is_directory(path, error) || error) {
+        return "driver_hook_library_missing";
+    }
+    for (const char *name : kLibraries) {
+        if (!std::filesystem::is_regular_file(std::filesystem::path(path) / name, error) ||
+            error) {
+            return "driver_hook_library_missing";
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selection,
@@ -90,6 +117,8 @@ VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selecti
     if (!resolved.open_system) resolved.open_system = default_open_system;
     if (!resolved.symbol) resolved.symbol = default_symbol;
     if (!resolved.close) resolved.close = default_close;
+    if (!resolved.check_driver_dir) resolved.check_driver_dir = require_readable_directory;
+    if (!resolved.check_hook_dir) resolved.check_hook_dir = require_hook_libraries;
     if (!resolved.open_custom) {
 #if defined(GUNGNIR_HAVE_ADRENOTOOLS) && GUNGNIR_HAVE_ADRENOTOOLS
         resolved.open_custom = default_open_custom;
@@ -104,22 +133,28 @@ VulkanLoaderResult initialize_vulkan_loader(const VulkanDriverSelection &selecti
         } else if (!resolved.open_custom) {
             custom_error = "driver_abi_unsupported";
         } else {
-            void *handle = resolved.open_custom(selection);
-            if (handle == nullptr) {
-                custom_error = "driver_load_failed";
-            } else {
-                void *symbol = resolved.symbol(handle, "vkGetInstanceProcAddr");
-                if (symbol == nullptr) {
-                    resolved.close(handle);
+            custom_error = resolved.check_driver_dir(selection.custom_driver_dir);
+            if (custom_error.empty()) {
+                custom_error = resolved.check_hook_dir(selection.hook_lib_dir);
+            }
+            if (custom_error.empty()) {
+                void *handle = resolved.open_custom(selection);
+                if (handle == nullptr) {
                     custom_error = "driver_load_failed";
                 } else {
-                    g_module = handle;
-                    g_close = resolved.close;
-                    install_entry_points(symbol);
-                    result.ok = true;
-                    result.info.loaded = true;
-                    result.info.custom = true;
-                    return result;
+                    void *symbol = resolved.symbol(handle, "vkGetInstanceProcAddr");
+                    if (symbol == nullptr) {
+                        resolved.close(handle);
+                        custom_error = "driver_load_failed";
+                    } else {
+                        g_module = handle;
+                        g_close = resolved.close;
+                        install_entry_points(symbol);
+                        result.ok = true;
+                        result.info.loaded = true;
+                        result.info.custom = true;
+                        return result;
+                    }
                 }
             }
         }

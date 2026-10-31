@@ -26,6 +26,7 @@ NAMED_ERRORS = (
     "driver_elf_type",
     "driver_elf_truncated",
     "driver_min_api",
+    "driver_hook_library_missing",
     "driver_load_failed",
 )
 

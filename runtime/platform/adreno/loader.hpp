@@ -30,12 +30,15 @@ using SystemOpenFn = std::function<void *(const char *name)>;
 using SymbolLookupFn = std::function<void *(void *handle, const char *name)>;
 using CustomOpenFn = std::function<void *(const VulkanDriverSelection &selection)>;
 using CloseFn = std::function<void(void *handle)>;
+using PathCheckFn = std::function<std::string(const std::string &path)>;
 
 struct LoaderHooks {
     SystemOpenFn open_system;
     SymbolLookupFn symbol;
     CustomOpenFn open_custom;
     CloseFn close;
+    PathCheckFn check_driver_dir;
+    PathCheckFn check_hook_dir;
 };
 
 struct VulkanLoaderResult {

@@ -54,6 +54,19 @@ MAGIC_SIGNATURES = [
     (0, b"MComprHD", "MAME CHD disc image"),
     (0, b"PGF0", "PGF font (Sony font data)"),
     (0, b"\x00PBP", "PBP package"),
+    (0, b"PK\x03\x04", "ZIP archive"),
+    (0, b"PK\x05\x06", "ZIP archive"),
+    (0, b"PK\x07\x08", "ZIP archive"),
+]
+
+# --- 2b. Forbidden locations ---------------------------------------------
+# Driver payloads and native libraries are user/build supplied and must never
+# enter the repository, the APK asset tree or a source-controlled jniLibs dir.
+# The path check catches a renamed blob even when its extension is harmless.
+FORBIDDEN_LOCATIONS = [
+    ("drivers/", "driver content"),
+    ("android/app/src/main/assets/drivers/", "driver content"),
+    ("android/app/src/main/jniLibs/", "native library payload"),
 ]
 # The PE DOS stub is a SUBSTRING search, so the needle must be split in this
 # source or the gate flags its own file (it did once — reproduced by
@@ -123,10 +136,15 @@ def check_ignore_probes(repo):
 
 
 def check_file(repo, rel):
-    """Extension + magic + size + secret checks for one file. Returns violations."""
+    """Location + extension + magic + size + secret checks for one file."""
     violations = []
     path = repo / rel
     suffix = path.suffix.lower()
+
+    for prefix, reason in FORBIDDEN_LOCATIONS:
+        if rel == prefix.rstrip("/") or rel.startswith(prefix):
+            violations.append(f"FAIL: {rel} — forbidden location ({reason})")
+            return violations
 
     ext_reason = FORBIDDEN_EXTENSIONS.get(suffix)
     if ext_reason:

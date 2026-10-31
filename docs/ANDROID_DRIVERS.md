@@ -94,7 +94,10 @@ named per-file errors instead of silently skipping bad zips.
 `runtime/platform/adreno/loader.cpp` selects the Vulkan loader before any
 instance exists. The system path tries `libvulkan.so.1`, then `libvulkan.so`
 (Windows: `vulkan-1.dll`; macOS: the MoltenVK names) and never calls the
-custom opener. The custom path calls
+custom opener. Before calling libadrenotools it verifies that the private
+driver directory is readable and that `nativeLibraryDir` contains all four
+hook libraries (`driver_storage_unavailable` / `driver_hook_library_missing`),
+then calls
 `adrenotools_open_libvulkan(RTLD_NOW|RTLD_LOCAL, ADRENOTOOLS_DRIVER_CUSTOM,
 tmpLibDir, nativeLibraryDir, privateDriverDir, soname, nullptr, nullptr)` and
 uses the returned `vkGetInstanceProcAddr`. If the custom path fails, the
@@ -204,7 +207,8 @@ a failed load never leaves a half-initialized instance.
 | `driver_elf_dynsym` | empty or unreadable `.dynsym` |
 | `driver_min_api` | package requires a newer Android API |
 | `driver_abi_unsupported` | device ABI is not `arm64-v8a` |
-| `driver_storage_unavailable` | private driver directory cannot be created |
+| `driver_storage_unavailable` | private driver directory cannot be created, or the selected directory is missing/unreadable |
+| `driver_hook_library_missing` | `nativeLibraryDir` is missing a libadrenotools hook library |
 | `driver_id_invalid` | a driver id is not a 16-character lowercase hash |
 | `vulkan_loader_unavailable` | no system Vulkan loader could be opened |
 | `driver_load_failed` | libadrenotools returned null for a valid package |
@@ -213,10 +217,11 @@ a failed load never leaves a half-initialized instance.
 
 Driver `.zip` files, ICD `.so` files and any extracted driver content are
 **user-supplied**. They are never committed, never placed in APK assets or
-`jniLibs`, and never redistributed. `repository_check` (T10e) rejects them
-under the repository, Android asset and native-library paths. The hook
-libraries built from libadrenotools are project build output, not drivers, and
-are covered by the ordinary build-output rules.
+`jniLibs`, and never redistributed. `repository_check` rejects the root
+`drivers/`, `android/app/src/main/assets/drivers/` and source `jniLibs/`
+paths by location, and sniffs ZIP and ELF magic so a renamed blob cannot slip
+through. The hook libraries built from libadrenotools are project build
+output, not drivers, and are covered by the ordinary build-output rules.
 
 ## Risks
 

@@ -141,6 +141,74 @@ class TestIgnoreRules(unittest.TestCase):
         self.assertEqual(ign.returncode, 0, "game.chd must match .gitignore")
 
 
+class TestDriverBlobLocations(TempRepoMixin, unittest.TestCase):
+    """TC-10.4 — driver payloads are rejected by location and content.
+
+    A renamed archive must be caught by ZIP magic, and the repository,
+    Android asset and native-library paths must be rejected even for files
+    whose extension or content alone would look harmless.
+    """
+
+    ZIP_MAGIC = b"PK\x03\x04" + b"\x14\x00\x00\x00" + b"\x00" * 32
+
+    def test_renamed_zip_is_caught_by_magic(self):
+        repo = self.make_repo()
+        (repo / "turnip.dat").write_bytes(self.ZIP_MAGIC)
+        run(["git", "add", "turnip.dat"], repo)
+        res = self.check(repo)
+        self.assertNotEqual(res.returncode, 0, "a renamed zip must fail the gate")
+        combined = res.stdout + res.stderr
+        self.assertIn("turnip.dat", combined)
+        self.assertIn("ZIP", combined)
+
+    def test_repository_drivers_directory_is_forbidden(self):
+        repo = self.make_repo()
+        (repo / "drivers").mkdir()
+        (repo / "drivers" / "README.txt").write_text("not a binary\n")
+        run(["git", "add", "-f", "drivers/README.txt"], repo)
+        res = self.check(repo)
+        self.assertNotEqual(res.returncode, 0, "drivers/ content must fail the gate")
+        combined = res.stdout + res.stderr
+        self.assertIn("drivers/README.txt", combined)
+        self.assertIn("driver", combined.lower())
+
+    def test_android_assets_driver_directory_is_forbidden(self):
+        repo = self.make_repo()
+        path = repo / "android" / "app" / "src" / "main" / "assets" / "drivers"
+        path.mkdir(parents=True)
+        (path / "payload.dat").write_text("not a binary\n")
+        run(["git", "add", "-f", "android/app/src/main/assets/drivers/payload.dat"], repo)
+        res = self.check(repo)
+        self.assertNotEqual(res.returncode, 0, "asset-side driver content must fail")
+        combined = res.stdout + res.stderr
+        self.assertIn("payload.dat", combined)
+        self.assertIn("driver", combined.lower())
+
+    def test_renamed_zip_in_android_assets_is_caught(self):
+        repo = self.make_repo()
+        path = repo / "android" / "app" / "src" / "main" / "assets" / "runtime"
+        path.mkdir(parents=True)
+        (path / "extra.dat").write_bytes(self.ZIP_MAGIC)
+        run(["git", "add", "android/app/src/main/assets/runtime/extra.dat"], repo)
+        res = self.check(repo)
+        self.assertNotEqual(res.returncode, 0, "asset zip content must fail")
+        combined = res.stdout + res.stderr
+        self.assertIn("extra.dat", combined)
+        self.assertIn("ZIP", combined)
+
+    def test_native_library_directory_is_forbidden(self):
+        repo = self.make_repo()
+        path = repo / "android" / "app" / "src" / "main" / "jniLibs" / "arm64-v8a"
+        path.mkdir(parents=True)
+        (path / "payload.dat").write_text("not a binary\n")
+        run(["git", "add", "-f", "android/app/src/main/jniLibs/arm64-v8a/payload.dat"], repo)
+        res = self.check(repo)
+        self.assertNotEqual(res.returncode, 0, "jniLibs content must fail the gate")
+        combined = res.stdout + res.stderr
+        self.assertIn("payload.dat", combined)
+        self.assertIn("native", combined.lower())
+
+
 class TestIgnoreProbeIsWired(TempRepoMixin, unittest.TestCase):
     """Mutation probe: with an empty .gitignore the gate itself must go red.
 
