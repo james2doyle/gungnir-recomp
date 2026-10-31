@@ -35,6 +35,7 @@ struct TplResource {
     std::uint32_t data_offset{};
     std::uint32_t data_size{};
     std::uint16_t pixel_format{};
+    std::array<std::uint8_t, 0x14> header{};
 };
 
 struct Tpl {
@@ -51,5 +52,16 @@ struct Tpl {
 Tpl load_tpl(std::span<const std::uint8_t> bytes);
 Tpl load_tpl_file(const std::string &path);
 std::vector<std::uint32_t> decode_texture(const TplTexture &texture);
+
+struct TplWriteResult {
+    std::vector<std::uint8_t> bytes;
+    std::string error;
+    bool ok{false};
+};
+
+// In-place container writer: offsets and the original padding are preserved.
+// Writing an unmodified model reproduces the input byte-for-byte; changing
+// texture/palette bytes changes exactly those byte ranges.
+TplWriteResult write_tpl(const Tpl &tpl);
 
 } // namespace gungnir::tex

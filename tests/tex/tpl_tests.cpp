@@ -194,6 +194,13 @@ TextureSpec clut4_spec() {
     return spec;
 }
 
+TextureSpec resource_spec() {
+    TextureSpec spec;
+    spec.resource = true;
+    spec.resource_bytes = {8, 0, 0, 0, 1, 2, 3, 4};
+    return spec;
+}
+
 TextureSpec clut4_palette565_spec() {
     TextureSpec spec = clut4_spec();
     spec.palette_format = 0;
@@ -325,6 +332,93 @@ void resource_entry_is_counted() {
     check(tpl.resources[0].data_size == resource.resource_bytes.size(), "resource size is bounded");
 }
 
+void round_trip_is_byte_identical() {
+    const std::vector<std::vector<TextureSpec>> containers = {
+        {clut4_spec()},
+        {clut4_palette565_spec()},
+        {clut8_spec()},
+        {clut4_spec(), clut8_spec()},
+        {clut4_spec(), resource_spec()},
+    };
+    for (const auto &specs : containers) {
+        const std::vector<std::uint8_t> original = build_tpl(specs);
+        const Tpl tpl = load_tpl(original);
+        check(tpl.ok, tpl.error.c_str());
+        const TplWriteResult written = write_tpl(tpl);
+        check(written.ok, written.error.c_str());
+        check(written.bytes == original, "decode -> encode is byte-identical");
+    }
+}
+
+void modified_texel_is_written() {
+    const std::vector<std::uint8_t> original = build_tpl({clut4_spec()});
+    Tpl tpl = load_tpl(original);
+    check(tpl.ok, tpl.error.c_str());
+    const std::size_t changed = tpl.textures[0].data_offset;
+    tpl.textures[0].data[0] = static_cast<std::uint8_t>(tpl.textures[0].data[0] ^ 0xFFu);
+    const TplWriteResult written = write_tpl(tpl);
+    check(written.ok, written.error.c_str());
+    check(written.bytes.size() == original.size(), "writer preserves the container size");
+    check(written.bytes[changed] == tpl.textures[0].data[0], "writer writes the modified texel");
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        if (i == changed) continue;
+        check(written.bytes[i] == original[i], "writer changes only the modified texel");
+    }
+}
+
+void modified_palette_is_written() {
+    const std::vector<std::uint8_t> original = build_tpl({clut4_spec()});
+    Tpl tpl = load_tpl(original);
+    check(tpl.ok, tpl.error.c_str());
+    const std::size_t changed = tpl.textures[0].palette_data_offset;
+    tpl.textures[0].palette[0] = static_cast<std::uint8_t>(tpl.textures[0].palette[0] ^ 0xFFu);
+    const TplWriteResult written = write_tpl(tpl);
+    check(written.ok, written.error.c_str());
+    check(written.bytes[changed] == tpl.textures[0].palette[0], "writer writes the modified palette");
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        if (i == changed) continue;
+        check(written.bytes[i] == original[i], "writer changes only the modified palette byte");
+    }
+}
+
+void writer_rejects_bad_models() {
+    Tpl empty;
+    check(write_tpl(empty).error == "invalid_model", "empty model is rejected");
+
+    const std::vector<std::uint8_t> original = build_tpl({clut4_spec()});
+    Tpl tpl = load_tpl(original);
+    check(tpl.ok, tpl.error.c_str());
+
+    Tpl bad = tpl;
+    bad.table_entries.pop_back();
+    check(write_tpl(bad).error == "table_mismatch", "table count mismatch is rejected");
+
+    bad = tpl;
+    bad.declared_textures = 2;
+    check(write_tpl(bad).error == "table_mismatch", "declared count mismatch is rejected");
+
+    bad = tpl;
+    bad.textures[0].data.push_back(0);
+    check(write_tpl(bad).error == "data_size_mismatch", "data size mismatch is rejected");
+
+    bad = tpl;
+    bad.textures[0].data_offset = static_cast<std::uint32_t>(bad.bytes.size());
+    check(write_tpl(bad).error == "data_out_of_range", "data offset is bounds-checked");
+
+    bad = tpl;
+    bad.textures[0].palette.clear();
+    check(write_tpl(bad).error == "palette_size_mismatch", "palette size mismatch is rejected");
+
+    bad = tpl;
+    bad.textures[0].palette_entries = 0;
+    check(write_tpl(bad).error == "invalid_palette_entries", "invalid palette count is rejected");
+
+    bad = tpl;
+    bad.textures[0].palette_header_offset = static_cast<std::uint32_t>(bad.bytes.size());
+    check(write_tpl(bad).error == "palette_header_out_of_range",
+          "palette header offset is bounds-checked");
+}
+
 void malformed_inputs_are_named() {
     const std::vector<std::uint8_t> valid = build_tpl({clut4_spec()});
 
@@ -395,6 +489,10 @@ int main() {
         single_8bpp_texture();
         multi_texture_container();
         resource_entry_is_counted();
+        round_trip_is_byte_identical();
+        modified_texel_is_written();
+        modified_palette_is_written();
+        writer_rejects_bad_models();
         malformed_inputs_are_named();
         std::cout << "tex_tpl_tests: OK\n";
         return 0;

@@ -146,5 +146,8 @@ validation-layer availability) are recorded in `docs/RENDERER.md`.
 `tests/test_tpl.py` builds and runs `tex_tpl_tests`: synthetic TPL containers
 (no game bytes) covering CLUT4 alpha ramps, RGB565 palettes, CLUT8 palettes,
 odd widths, multi-texture containers, counted auxiliary resources and named
-malformed-input failures. `docs/formats/TPL.md` records the layout and the one local named gap
+malformed-input failures. Writer tests assert byte-identical decode -> encode,
+single-byte texel/palette edits, and rejected inconsistent models. The local
+ASan/UBSan scan round-tripped 1,304 containers byte-identically;
+`docs/formats/TPL.md` records the layout and the one local named gap
 (`debugFont.tpl`, pixel format `0x0108`). T8f consolidates TC-8.1–TC-8.4.

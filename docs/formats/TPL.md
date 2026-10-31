@@ -1,8 +1,8 @@
 # TPL — Gungnir texture containers
 
-Status: T8a decoder (`runtime/tex/tpl.hpp`). This describes the Sting PSP
-`.tpl` container used by Gungnir. It is **not** the Nintendo/GameCube TPL
-format; the two share an extension and nothing else.
+Status: T8a decoder + T8b in-place writer (`runtime/tex/tpl.hpp`). This
+describes the Sting PSP `.tpl` container used by Gungnir. It is **not** the
+Nintendo/GameCube TPL format; the two share an extension and nothing else.
 
 No TPL bytes, decoded images, palettes or dump hashes are committed. The
 fixtures in `tests/tex/tpl_tests.cpp` are synthetic containers authored for
@@ -129,12 +129,40 @@ Named errors: `file_not_found`, `truncated_header`, `invalid_texture_count`,
 byte-identical round-trip. `TplTexture::header` and `palette_header` keep the
 raw descriptor bytes for the same reason.
 
+## Writer
+
+```cpp
+tex::TplWriteResult written = tex::write_tpl(tpl);
+if (!written.ok) { /* written.error is a named code */ }
+```
+
+`write_tpl` is an **in-place** writer: it starts from `Tpl::bytes`, rewrites
+the header, table, texture/palette descriptors and the texture/palette bytes
+at their recorded offsets, and leaves padding, auxiliary-resource headers and
+any unknown tail bytes untouched. An unmodified decode -> write is
+byte-identical. Changing `TplTexture::data` or `palette` changes exactly those
+byte ranges; changing dimensions requires the matching data size.
+
+Writer errors: `invalid_model`, `invalid_table_offset`,
+`invalid_texture_count`, `table_mismatch`, `entry_count_mismatch`,
+`truncated_header`, `truncated_entry_table`, `texture_header_out_of_range`,
+`unsupported_pixel_format`, `invalid_texture_dimensions`,
+`invalid_buffer_width`, `invalid_swizzle_geometry`, `data_size_mismatch`,
+`data_out_of_range`, `palette_header_out_of_range`,
+`invalid_palette_entries`, `unsupported_palette_format`,
+`palette_size_mismatch`, `palette_out_of_range`, `missing_palette`,
+`resource_header_out_of_range`, `resource_out_of_range`.
+
+Resources are opaque: the writer preserves their raw descriptor bytes and data
+verbatim.
+
 ## Local validation
 
 On 2026-10-31 the decoder was run over the user's local `INI.DAR`/`DATA.DAR`
 (extracted to a temporary directory, not committed) with ASan/UBSan enabled:
 1,304 of 1,305 unique containers decoded, covering 1,886 textures / 58,952,576
-pixels and 564 auxiliary resources. The only failure is `debugFont.tpl`
+pixels and 564 auxiliary resources. The same 1,304 containers round-tripped
+through `write_tpl` byte-identically. The only failure is `debugFont.tpl`
 (pixel format `0x0108`), which fails closed as recorded above.
 
 ## References

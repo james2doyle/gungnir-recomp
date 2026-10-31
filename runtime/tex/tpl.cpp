@@ -22,6 +22,17 @@ std::uint32_t read_u32(std::span<const std::uint8_t> bytes, std::size_t offset) 
            static_cast<std::uint32_t>(bytes[offset + 3]) << 24u;
 }
 
+void write_u16(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint16_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value & 0xFFu);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8u);
+}
+
+void write_u32(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t value) {
+    for (int shift = 0; shift < 32; shift += 8)
+        bytes[offset + static_cast<std::size_t>(shift / 8)] =
+            static_cast<std::uint8_t>(value >> shift);
+}
+
 Tpl fail(Tpl result, const char *error) {
     result.ok = false;
     result.error = error;
@@ -82,6 +93,8 @@ Tpl load_tpl(std::span<const std::uint8_t> bytes) {
             resource.header_offset = header_offset;
             resource.data_offset = data_offset;
             resource.pixel_format = pixel_format;
+            std::memcpy(resource.header.data(), bytes.data() + header_offset,
+                        resource.header.size());
             result.resources.push_back(resource);
             chunk_starts.push_back(data_offset);
             continue;
@@ -182,6 +195,163 @@ std::vector<std::uint32_t> decode_texture(const TplTexture &texture) {
     std::vector<std::uint32_t> pixels;
     decoded.decode(pixels);
     return pixels;
+}
+
+TplWriteResult write_tpl(const Tpl &tpl) {
+    TplWriteResult result;
+    if (!tpl.ok || tpl.bytes.empty()) {
+        result.error = "invalid_model";
+        return result;
+    }
+    if (tpl.table_offset != 8) {
+        result.error = "invalid_table_offset";
+        return result;
+    }
+    if (tpl.declared_textures == 0 || tpl.declared_textures > 64) {
+        result.error = "invalid_texture_count";
+        return result;
+    }
+    if (tpl.table_entries.size() != tpl.declared_textures) {
+        result.error = "table_mismatch";
+        return result;
+    }
+    if (tpl.textures.size() + tpl.resources.size() != tpl.declared_textures) {
+        result.error = "entry_count_mismatch";
+        return result;
+    }
+    if (tpl.bytes.size() < 8) {
+        result.error = "truncated_header";
+        return result;
+    }
+
+    std::vector<std::uint8_t> out = tpl.bytes;
+    write_u32(out, 0, tpl.declared_textures);
+    write_u32(out, 4, tpl.table_offset);
+    const std::uint64_t table_end =
+        8u + static_cast<std::uint64_t>(tpl.declared_textures) * 8u;
+    if (table_end > out.size()) {
+        result.error = "truncated_entry_table";
+        return result;
+    }
+    for (std::uint32_t index = 0; index < tpl.declared_textures; ++index)
+        std::memcpy(out.data() + 8 + static_cast<std::size_t>(index) * 8u,
+                    tpl.table_entries[index].data(), 8);
+
+    for (const TplTexture &texture : tpl.textures) {
+        if (static_cast<std::uint64_t>(texture.header_offset) + 0x14u > out.size()) {
+            result.error = "texture_header_out_of_range";
+            return result;
+        }
+        const std::uint16_t pixel_format = static_cast<std::uint16_t>(texture.state.format);
+        if (pixel_format > static_cast<std::uint16_t>(ge::TextureFormat::Clut32)) {
+            result.error = "unsupported_pixel_format";
+            return result;
+        }
+        const int bits = ge::texture_bits_per_texel(texture.state.format);
+        if (bits <= 0) {
+            result.error = "unsupported_pixel_format";
+            return result;
+        }
+        if (texture.state.height == 0 || texture.state.width == 0) {
+            result.error = "invalid_texture_dimensions";
+            return result;
+        }
+        if (texture.state.buffer_width < texture.state.width) {
+            result.error = "invalid_buffer_width";
+            return result;
+        }
+        const std::uint64_t row_bits =
+            static_cast<std::uint64_t>(texture.state.buffer_width) *
+            static_cast<std::uint64_t>(bits);
+        if (row_bits % 8u != 0) {
+            result.error = "invalid_buffer_width";
+            return result;
+        }
+        const std::uint64_t row_bytes = row_bits / 8u;
+        if (row_bytes % 16u != 0 || texture.state.height % 8u != 0) {
+            result.error = "invalid_swizzle_geometry";
+            return result;
+        }
+        const std::uint64_t expected_data_size =
+            row_bytes * static_cast<std::uint64_t>(texture.state.height);
+        if (texture.data.size() != expected_data_size) {
+            result.error = "data_size_mismatch";
+            return result;
+        }
+        if (texture.data_offset > out.size() ||
+            texture.data.size() > out.size() - texture.data_offset) {
+            result.error = "data_out_of_range";
+            return result;
+        }
+
+        if (texture.palette_header_offset != 0) {
+            if (static_cast<std::uint64_t>(texture.palette_header_offset) + 8u > out.size()) {
+                result.error = "palette_header_out_of_range";
+                return result;
+            }
+            if (texture.palette_entries == 0 || texture.palette_entries > 256 ||
+                !is_power_of_two(texture.palette_entries)) {
+                result.error = "invalid_palette_entries";
+                return result;
+            }
+            if (texture.palette_format > 3) {
+                result.error = "unsupported_palette_format";
+                return result;
+            }
+            const std::uint64_t expected_palette_size =
+                static_cast<std::uint64_t>(texture.palette_entries) *
+                (texture.palette_format == 3 ? 4u : 2u);
+            if (texture.palette.size() != expected_palette_size) {
+                result.error = "palette_size_mismatch";
+                return result;
+            }
+            if (texture.palette_data_offset > out.size() ||
+                texture.palette.size() > out.size() - texture.palette_data_offset) {
+                result.error = "palette_out_of_range";
+                return result;
+            }
+        } else if (is_clut(pixel_format)) {
+            result.error = "missing_palette";
+            return result;
+        }
+
+        write_u16(out, texture.header_offset + 0, texture.state.height);
+        write_u16(out, texture.header_offset + 2, texture.state.width);
+        write_u16(out, texture.header_offset + 4, texture.state.buffer_width);
+        write_u16(out, texture.header_offset + 6, pixel_format);
+        write_u32(out, texture.header_offset + 8, texture.data_offset);
+        std::memcpy(out.data() + texture.header_offset + 0x0C, texture.header.data() + 0x0C, 8);
+        if (!texture.data.empty())
+            std::memcpy(out.data() + texture.data_offset, texture.data.data(),
+                        texture.data.size());
+
+        if (texture.palette_header_offset != 0) {
+            write_u16(out, texture.palette_header_offset + 0, texture.palette_entries);
+            write_u16(out, texture.palette_header_offset + 2, texture.palette_format);
+            write_u32(out, texture.palette_header_offset + 4, texture.palette_data_offset);
+            if (!texture.palette.empty())
+                std::memcpy(out.data() + texture.palette_data_offset, texture.palette.data(),
+                            texture.palette.size());
+        }
+    }
+
+    for (const TplResource &resource : tpl.resources) {
+        if (static_cast<std::uint64_t>(resource.header_offset) + 0x14u > out.size()) {
+            result.error = "resource_header_out_of_range";
+            return result;
+        }
+        if (resource.data_offset > out.size() ||
+            resource.data_size > out.size() - resource.data_offset) {
+            result.error = "resource_out_of_range";
+            return result;
+        }
+        std::memcpy(out.data() + resource.header_offset, resource.header.data(),
+                    resource.header.size());
+    }
+
+    result.bytes = std::move(out);
+    result.ok = true;
+    return result;
 }
 
 } // namespace gungnir::tex
