@@ -9,6 +9,7 @@
 #include "hle/hle_common.hpp"
 #include "hle/hle_utility.hpp"
 #include "hle/kernel.hpp"
+#include "savedata/save_store.hpp"
 
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
@@ -830,6 +831,107 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
     gungnir::hle::reset_utility_state();
     param("..");
     check(util("sceUtilitySavedataInitStart", {kParam}) == 0x80110004u, "path traversal rejected");
+
+    gungnir::hle::reset_utility_state();
+    constexpr std::uint32_t kLoadBuf = 0x08831400u;
+    const std::string payload = "savedata-round-trip";
+    zero(kData, 0x100u);
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        mem.store8(kData + static_cast<std::uint32_t>(i), static_cast<std::uint8_t>(payload[i]));
+
+    const auto mode_param = [&](std::uint32_t mode, std::string_view save_name, std::uint32_t buffer,
+                                std::uint32_t buffer_size, std::uint32_t data_size, std::string_view title) {
+        zero(kParam, 0x600u);
+        mem.store32(kParam + 0x00u, 0x600u);
+        mem.store32(kParam + 0x30u, mode);
+        text(kParam, 0x3Cu, 13u, "ULUS10592");
+        text(kParam, 0x4Cu, 20u, save_name);
+        text(kParam, 0x64u, 13u, "DATA.BIN");
+        mem.store32(kParam + 0x74u, buffer);
+        mem.store32(kParam + 0x78u, buffer_size);
+        mem.store32(kParam + 0x7Cu, data_size);
+        text(kParam, 0x80u, 0x80u, title);
+        text(kParam, 0x100u, 0x80u, "Fixture Save");
+        text(kParam, 0x180u, 0x400u, "Synthetic savedata detail");
+        mem.store8(kParam + 0x580u, 2u);
+    };
+    const auto guest_text = [&mem](std::uint32_t address, std::uint32_t size) {
+        std::string text;
+        for (std::uint32_t i = 0; i < size; ++i) {
+            const char value = static_cast<char>(mem.load8(address + i));
+            if (value == '\0') break;
+            text.push_back(value);
+        }
+        return text;
+    };
+    const auto read_host = [](const std::filesystem::path &path) {
+        std::ifstream in(path, std::ios::binary);
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    };
+
+    mode_param(3u, "MODES", kData, 0x100u, static_cast<std::uint32_t>(payload.size()), "Fixture Title");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "save init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "save update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "save reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "save reports success");
+    const std::filesystem::path modes_dir = memory_stick / "PSP" / "SAVEDATA" / "ULUS10592MODES";
+    check(std::filesystem::is_regular_file(modes_dir / "PARAM.SFO"), "save writes PARAM.SFO");
+    check(std::filesystem::is_regular_file(modes_dir / "DATA.BIN"), "save writes the data file");
+    const auto sfo_before = read_host(modes_dir / "PARAM.SFO");
+    const auto data_before = read_host(modes_dir / "DATA.BIN");
+    check(data_before.size() == payload.size(), "save writes the requested data size");
+    const auto sfo_fields = gungnir::savedata::parse_sfo_fields(sfo_before);
+    check(sfo_fields.has_value(), "saved PARAM.SFO parses");
+    check(sfo_fields->title == "Fixture Title", "saved PARAM.SFO records the title");
+    check(sfo_fields->savedata_title == "Fixture Save", "saved PARAM.SFO records the savedata title");
+    check(sfo_fields->detail == "Synthetic savedata detail", "saved PARAM.SFO records the detail");
+    check(sfo_fields->parental_level == 2u, "saved PARAM.SFO records the parental level");
+
+    gungnir::hle::reset_utility_state();
+    zero(kLoadBuf, 0x100u);
+    mode_param(2u, "MODES", kLoadBuf, 0x100u, 0u, "");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "load init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "load update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "load reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "load reports success");
+    check(mem.load32(kParam + 0x7Cu) == payload.size(), "load reports the file size");
+    check(mem.load32(kParam + 0x34u) == 1021u, "load sets the bind value");
+    check(guest_text(kParam + 0x80u, 0x80u) == "Fixture Title", "load restores the title");
+    check(guest_text(kParam + 0x100u, 0x80u) == "Fixture Save", "load restores the savedata title");
+    bool payload_matches = true;
+    for (std::size_t i = 0; i < payload.size(); ++i)
+        payload_matches = payload_matches && mem.load8(kLoadBuf + static_cast<std::uint32_t>(i)) ==
+            static_cast<std::uint8_t>(payload[i]);
+    check(payload_matches, "load restores the data bytes");
+
+    gungnir::hle::reset_utility_state();
+    mem.store32(kParam + 0x30u, 3u);
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "re-save init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "re-save update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "re-save reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "re-save reports success");
+    check(read_host(modes_dir / "PARAM.SFO") == sfo_before, "save after load reproduces PARAM.SFO");
+    check(read_host(modes_dir / "DATA.BIN") == data_before, "save after load reproduces the data file");
+
+    gungnir::hle::reset_utility_state();
+    mode_param(2u, "MISSING2", kLoadBuf, 0x100u, 0u, "");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "missing load init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "missing load update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "missing load reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0x80110307u, "missing load reports no data");
+
+    const std::filesystem::path broken_dir = memory_stick / "PSP" / "SAVEDATA" / "ULUS10592BROKEN";
+    std::filesystem::create_directories(broken_dir);
+    {
+        std::ofstream sfo(broken_dir / "PARAM.SFO", std::ios::binary);
+        sfo << "not-a-param-sfo";
+    }
+    gungnir::hle::reset_utility_state();
+    mode_param(2u, "BROKEN", kLoadBuf, 0x100u, 0u, "");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "broken load init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "broken load update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "broken load reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0x80110306u, "broken PARAM.SFO reports broken data");
 }
 
 void async_io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {

@@ -1,12 +1,15 @@
 #include "hle/hle_utility.hpp"
 
 #include "psprecomp/common.hpp"
+#include "savedata/save_store.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace gungnir::hle {
 namespace {
@@ -16,16 +19,29 @@ constexpr std::uint32_t kUtilityInvalidParamSize = 0x80110004u;
 constexpr std::uint32_t kUtilityWrongType = 0x80110005u;
 constexpr std::uint32_t kUtilityInvalidStatus = 0x80110001u;
 constexpr std::uint32_t kSavedataErrorType = 0x80110300u;
+constexpr std::uint32_t kSavedataLoadBroken = 0x80110306u;
+constexpr std::uint32_t kSavedataLoadNoData = 0x80110307u;
+constexpr std::uint32_t kSavedataLoadParam = 0x80110308u;
+constexpr std::uint32_t kSavedataLoadFileMissing = 0x80110309u;
+constexpr std::uint32_t kSavedataSaveNoSpace = 0x80110383u;
+constexpr std::uint32_t kSavedataSaveParam = 0x80110388u;
 constexpr std::uint32_t kSavedataSizesNoData = 0x801103C7u;
 constexpr std::uint32_t kSavedataSizesParam = 0x801103C8u;
 
 constexpr std::uint32_t kParamSize = 0x00u;
 constexpr std::uint32_t kParamResult = 0x1Cu;
 constexpr std::uint32_t kParamMode = 0x30u;
+constexpr std::uint32_t kParamBind = 0x34u;
 constexpr std::uint32_t kParamGameName = 0x3Cu;
 constexpr std::uint32_t kParamSaveName = 0x4Cu;
 constexpr std::uint32_t kParamFileName = 0x64u;
+constexpr std::uint32_t kParamDataBuf = 0x74u;
+constexpr std::uint32_t kParamDataBufSize = 0x78u;
 constexpr std::uint32_t kParamDataSize = 0x7Cu;
+constexpr std::uint32_t kParamSfoTitle = 0x80u;
+constexpr std::uint32_t kParamSfoSavedataTitle = 0x100u;
+constexpr std::uint32_t kParamSfoDetail = 0x180u;
+constexpr std::uint32_t kParamSfoParental = 0x580u;
 constexpr std::uint32_t kParamIcon0 = 0x584u;
 constexpr std::uint32_t kParamIcon1 = 0x594u;
 constexpr std::uint32_t kParamPic1 = 0x5A4u;
@@ -37,8 +53,12 @@ constexpr std::uint32_t kParamUtilityData = 0x5D8u;
 // Gungnir uses the 0x600-byte layout (the only one whose field offsets this
 // handler validates). Other versions fail closed instead of being misread.
 constexpr std::uint32_t kSavedataSizeV3 = 0x600u;
+constexpr std::uint32_t kModeLoad = 2u;
+constexpr std::uint32_t kModeSave = 3u;
 constexpr std::uint32_t kModeSizes = 8u;
 constexpr std::uint32_t kSectorSize = 0x200u;
+constexpr std::uint32_t kSavedataBind = 1021u;
+constexpr std::uint32_t kFileDataSize = 0x08u;
 constexpr std::uint64_t kFreeBytes = 0x40000000ull;
 
 enum class SavedataStatus { None, Init, Running, Finished, Shutdown };
@@ -114,10 +134,31 @@ DirectoryUsage directory_usage(const std::filesystem::path &path) {
     return usage;
 }
 
-std::filesystem::path save_directory(std::string_view game, std::string_view save) {
+std::string save_directory_name(std::string_view game, std::string_view save) {
     std::string name(game);
     if (save != "<>") name += save;
-    return io_memory_stick_path() / "PSP" / "SAVEDATA" / name;
+    return name;
+}
+
+std::filesystem::path save_directory(std::string_view game, std::string_view save) {
+    return io_memory_stick_path() / "PSP" / "SAVEDATA" / save_directory_name(game, save);
+}
+
+std::vector<std::uint8_t> read_guest(
+    psprecomp::GuestMemory &mem, std::uint32_t address, std::uint32_t size) {
+    std::vector<std::uint8_t> bytes(size);
+    for (std::uint32_t i = 0; i < size; ++i) bytes[i] = mem.load8(address + i);
+    return bytes;
+}
+
+bool copy_guest(
+    psprecomp::GuestMemory &mem, std::uint32_t address, std::uint32_t capacity,
+    std::span<const std::uint8_t> bytes) {
+    if (address == 0u || capacity == 0u || bytes.size() > capacity) return false;
+    if (!bytes.empty() && !mem.contains(address, static_cast<std::uint32_t>(bytes.size()))) return false;
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+        mem.store8(address + static_cast<std::uint32_t>(i), bytes[i]);
+    return true;
 }
 
 std::uint32_t perform_sizes() {
@@ -177,14 +218,132 @@ std::uint32_t perform_sizes() {
     return result;
 }
 
+std::uint32_t set_result(std::uint32_t code) {
+    memory().store32(g_state.param + kParamResult, code);
+    return code;
+}
+
+std::uint32_t perform_save() {
+    auto &mem = memory();
+    const std::uint32_t param = g_state.param;
+    const std::string game = read_fixed(mem, param + kParamGameName, 13u);
+    const std::string save_name = read_fixed(mem, param + kParamSaveName, 20u);
+    const std::string file = read_fixed(mem, param + kParamFileName, 13u);
+    const std::string directory = save_directory_name(game, save_name);
+    if (!savedata::SaveStore::valid_name(directory)) return set_result(kSavedataSaveParam);
+
+    savedata::SfoFields fields;
+    fields.title = read_fixed(mem, param + kParamSfoTitle, 0x80u);
+    fields.savedata_title = read_fixed(mem, param + kParamSfoSavedataTitle, 0x80u);
+    fields.detail = read_fixed(mem, param + kParamSfoDetail, 0x400u);
+    fields.parental_level = mem.load8(param + kParamSfoParental);
+
+    savedata::SaveDirectory save;
+    save.name = directory;
+    save.files.push_back({"PARAM.SFO", savedata::build_param_sfo(fields, directory, file)});
+
+    if (!file.empty()) {
+        const std::uint32_t buffer = mem.load32(param + kParamDataBuf);
+        const std::uint32_t capacity = mem.load32(param + kParamDataBufSize);
+        std::uint32_t size = mem.load32(param + kParamDataSize);
+        if (size == 0u || size > capacity) size = capacity;
+        if (buffer == 0u || capacity == 0u || !mem.contains(buffer, size)) return set_result(kSavedataSaveParam);
+        save.files.push_back({file, read_guest(mem, buffer, size)});
+    }
+
+    struct Icon {
+        std::uint32_t offset;
+        const char *name;
+    };
+    constexpr Icon icons[] = {{kParamIcon0, "ICON0.PNG"}, {kParamIcon1, "ICON1.PNG"},
+        {kParamPic1, "PIC1.PNG"}, {kParamSnd0, "SND0.AT3"}};
+    for (const Icon &icon : icons) {
+        const std::uint32_t buffer = mem.load32(param + icon.offset);
+        const std::uint32_t size = mem.load32(param + icon.offset + kFileDataSize);
+        if (buffer == 0u || size == 0u) continue;
+        if (!mem.contains(buffer, size)) return set_result(kSavedataSaveParam);
+        save.files.push_back({icon.name, read_guest(mem, buffer, size)});
+    }
+
+    std::string error;
+    savedata::SaveStore store(io_memory_stick_path());
+    if (!store.write(save, error)) {
+        log_once("savedata-save:" + error, "[utility] savedata save failed: " + error);
+        return set_result(kSavedataSaveNoSpace);
+    }
+    return set_result(0u);
+}
+
+std::uint32_t perform_load() {
+    auto &mem = memory();
+    const std::uint32_t param = g_state.param;
+    mem.store32(param + kParamDataSize, 0u);
+
+    const std::string game = read_fixed(mem, param + kParamGameName, 13u);
+    const std::string save_name = read_fixed(mem, param + kParamSaveName, 20u);
+    const std::string file = read_fixed(mem, param + kParamFileName, 13u);
+    const std::string directory = save_directory_name(game, save_name);
+    if (!savedata::SaveStore::valid_name(directory)) return set_result(kSavedataLoadParam);
+
+    savedata::SaveStore store(io_memory_stick_path());
+    if (!store.read(directory)) return set_result(kSavedataLoadNoData);
+    const auto sfo_bytes = store.read_file(directory, "PARAM.SFO");
+    if (!sfo_bytes) return set_result(kSavedataLoadBroken);
+    const auto fields = savedata::parse_sfo_fields(*sfo_bytes);
+    if (!fields) return set_result(kSavedataLoadBroken);
+
+    write_fixed(mem, param + kParamSfoTitle, 0x80u, fields->title.substr(0u, 0x7Fu));
+    write_fixed(mem, param + kParamSfoSavedataTitle, 0x80u, fields->savedata_title.substr(0u, 0x7Fu));
+    write_fixed(mem, param + kParamSfoDetail, 0x400u, fields->detail.substr(0u, 0x3FFu));
+    mem.store8(param + kParamSfoParental, fields->parental_level);
+    mem.store32(param + kParamBind, kSavedataBind);
+
+    if (!file.empty()) {
+        const auto bytes = store.read_file(directory, file);
+        if (!bytes) return set_result(kSavedataLoadFileMissing);
+        const std::uint32_t buffer = mem.load32(param + kParamDataBuf);
+        const std::uint32_t capacity = mem.load32(param + kParamDataBufSize);
+        if (!copy_guest(mem, buffer, capacity, *bytes)) return set_result(kSavedataLoadParam);
+        mem.store32(param + kParamDataSize, static_cast<std::uint32_t>(bytes->size()));
+    }
+
+    struct Icon {
+        std::uint32_t offset;
+        const char *name;
+    };
+    constexpr Icon icons[] = {{kParamIcon0, "ICON0.PNG"}, {kParamIcon1, "ICON1.PNG"},
+        {kParamPic1, "PIC1.PNG"}, {kParamSnd0, "SND0.AT3"}};
+    for (const Icon &icon : icons) {
+        const std::uint32_t buffer = mem.load32(param + icon.offset);
+        const std::uint32_t capacity = mem.load32(param + icon.offset + 0x04u);
+        if (buffer == 0u || capacity == 0u) continue;
+        const auto bytes = store.read_file(directory, icon.name);
+        std::uint32_t copied = 0u;
+        if (bytes) {
+            const auto count = std::min<std::size_t>(bytes->size(), capacity);
+            if (!copy_guest(mem, buffer, capacity, std::span<const std::uint8_t>(*bytes).first(count)))
+                return set_result(kSavedataLoadParam);
+            copied = static_cast<std::uint32_t>(count);
+        }
+        mem.store32(param + icon.offset + kFileDataSize, copied);
+    }
+    return set_result(0u);
+}
+
 std::uint32_t perform_operation() {
-    if (g_state.mode != kModeSizes) {
+    switch (g_state.mode) {
+    case kModeSizes:
+        return perform_sizes();
+    case kModeSave:
+        return perform_save();
+    case kModeLoad:
+        return perform_load();
+    default:
         memory().store32(g_state.param + kParamResult, kSavedataErrorType);
         log_once("savedata-mode:" + std::to_string(g_state.mode),
             "[utility] savedata mode " + std::to_string(g_state.mode) + " is not implemented yet");
         return kSavedataErrorType;
     }
-    return perform_sizes();
 }
 
 std::uint32_t advance_status() {

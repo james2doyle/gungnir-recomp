@@ -74,7 +74,8 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_io.cpp
     runtime/hle/hle_utility.cpp
     runtime/hle/hle_media.cpp
-    runtime/hle/hle_module.cpp)
+    runtime/hle/hle_module.cpp
+    runtime/savedata/save_store.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
 target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge gungnir_input)
 
@@ -97,6 +98,11 @@ add_executable(hle_import_tests tests/hle/hle_import_tests.cpp)
 target_link_libraries(hle_import_tests PRIVATE gungnir_hle)
 set_target_properties(hle_import_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/hle)
+
+add_executable(savedata_tests tests/savedata/savedata_tests.cpp)
+target_link_libraries(savedata_tests PRIVATE gungnir_hle)
+set_target_properties(savedata_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/savedata)
 
 # --- GE command stream (T7a) ----------------------------------------------
 add_library(gungnir_ge STATIC
