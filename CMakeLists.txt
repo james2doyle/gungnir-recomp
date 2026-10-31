@@ -63,6 +63,16 @@ target_link_libraries(hle_import_tests PRIVATE gungnir_hle)
 set_target_properties(hle_import_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/hle)
 
+# --- GE command stream (T7a) ----------------------------------------------
+add_library(gungnir_ge STATIC
+    runtime/ge/display_list.cpp)
+target_include_directories(gungnir_ge PUBLIC runtime)
+
+add_executable(ge_display_list_tests tests/ge/display_list_tests.cpp)
+target_link_libraries(ge_display_list_tests PRIVATE gungnir_ge)
+set_target_properties(ge_display_list_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
 # --- ATRAC3/3+ decoder (FFmpeg n4.4 subset, vendored via Nakagawa) ----------
 add_library(atrac3p STATIC
     third_party/atrac3p/atrac3p_api.c
