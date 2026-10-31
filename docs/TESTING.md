@@ -161,4 +161,8 @@ records the dump layout and key rules.
 `tests/test_tex_replace.py` runs `tex_replace_tests`: 2x/4x replacements
 rendered through the software rasterizer, native fallback, replacement state
 derivation, unmatched/corrupt scan reporting, cache/clear reload, dump vs
-replacement isolation and invalid inputs. T8f consolidates TC-8.1–TC-8.4.
+replacement isolation and invalid inputs.
+
+`tests/test_font_repack.py` covers the font-atlas tool: identity gate,
+2x/4x scaling, ink-width regeneration, a collision-free test string and
+refusals that leave no output. T8f consolidates TC-8.1–TC-8.4.

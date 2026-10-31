@@ -123,6 +123,50 @@ if (found.ok) {
 Dump mode never writes under `replace/`; a user replacement is never
 overwritten by a later dump.
 
+## Font atlas repack
+
+`tools/textures/repack_font_atlas.py` re-rasterizes a dialog font atlas at
+2x/4x from a user-supplied glyph source and emits a new TPL plus an ink-width
+table:
+
+```sh
+python3 tools/textures/repack_font_atlas.py \
+  --input font.tpl --glyphs glyphs.json --scale 2 \
+  --cell-width 13 --cell-height 13 \
+  --output font@2x.tpl --widths widths.json
+```
+
+Input shape: a single-texture, 4bpp PSP-swizzled TPL with a 16-entry
+RGBA8888 palette (the dialog-font container). The glyph source is JSON:
+
+```json
+{"glyphs": [
+  {"cell": 1, "code": 65,
+   "rows": ["00111100", "01100110", "..."]}
+]}
+```
+
+`rows` may be hex strings or integer lists; each row is exactly one cell wide
+and there is one row per cell height. `cell` is a linear cell index:
+`(cell % columns, cell // columns)`. Codes are optional metadata for the width
+table.
+
+The tool always proves identity first: decoding and re-encoding the original
+atlas must reproduce the input byte-for-byte. If it does not, the tool exits
+with `ERR identity_mismatch` and writes nothing. At scale 1 with no glyphs the
+output is byte-identical to the input; with glyphs, only the atlas texels
+change. At scale >1 the whole atlas is nearest-neighbour scaled, cells and
+palette are preserved, and the header is rebuilt for the new dimensions.
+
+The width table records `atlas` metadata and per-cell `left`, `right`, `width`
+(+`code` when supplied). The game's advance is the glyph ink width, so this
+table is the layout input for text insertion tooling; it is regenerated from
+the scaled atlas, never guessed from the original.
+
+Limitations: nearest-neighbour scaling only (no outline rasterizer), and the
+input must be the single-texture 4bpp font shape. No game font, glyph bitmap
+or translated string is committed; the glyph source is user-supplied.
+
 ## Tests
 
 `tests/test_tex_dump.py` runs `tex_dump_tests` over hand-authored linear
@@ -135,3 +179,8 @@ invalid input names.
 rendered through the software rasterizer, native fallback, state derivation,
 unmatched/corrupt scan reporting, cache/clear reload, dump/replacement
 isolation and invalid keys/roots.
+
+`tests/test_font_repack.py` exercises the font tool with synthetic atlases:
+byte-identical scale-1 identity, 2x/4x glyph and width scaling, a fixed test
+string with no ink collisions, modified glyphs at scale 1, and malformed
+input/scale/cell refusals that write nothing.
