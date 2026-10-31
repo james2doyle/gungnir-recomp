@@ -1,9 +1,11 @@
-# ARCHITECTURE — runtime core and HLE (T6 state)
+# ARCHITECTURE — runtime core, HLE and renderer (T8 state)
 
 The runtime is the MIT PSPRecomp framework core (vendored at
 `third_party/yakumo/`, pinned + digest-verified; seven recorded local patches)
 plus project glue built around it from T5 onward: the profile/codegen driver,
-the adapted kernel/HLE boot set, and (next) the desktop boot runner.
+the adapted kernel/HLE boot set, the GE front end and Vulkan backend with the
+post-processing chain, and the texture dump/replace pipeline. The Android shell
+is T9.
 
 ## Layers
 
@@ -14,6 +16,11 @@ third_party/yakumo/    framework core: decoder, interpreter, guest memory,
                        NID registry, SHA-256, deflate; CLI analyzer/codegen
 runtime/hle/           adapted MIT kernel + HLE: cooperative scheduler,
                        ThreadMan/SysMem/IO, guest exit stubs, registrar
+runtime/ge/            display lists, vertex/T&L, software oracle, textures,
+                       Vulkan backend, swapchain presentation
+runtime/post/          composable post passes and preset JSON
+runtime/tex/           TPL decode/write, content-keyed dump, PNG replacements
+android/               Gradle + JNI shell (T9; not present yet)
 tests/core/            synthetic Allegrex fixtures + interpreter-vs-AOT harness
                        (our authorship; .mips text sources, ELF built into build/)
 tests/hle/             kernel/HLE contracts (memory, threads, sync, timers,

@@ -28,7 +28,7 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 | M0 | Repo live, IP policy enforced | **closed** (T1+T2+T3; ledger: `data/milestones.json`) |
 | M1 | Recomp pipeline proven on synthetic fixtures (Linux) | **closed** (T4; `data/milestones.json`) |
 | M2 | Gungnir analyzed, AOT generated locally | **closed** (T5; `data/milestones.json`) |
-| M3 | Bounded boot on Linux desktop | planned |
+| M3 | Bounded boot on Linux desktop | **closed** (T6+T7; ledger: `data/milestones.json`) |
 | M4 | **Title screen on adb device** | planned |
 | M5 | Hardening: audio, saves, texture upscaling, driver picker, perf | planned |
 
@@ -56,7 +56,7 @@ tools/       intake (iso → verified game tree), analysis, codegen glue,
 runtime/     guest memory, dispatch + interpreter fallback, HLE kernel,
              GE/Vulkan renderer, post-processing, input, audio, savedata
 profiles/gungnir/   per-game config (facts vs. choices); local/ is gitignored
-android/     Gradle + JNI application shell (SDL3 Activity, Vulkan surface)
+android/     Gradle + JNI application shell (T9; SDL3 Activity, Vulkan surface)
 tests/       synthetic fixtures + gate tests (our authorship only)
 docs/        legal charter, provenance, format specs, bring-up journal
 .dex/        plan + task tracker (dex, in-repo)

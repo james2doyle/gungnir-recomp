@@ -63,7 +63,11 @@ verified by `tools/deps.py verify` (TC-2.1) and by
 4. `python3 tools/deps.py verify && python3 tools/package_notices.py generate`
    and land both outputs with the change.
 
-Fetch-based dependencies (e.g. SDL3 at T9) will use
-`cmake/Deps.cmake` (fetch-or-reuse, lock + digest, offline-capable) per the
-plan; `tools/deps.py` names `DEPS_FETCH_UNSUPPORTED` for any such entry
-until that machinery lands — the gap is counted, never skipped silently.
+SDL3 (T9) is fetch-based, not vendored: `cmake/Deps.cmake` materialises a
+pinned SDL3 source release (tag + SHA-256) into the machine-local
+`build/android-deps` tree, with fetch-or-reuse and offline reuse. Desktop
+builds may use a system SDL3 that satisfies the pin; the Android Gradle build
+copies SDL's Java layer from the same pinned tree. The `dependencies.json`
+fetch entry and digest land with the T9a/T9b implementation; until then
+`tools/deps.py` reports `DEPS_FETCH_UNSUPPORTED` for such an entry — the gap is
+counted, never skipped silently.

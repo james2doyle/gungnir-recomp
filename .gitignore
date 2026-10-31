@@ -82,7 +82,13 @@ logs/
 *.trace
 
 # --- Android machine-local config (absolute toolchain paths) ---
+# local.properties holds SDK/NDK paths; Gradle/Studio caches embed machine
+# state and generated outputs. app/build/ is already covered by build/.
 local.properties
+.gradle/
+.cxx/
+.idea/
+*.iml
 
 # --- Tooling noise ---
 __pycache__/

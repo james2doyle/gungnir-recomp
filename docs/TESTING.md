@@ -1,7 +1,8 @@
-# TESTING — oracle hierarchy and fixture rules (T6 state)
+# TESTING — oracle hierarchy and fixture rules (T8 state)
 
 Policy: plan §8.1 (red-first) and §8.2 (oracle hierarchy). This file covers
-the T4 core harness, the T5 profile gates, and the T6 HLE fixtures.
+the T4 core harness, the T5 profile gates, the T6 HLE fixtures, the T7
+GE/Vulkan gates and the T8 texture gates; T9 adds the Android/device gate.
 
 ## Oracle hierarchy
 
@@ -118,11 +119,12 @@ cmake --build build
 python3 -m unittest tests.test_core_fixtures -v     # TC-4.1..TC-4.4
 python3 -m unittest tests.test_profile -v           # TC-5.1..TC-5.4
 python3 -m unittest tests.test_nids tests.test_hle -v  # T6a/T6b registry + kernel/HLE
+python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skeleton
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 ```
 
-Golden-file tests (post-processing pins) and PPSSPP diffs arrive with T7;
-device QA with T13.
+Golden-file tests (post-processing pins) and PPSSPP diffs live in T7; Android
+device QA starts with T9 and the full milestone campaign is T13.
 
 ## GE renderer gates (T7)
 
@@ -171,3 +173,13 @@ refusals that leave no output.
 four groups above. It also checks the TPL/DAR/replacement documents, the
 mutation ledger and the named-gap list. `docs/TEXTURE_REPLACEMENT.md` is the
 user-facing dump/replacement/font guide.
+
+## Android gates (T9, planned)
+
+`tests/test_android_build.py` covers TC-9.1: SHA-pinned wrapper,
+property-only machine paths, `.gitignore` coverage and named failure when the
+SDK/NDK pin is missing. `tests/test_android_suite.py` will consolidate host
+checks for TC-9.2–TC-9.4 (probe frame, both game-data paths, hash-gate
+rejection, lifecycle transitions) with named skips when no SDK or device is
+present. Device and emulator runs are recorded per plan §8.3; tests never
+substitute for that evidence.

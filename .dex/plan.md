@@ -220,7 +220,7 @@ records what it used.
 
 ### T9 — Android app shell + adb deployment
 **Depends on:** T4, T7
-**Work:** `android/` Kotlin-DSL Gradle (proven pins: AGP 8.10.1, Gradle 8.11.1 SHA-pinned wrapper, NDK 28.2.13676358 — installed on this host, CMake 3.22+, compileSdk 36, minSdk 26, targetSdk 35, `arm64-v8a`+`x86_64`, `c++_static`, C++20). One shared lib via `nk_add_title_runtime`-style CMake function (desktop/Android share sources — no runtime fork). SDL3 Activity shell (gamepad/hotplug/rumble/touch + Vulkan surface). Machine paths only via `-P` properties (never committed; no `local.properties`). Game data: SAF document-tree picker + `adb push` to `getExternalFilesDir()` (two documented paths); first-run asset unpack with version stamp; **runtime hash gate enforced** (not merely logged). Deploy scripts `scripts/android/{build,install,run,screenshot,logcat}.sh`. Force `-O2` on generated TUs even in debug + per-unit opt overrides for NDK-Clang-choking units; CPU affinity/priority tuning (pin after Vulkan device creation; SELinux-safe fallback).
+**Work:** `android/` Kotlin-DSL Gradle (pins reconciled 2026-10-30 with this host and Google's AGP compatibility table: AGP 8.10.1, Gradle 8.11.1 SHA-pinned wrapper, JDK 17, NDK 28.2.13676358, CMake 3.22.1, build-tools 36.0.0, compileSdk 36, minSdk 26, targetSdk 35, `arm64-v8a`+`x86_64`, `c++_static`, C++20; AGP 8.10's maximum API is 36 and it requires Gradle 8.11.1, so nakagawa's newer AGP 9.5/Gradle 9.8.2 pins are deliberately not adopted). One shared lib via `nk_add_title_runtime`-style CMake function (desktop/Android share sources — no runtime fork). SDL3 Activity shell (gamepad/hotplug/rumble/touch + Vulkan surface). Machine paths only via `-P` properties (never committed; no `local.properties`). Game data: SAF document-tree picker + `adb push` to `getExternalFilesDir()` (two documented paths); first-run asset unpack with version stamp; **runtime hash gate enforced** (not merely logged). Deploy scripts `scripts/android/{build,install,run,screenshot,logcat}.sh`. Force `-O2` on generated TUs even in debug + per-unit opt overrides for NDK-Clang-choking units; CPU affinity/priority tuning (pin after Vulkan device creation; SELinux-safe fallback).
 **Test cases:**
 - TC-9.1 `build.sh` produces an APK from a clean checkout (no machine-local paths required beyond `-P` flags).
 - TC-9.2 `adb install -r && run.sh` boots the synthetic-fixture runtime to a rendered Vulkan frame on device/emulator.
@@ -228,6 +228,7 @@ records what it used.
 - TC-9.4 Lifecycle: background→foreground recovers rendering (swapchain recreation) and audio; rotation ignored (sensor-landscape lock).
 **Docs checkpoint:** `docs/ANDROID.md` (setup, adb/SAF flows, device storage layout, emulator notes).
 **Refs:** nakagawa-recomp (`android/` skeleton — primary template), codepdbh (proven pins, AAudio, affinity), Yakumo (SAF picker), azazel6 (probe-APK-first approach — validate shell on emulator before game code), ff7ccrecomp (shipped psprecore Android app: `minSdk 29`, NDK 29, SDL3 Java, `useLegacyPackaging`).
+**Tracking:** work is decomposed in dex into T9a–T9f (build skeleton + pins, shared-runtime JNI + SDL3 probe APK, SAF/adb intake + hash gate, lifecycle/audio/rotation, NDK tuning + CPU affinity, deploy scripts + docs + device QA closure). Each starts with the repository code-search/issue-search reference step and records what it used.
 **Gotchas:** §7E (Android platform traps).
 
 ### T10 — Adreno custom Vulkan driver loader
@@ -240,6 +241,7 @@ records what it used.
 - TC-10.4 `repository_check` rejects a `.zip`/`.so` committed under the driver paths.
 **Docs checkpoint:** `docs/ANDROID_DRIVERS.md` (what zips are, where to get them, risks, selection UI).
 **Refs:** libadrenotools (evaluate), Vita3K/Yuzu-family driver-zip UX (behavioral reference only), nakagawa (`deps.cmake` pin/digest discipline applies to any shim we adopt), ff7ccrecomp (`useLegacyPackaging` and libadrenotools native-library loading).
+**Tracking:** work is decomposed in dex into T10a–T10f (package contract + adoption decision, host package inspector, ICD loader + runtime dispatch, Android import UI + packaging, fail-closed matrix + repository guard + device QA, docs + closure). Each starts with the repository code-search/issue-search reference step and records what it used.
 **Gotchas:** §7E.6–E.7.
 
 ### T11 — Input + haptics
