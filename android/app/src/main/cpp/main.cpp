@@ -13,6 +13,7 @@
 #include "platform/adreno/package.hpp"
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
+#include "platform/android/audio_smoke.hpp"
 #include "platform/android/game_data.hpp"
 #include "platform/sdl_gamepad.hpp"
 
@@ -218,6 +219,12 @@ Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobj
     } else {
         GUNGNIR_LOGE("game_data_invalid: %s\n", result.error.c_str());
     }
+    return result.ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeAudioSmoke(JNIEnv *, jobject) {
+    const gungnir::platform::AudioSmokeResult result = gungnir::platform::run_audio_smoke();
     return result.ok ? JNI_TRUE : JNI_FALSE;
 }
 

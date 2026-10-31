@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -48,6 +49,8 @@ public final class GungnirActivity extends SDLActivity {
 
     private static native String nativeDriverInfo();
 
+    private static native boolean nativeAudioSmoke();
+
     @Override
     protected String[] getLibraries() {
         return new String[] {"main"};
@@ -57,6 +60,13 @@ public final class GungnirActivity extends SDLActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+
+        if (getIntent().getBooleanExtra("audio_smoke", false)) {
+            new Thread(() -> {
+                boolean ok = nativeAudioSmoke();
+                Log.i("gungnir", "audio_smoke_result=" + ok);
+            }, "audio-smoke").start();
+        }
 
         touchOverlay = new TouchOverlayView(this);
         addContentView(touchOverlay, new FrameLayout.LayoutParams(

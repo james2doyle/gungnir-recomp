@@ -64,6 +64,11 @@ function(gungnir_add_runtime_library target)
         VERBATIM)
 
     add_library(${target} SHARED
+        "${ARG_ROOT}/runtime/audio/audio_mixer.cpp"
+        "${ARG_ROOT}/runtime/audio/audio_sink.cpp"
+        "${ARG_ROOT}/runtime/audio/sas_core.cpp"
+        "${ARG_ROOT}/runtime/platform/android/aaudio_out.cpp"
+        "${ARG_ROOT}/runtime/platform/android/audio_smoke.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_profile.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_remap.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_state.cpp"
@@ -85,6 +90,11 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/adreno/loader.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
         "${ARG_ROOT}/third_party/miniz/miniz.c"
+        "${ARG_ROOT}/third_party/yakumo/src/decoder.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/guest_memory.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/interpreter.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/nid_registry.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/runtime.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/sha256.cpp"
         "${ARG_ROOT}/third_party/volk/volk.c"
         "${gen_dir}/vulkan_shaders.cpp"
@@ -98,7 +108,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/third_party/volk")
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
-    target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android log z)
+    target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android aaudio log z)
     target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_SDL3=1)
     if(ARG_ADRENOTOOLS_TARGET)
         target_link_libraries(${target} PRIVATE ${ARG_ADRENOTOOLS_TARGET})

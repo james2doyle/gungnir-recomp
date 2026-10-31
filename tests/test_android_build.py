@@ -111,6 +111,7 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             (root / "scripts" / "android").mkdir(parents=True)
             shutil.copy2(BUILD_SH, root / "scripts" / "android" / "build.sh")
             shutil.copytree(REPO / "cmake", root / "cmake")
+            shutil.copytree(REPO / "runtime" / "audio", root / "runtime" / "audio")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
             shutil.copytree(REPO / "runtime" / "input", root / "runtime" / "input")
             shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")
@@ -120,9 +121,8 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             (root / "third_party" / "yakumo" / "include").parent.mkdir(parents=True)
             shutil.copytree(REPO / "third_party" / "yakumo" / "include",
                             root / "third_party" / "yakumo" / "include")
-            (root / "third_party" / "yakumo" / "src").mkdir(parents=True)
-            shutil.copy2(REPO / "third_party" / "yakumo" / "src" / "sha256.cpp",
-                         root / "third_party" / "yakumo" / "src" / "sha256.cpp")
+            shutil.copytree(REPO / "third_party" / "yakumo" / "src",
+                            root / "third_party" / "yakumo" / "src")
             (root / "third_party" / "volk").mkdir(parents=True)
             shutil.copy2(REPO / "third_party" / "volk" / "volk.c",
                          root / "third_party" / "volk" / "volk.c")
