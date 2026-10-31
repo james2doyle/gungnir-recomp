@@ -4,6 +4,7 @@
 // Exit 0 on success, 1 on a failed contract, 2 on usage.
 
 #include "audio/audio_sink.hpp"
+#include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
 #include "hle/kernel.hpp"
@@ -55,9 +56,11 @@ public:
             nids_by_name[{symbol.library, symbol.name}] = symbol.nid;
         HleRegistrar hle(runtime);
         gungnir::hle::reset_audio_state();
+        gungnir::hle::reset_atrac_state();
         gungnir::hle::register_sysmem(hle);
         gungnir::hle::register_threadman(hle);
         gungnir::hle::register_audio(hle);
+        gungnir::hle::register_atrac(hle);
         gungnir::hle::register_system(hle);
         if (!iso.empty()) gungnir::hle::register_io(hle, iso, memory_stick);
         kernel().start_loader_thread(ctx, 0x08820000u, 0u);
@@ -489,6 +492,7 @@ void thread_end_contracts() {
     check(f.ctx.gpr[2] == 7u, "thread-end wait returns the exit status");
     check(f.thread("sceKernelWaitThreadEnd", {worker, 0u}) == 7u,
           "already-dormant thread returns its status immediately");
+    check(f.thread("sceKernelCheckCallback") == 0u, "no pending callbacks reported");
     check(static_cast<std::uint32_t>(f.thread("sceKernelWaitThreadEnd", {0u, 0u})) ==
               gungnir::hle::error::kIllegalThid,
           "self/zero thread id rejected");
@@ -699,6 +703,20 @@ void sas_contracts() {
     check(mem.load16(out) == 1123u && mem.load16(out + 2u) == 1123u, "mix adds the hand-computed voice");
 }
 
+void atrac_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    const auto atrac = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceAtrac3plus", name, args);
+    };
+    check(atrac("sceAtracGetAtracID", {0u}) == 0x80630004u, "bad codec type rejected");
+    const std::uint32_t at3 = atrac("sceAtracGetAtracID", {0x1001u});
+    const std::uint32_t at3plus = atrac("sceAtracGetAtracID", {0x1000u});
+    check(at3 > 0u && at3plus > 0u && at3 != at3plus, "AT3 and AT3+ IDs allocated");
+    check(atrac("sceAtracReleaseAtracID", {at3}) == 0u, "AT3 ID released");
+    check(atrac("sceAtracReleaseAtracID", {at3}) == 0x80630005u, "double release rejected");
+    check(atrac("sceAtracReleaseAtracID", {at3plus}) == 0u, "AT3+ ID released");
+}
+
 void io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), iso, memory_stick);
     auto &mem = f.runtime.memory();
@@ -760,6 +778,7 @@ int main(int argc, char **argv) {
         thread_end_contracts();
         audio_contracts();
         sas_contracts();
+        atrac_contracts();
         lwmutex_contracts();
         if (!iso.empty()) {
             std::filesystem::create_directories(memory_stick);

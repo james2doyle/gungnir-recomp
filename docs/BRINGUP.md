@@ -392,3 +392,44 @@ zero missing or silent NIDs; `__sceSasInit`, `__sceSasCore` and the first
 Decoding ATRAC3+ requires adopting an existing decoder
 (`at3_standalone`-class) under the codec rule; that belongs to T12, not to a
 home-grown implementation.
+
+## 2026-10-30 — T6h: ATRAC3/3+ decoder adoption and ID lifecycle
+
+**Symptom.** After T6g the deeper boot stopped at
+`Missing HLE import sceAtrac3plus::sceAtracGetAtracID (NID_0x780F88D1)` after
+22,086 dispatches.
+
+**Reference review.** No permissively licensed ATRAC3+ decoder exists.
+`libsoundwave` has no ATRAC support; `atracdenc` decodes only ATRAC1; vgmstream
+delegates to libavcodec; ATRACTool is a tool. The two viable extractions are
+PPSSPP's `ext/at3_standalone` and Nakagawa recomp's `src/rt/atrac3p`. Nakagawa
+wins on provenance (FFmpeg n4.4 tag + per-file blob SHAs, documented deltas,
+authored interleaved-s16 API, selftest and title-accept evidence, no PPSSPP
+code). `hst-decomp` was also checked: it is the matching decompilation, not a
+decoder, and its audio call sites are not decompiled yet.
+
+**Root cause.** No sceAtrac objects and no decoder. Decoding ATRAC is an
+existing-codec case under hard limit #0, so the fix is adoption, not a
+clean-room implementation.
+
+**Fix.** `third_party/atrac3p` vendors Nakagawa's subtree byte-identical at
+`1117d635` (FFmpeg n4.4 decoder files, LGPL-2.1-or-later) with its manifest
+preserved; one additive local delta adds `extern "C"` guards to the C API
+header. The dependency ledger, notices and digest are updated.
+`runtime/hle/hle_atrac.*` adds the ID lifecycle: GetAtracID accepts AT3 and
+AT3+ types and Release frees the object; unknown IDs and types fail by code.
+`tests/audio/atrac3p_selftest.cpp` adapts the public Nakagawa self-test
+(4,149 checks) including the terminator frame and the IMDCT/IPQF transform
+canary; determinism is checked by buffer comparison.
+
+**Evidence.** `tests/test_audio.py` builds and runs the decoder self-test;
+`tests/hle/kernel_tests.cpp` pins the ID lifecycle. The boot now reaches
+23,343 dispatches with GetAtracID bound. Implementing
+`sceKernelCheckCallback` (the next stop) advances it to 25,546 dispatches,
+15 vblanks and 17 flips with 148/215 imports bound and 77 executed, zero
+missing or silent NIDs. The executed ATRAC call is GetAtracID only; the title
+has not asked for track data or decode at this depth.
+
+**Next blocker (asynchronous I/O).** The run stops at
+`Missing HLE import IoFileMgrForUser::sceIoLseekAsync (NID_0x71B19E77)`;
+async completion for the IO manager is the next boot-depth task (T6i).

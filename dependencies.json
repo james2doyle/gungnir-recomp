@@ -24,6 +24,18 @@
       "digest": "95595b028452c34dedf31cc5bad2dbe6c25c834832fd2e5965e97ae10fc61e33",
       "provenance": "third_party/pspsdk-nids/PROVENANCE.md",
       "note": "NID-name facts for configs/nids.csv (generated; see provenance)"
+    },
+    {
+      "name": "atrac3p-ffmpeg-n44",
+      "type": "vendored",
+      "upstream": "https://github.com/Jstar269/nakagawa-recomp",
+      "commit": "1117d635d0145bbd7b345a28dad79a3d8e184420",
+      "license": "LGPL-2.1",
+      "license_file": "third_party/atrac3p/LICENSE.LGPLv2.1.txt",
+      "path": "third_party/atrac3p",
+      "digest": "6f6f21fc1e43ec3f5eded57b42b915403b37d6fd1df862ba1c9a4e18e4cd6379",
+      "provenance": "third_party/atrac3p/PROVENANCE.md",
+      "note": "standalone FFmpeg n4.4 ATRAC3/ATRAC3+ decoder subset (LGPL-2.1-or-later) plus authored API; FFmpeg tag/blob pins and local deltas in provenance"
     }
   ]
 }

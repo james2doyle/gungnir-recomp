@@ -97,6 +97,10 @@ void register_threads(HleRegistrar &hle) {
         };
     };
     hle.add("ThreadManForUser", "sceKernelWaitThreadEnd", wait_thread_end(false));
+    hle.add("ThreadManForUser", "sceKernelCheckCallback", [](Runtime &, AllegrexContext &ctx) {
+        const bool queued = kernel().deliver_callbacks();
+        kernel().finish(ctx, queued ? 1u : 0u);
+    });
     hle.add("ThreadManForUser", "sceKernelWaitThreadEndCB", wait_thread_end(true));
 
     // The *CB variants run the thread's notified callbacks before waiting.

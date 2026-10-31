@@ -10,6 +10,7 @@
 // first flip.
 
 #include "audio/audio_sink.hpp"
+#include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
@@ -178,6 +179,8 @@ int main(int argc, char **argv) {
         gungnir::audio::set_audio_sink(&audio_sink);
         gungnir::hle::reset_audio_state();
         gungnir::hle::register_audio(hle);
+        gungnir::hle::reset_atrac_state();
+        gungnir::hle::register_atrac(hle);
 
         const auto imports = elf.scan_imports(runtime.memory(), *module);
         std::vector<const PspImport *> unbound;

@@ -47,6 +47,7 @@ cross-library alias path, and a bound handler invocation.
 | MsgPipe / FPL / thread-end (T6e boot discoveries) | VERIFIED | byte-stream pipes with blocking/try send and receive, timeouts, CB variants, cancel and status; fixed pools with blocking/try/CB allocate, free, cancel and status; `sceKernelWaitThreadEnd`/`CB`; `sceKernelWaitSemaCB` |
 | sceAudio output channels (T6f boot discoveries) | VERIFIED | reserve/release, blocking and non-blocking single/panned output, both rest-length calls, data length, config and volume with the hardware check order; one buffer per channel, one parked waiter, 44.1 kHz virtual drain; explicit host sink seam (the boot runner records buffers) |
 | sceSasCore (T6g boot discoveries) | VERIFIED | MIT Yakumo VAG/ADPCM software mixer (32 voices, pitch, volume, simple ADSR, pause, grain/output mode, end flag, envelope heights); init validation and hand-computed VAG grain contract; reverb/ATRAC3/noise voices remain unbound and stop loudly |
+| sceAtrac3plus (T6h boot discoveries) | VERIFIED (ID lifecycle) | GetAtracID/Release with AT3 (0x1001) and AT3+ (0x1000) codec types; the FFmpeg n4.4 ATRAC3/3+ decoder subset is vendored with a public 4,149-check self-test. Track parse/decode handlers are added only as the title executes them; no decode call has run at this depth |
 | LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
@@ -64,8 +65,8 @@ dispatch and wall-clock bounds (`tests/test_boot.py`, TC-6.2).
 |---|---:|
 | Module / entry | `9th`, `0x08972544` |
 | Load base / image end | `0x08804000` / `0x08B37DCC` |
-| Bound imports at this boot depth | 146 / 215 |
-| Executed imports | 64 (all bound) |
+| Bound imports at this boot depth | 148 / 215 |
+| Executed imports | 77 (all bound) |
 | Missing / silent NIDs | 0 |
 | First real flip | `0x04088000`, width 512, format 3 |
 
@@ -76,14 +77,13 @@ import and stop fields (TC-6.4).
 
 Deeper execution (after four vblanks) passes the former VFPU gap (T5a) and the
 ThreadMan object gap (T6e). The corpus contains no unlowered VFPU words, and
-every import executed at this depth is bound. The run now reaches 22,086
-dispatches, 146/215 imports bound and 64 executed, with zero missing or silent
-NIDs. The executed set includes `__sceSasInit` and `__sceSasCore`, and the
-first `sceAudioOutputPannedBlocking` call (512 silent frames, counted by the
-sink), so both the synth and the output path ran. The next blocker is ATRAC3+
-audio: `Missing HLE import sceAtrac3plus::sceAtracGetAtracID
-(NID_0x780F88D1)`. Details are in `BRINGUP.md`; the decoder adoption is T12
-work.
+every import executed at this depth is bound. The run now reaches 25,546
+dispatches, 15 vblanks and 17 flips, 148/215 imports bound and 77 executed,
+with zero missing or silent NIDs. The executed set includes `__sceSasInit`,
+`__sceSasCore`, `sceAudioOutputPannedBlocking` and `sceAtracGetAtracID`, so
+the synth, output and ATRAC object paths ran. The next blocker is asynchronous
+file I/O: `Missing HLE import IoFileMgrForUser::sceIoLseekAsync
+(NID_0x71B19E77)`. Details are in `BRINGUP.md`.
 
 ## Module registry (T6d, VERIFIED)
 

@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(gungnir-recomp CXX)
+project(gungnir-recomp C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # --- Vendored third_party (see third_party/yakumo/PROVENANCE.md) ----------
 # PSPRecomp framework core subset + readers, all MIT, byte-identical.
@@ -29,6 +31,7 @@ add_library(gungnir_hle STATIC
     runtime/audio/sas_core.cpp
     runtime/hle/hle_common.cpp
     runtime/hle/kernel.cpp
+    runtime/hle/hle_atrac.cpp
     runtime/hle/hle_audio.cpp
     runtime/hle/hle_sysmem.cpp
     runtime/hle/hle_threadman.cpp
@@ -58,6 +61,32 @@ add_executable(hle_import_tests tests/hle/hle_import_tests.cpp)
 target_link_libraries(hle_import_tests PRIVATE gungnir_hle)
 set_target_properties(hle_import_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/hle)
+
+# --- ATRAC3/3+ decoder (FFmpeg n4.4 subset, vendored via Nakagawa) ----------
+add_library(atrac3p STATIC
+    third_party/atrac3p/atrac3p_api.c
+    third_party/atrac3p/libavcodec/atrac.c
+    third_party/atrac3p/libavcodec/atrac3.c
+    third_party/atrac3p/libavcodec/atrac3plus.c
+    third_party/atrac3p/libavcodec/atrac3plusdec.c
+    third_party/atrac3p/libavcodec/atrac3plusdsp.c
+    third_party/atrac3p/libavcodec/bitstream.c
+    third_party/atrac3p/libavcodec/fft_float.c
+    third_party/atrac3p/libavcodec/fft_init_table.c
+    third_party/atrac3p/libavcodec/mdct_float.c
+    third_party/atrac3p/libavcodec/sinewin.c
+    third_party/atrac3p/libavutil/float_dsp.c
+    third_party/atrac3p/libavutil/intmath.c
+    third_party/atrac3p/libavutil/log2_tab.c
+    third_party/atrac3p/libavutil/mem.c
+    third_party/atrac3p/libavutil/reverse.c)
+target_include_directories(atrac3p PUBLIC third_party/atrac3p)
+target_compile_options(atrac3p PRIVATE -fno-strict-aliasing)
+
+add_executable(atrac3p_selftest tests/audio/atrac3p_selftest.cpp)
+target_link_libraries(atrac3p_selftest PRIVATE atrac3p)
+set_target_properties(atrac3p_selftest PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/audio)
 
 # --- Analysis / codegen tooling (T4, T5) -----------------------------------
 add_executable(yakumo_analyzer third_party/yakumo/tools/analyzer_main.cpp)
