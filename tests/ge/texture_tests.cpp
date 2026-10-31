@@ -278,6 +278,30 @@ void cache_keys() {
           "invalidate notifies the backend upload seam");
 }
 
+void range_invalidation() {
+    std::vector<std::uint8_t> data(2u * 2u * 4u, 0u);
+    store_u32(data, 0u, rgba8(255u, 0u, 0u));
+    const Texture texture(texture_state(TextureFormat::Rgba8888, 2, 2, 2), data);
+    const std::uint64_t key = texture.content_key();
+    TextureCache cache;
+    cache.get(key, texture);
+
+    TextureRangeIndex ranges;
+    ranges.track(0x04088000u, 0x1000u, key);
+    ranges.track(0x04088000u, 0x1000u, key);
+    check(ranges.size() == 1u, "tracking the same key replaces its range");
+    check(ranges.overlapping(0x04088FF0u, 0x20u) == std::vector<std::uint64_t>{key},
+          "an overlapping render target finds the cached texture");
+    check(ranges.overlapping(0x04089000u, 0x20u).empty(), "a range starting at the end does not overlap");
+
+    CountingUploader uploader;
+    check(ranges.invalidate_write(0x04088000u, 0x10u, cache, &uploader) == 1u,
+          "a write invalidates the overlapping texture");
+    check(cache.find(key) == nullptr && ranges.size() == 0u, "invalidation removes the cache entry and range");
+    check(uploader.invalidations == 1 && uploader.last_invalidated == key,
+          "range invalidation reaches the upload seam");
+}
+
 } // namespace
 
 int main() {
@@ -287,6 +311,7 @@ int main() {
         swizzle_blocks();
         buffer_width_and_sampling();
         cache_keys();
+        range_invalidation();
         std::cout << "ge_texture_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

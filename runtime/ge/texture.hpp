@@ -6,6 +6,7 @@
 // layout. The module has no renderer or Vulkan dependency.
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -81,7 +82,7 @@ public:
 
 class TextureCache {
 public:
-    const TextureImage *find(std::uint64_t key) const;
+    [[nodiscard]] const TextureImage *find(std::uint64_t key) const;
     const TextureImage &get(std::uint64_t key, const Texture &texture, TextureUploader *uploader = nullptr);
     void invalidate(std::uint64_t key);
     void invalidate(std::uint64_t key, TextureUploader *uploader);
@@ -90,6 +91,30 @@ public:
 
 private:
     std::unordered_map<std::uint64_t, TextureImage> images_;
+};
+
+// Guest-address ranges that currently back cached textures. A draw that renders
+// into an overlapping range (the "render to area containing texture" feedback
+// path) invalidates those cache entries before the next sample.
+class TextureRangeIndex {
+public:
+    void track(std::uint32_t address, std::uint32_t size, std::uint64_t key);
+    void forget(std::uint64_t key);
+    std::size_t invalidate_write(std::uint32_t address, std::uint32_t size, TextureCache &cache,
+                                 TextureUploader *uploader = nullptr);
+    std::size_t invalidate_write(std::uint32_t address, std::uint32_t size,
+                                 const std::function<void(std::uint64_t)> &invalidate);
+    [[nodiscard]] std::vector<std::uint64_t> overlapping(std::uint32_t address, std::uint32_t size) const;
+    [[nodiscard]] std::size_t size() const { return ranges_.size(); }
+    void clear() { ranges_.clear(); }
+
+private:
+    struct Range {
+        std::uint32_t address{};
+        std::uint32_t size{};
+        std::uint64_t key{};
+    };
+    std::vector<Range> ranges_;
 };
 
 } // namespace gungnir::ge

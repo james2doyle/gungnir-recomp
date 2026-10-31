@@ -41,7 +41,7 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_media.cpp
     runtime/hle/hle_module.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
-target_link_libraries(gungnir_hle PUBLIC yakumo)
+target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge)
 
 add_executable(hle_module_tests tests/hle/module_tests.cpp)
 target_link_libraries(hle_module_tests PRIVATE gungnir_hle)
@@ -105,6 +105,8 @@ if(Vulkan_FOUND AND GLSL_COMPILER)
     set(GE_SHADER_GEN_DIR ${CMAKE_BINARY_DIR}/generated/ge)
     set(GE_TRIANGLE_VERT_SPV ${GE_SHADER_DIR}/triangle.vert.spv)
     set(GE_TRIANGLE_FRAG_SPV ${GE_SHADER_DIR}/triangle.frag.spv)
+    set(GE_MESH_VERT_SPV ${GE_SHADER_DIR}/mesh.vert.spv)
+    set(GE_MESH_FRAG_SPV ${GE_SHADER_DIR}/mesh.frag.spv)
     add_custom_command(
         OUTPUT ${GE_TRIANGLE_VERT_SPV}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${GE_SHADER_DIR}
@@ -120,12 +122,28 @@ if(Vulkan_FOUND AND GLSL_COMPILER)
         DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/ge/triangle.frag
         VERBATIM)
     add_custom_command(
+        OUTPUT ${GE_MESH_VERT_SPV}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${GE_SHADER_DIR}
+        COMMAND ${GLSL_COMPILER} --target-env=vulkan1.1
+                ${CMAKE_SOURCE_DIR}/assets/shaders/ge/mesh.vert -o ${GE_MESH_VERT_SPV}
+        DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/ge/mesh.vert
+        VERBATIM)
+    add_custom_command(
+        OUTPUT ${GE_MESH_FRAG_SPV}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${GE_SHADER_DIR}
+        COMMAND ${GLSL_COMPILER} --target-env=vulkan1.1
+                ${CMAKE_SOURCE_DIR}/assets/shaders/ge/mesh.frag -o ${GE_MESH_FRAG_SPV}
+        DEPENDS ${CMAKE_SOURCE_DIR}/assets/shaders/ge/mesh.frag
+        VERBATIM)
+    add_custom_command(
         OUTPUT ${GE_SHADER_GEN_DIR}/vulkan_shaders.cpp ${GE_SHADER_GEN_DIR}/vulkan_shaders.hpp
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/embed_shaders.py
                 ${GE_SHADER_GEN_DIR}/vulkan_shaders.cpp ${GE_SHADER_GEN_DIR}/vulkan_shaders.hpp
                 triangle_vert=${GE_TRIANGLE_VERT_SPV}
                 triangle_frag=${GE_TRIANGLE_FRAG_SPV}
-        DEPENDS ${GE_TRIANGLE_VERT_SPV} ${GE_TRIANGLE_FRAG_SPV}
+                mesh_vert=${GE_MESH_VERT_SPV}
+                mesh_frag=${GE_MESH_FRAG_SPV}
+        DEPENDS ${GE_TRIANGLE_VERT_SPV} ${GE_TRIANGLE_FRAG_SPV} ${GE_MESH_VERT_SPV} ${GE_MESH_FRAG_SPV}
                 ${CMAKE_SOURCE_DIR}/tools/embed_shaders.py
         VERBATIM)
 

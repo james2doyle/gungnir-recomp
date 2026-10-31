@@ -1,5 +1,6 @@
 #include "hle/hle_media.hpp"
 
+#include "ge/display_list.hpp"
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <utility>
 
 namespace gungnir::hle {
@@ -29,6 +31,15 @@ struct GeList {
     std::uint32_t stall{};
     std::int32_t callback{-1};
     bool done{};
+    bool failed{};
+    bool callbacks_delivered{};
+    std::uint64_t commands{};
+    std::uint64_t draws{};
+    std::uint32_t signal{};
+    std::uint32_t finish{};
+    bool has_signal{};
+    bool has_finish{};
+    std::unique_ptr<gungnir::ge::DisplayList> runner;
 };
 
 struct MediaState {
@@ -53,28 +64,63 @@ bool trace_media() {
     return enabled;
 }
 
-// A display list completes immediately in this seam: without a GE state
-// machine there is nowhere to stall. Its signal and finish callbacks still go
-// through interrupt delivery, so guest code that waits on them makes progress.
-// The renderer (T7) replaces this with real command decoding.
-void run_ge_list(std::uint32_t id) {
-    auto found = media().ge_lists.find(id);
-    if (found == media().ge_lists.end()) return;
-    GeList &list = found->second;
+void deliver_ge_callbacks(GeList &list) {
+    if (list.callbacks_delivered) return;
+    list.callbacks_delivered = true;
     const auto callback = media().ge_callbacks.find(list.callback);
-    const bool has_callback = callback != media().ge_callbacks.end();
-    if (has_callback && callback->second.signal_function != 0u) {
+    if (callback == media().ge_callbacks.end()) return;
+    if (list.has_signal && callback->second.signal_function != 0u) {
         InterruptCall call{};
         call.function = callback->second.signal_function;
         call.arguments = {0u, callback->second.signal_argument, list.pc, 0u};
         kernel().queue_interrupt(std::move(call));
     }
-    if (has_callback && callback->second.finish_function != 0u) {
+    if (list.has_finish && callback->second.finish_function != 0u) {
         InterruptCall call{};
         call.function = callback->second.finish_function;
         call.arguments = {0u, callback->second.finish_argument, list.pc, 0u};
         kernel().queue_interrupt(std::move(call));
     }
+}
+
+void make_ge_runner(Runtime &rt, GeList &list) {
+    gungnir::ge::DisplayList::Config config;
+    config.max_commands = 1'000'000u;
+    config.on_command = [&list](const gungnir::ge::Command &command) {
+        ++list.commands;
+        if (command.kind == gungnir::ge::CommandKind::Primitive) ++list.draws;
+        if (command.kind == gungnir::ge::CommandKind::Signal) {
+            list.signal = command.argument;
+            list.has_signal = true;
+        }
+        if (command.kind == gungnir::ge::CommandKind::Finish) {
+            list.finish = command.argument;
+            list.has_finish = true;
+        }
+    };
+    gungnir::ge::WordReader reader = [&rt](std::uint32_t address) -> std::optional<std::uint32_t> {
+        return rt.memory().load32(address);
+    };
+    list.runner = std::make_unique<gungnir::ge::DisplayList>(reader, config);
+    list.runner->reset(list.pc, list.stall);
+}
+
+void run_ge_list(Runtime &rt, std::uint32_t id) {
+    auto found = media().ge_lists.find(id);
+    if (found == media().ge_lists.end()) return;
+    GeList &list = found->second;
+    if (list.done) return;
+    if (!list.runner) make_ge_runner(rt, list);
+    const gungnir::ge::RunResult result = list.runner->run();
+    if (result.status == gungnir::ge::RunStatus::Stalled) return;
+    if (result.status == gungnir::ge::RunStatus::Completed) {
+        list.done = true;
+        deliver_ge_callbacks(list);
+        return;
+    }
+    std::cerr << "[ge] list " << id << " failed: " << gungnir::ge::run_status_name(result.status)
+              << " pc=" << psprecomp::hex32(result.pc) << " word=" << psprecomp::hex32(result.word) << "\n";
+    list.failed = true;
     list.done = true;
 }
 
@@ -194,7 +240,7 @@ void register_ge(HleRegistrar &hle) {
         media().ge_callbacks.erase(static_cast<std::int32_t>(arg(ctx, 0)));
         kernel().finish(ctx, 0u);
     });
-    const auto enqueue = [](Runtime &, AllegrexContext &ctx) {
+    const auto enqueue = [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t id = media().next_ge_list++;
         if (trace_media())
             std::cerr << "[ge] enqueue list " << id << " pc=" << psprecomp::hex32(arg(ctx, 0))
@@ -203,19 +249,22 @@ void register_ge(HleRegistrar &hle) {
         list.pc = arg(ctx, 0) & 0x0FFFFFFFu;
         list.stall = arg(ctx, 1) & 0x0FFFFFFFu;
         list.callback = static_cast<std::int32_t>(arg(ctx, 2));
-        media().ge_lists[id] = list;
-        run_ge_list(id);
+        auto inserted = media().ge_lists.emplace(id, std::move(list));
+        make_ge_runner(rt, inserted.first->second);
+        run_ge_list(rt, id);
         kernel().finish(ctx, id);
     };
     hle.add("sceGe_user", "sceGeListEnQueue", enqueue);
     hle.add("sceGe_user", "sceGeListEnQueueHead", enqueue);
-    hle.add("sceGe_user", "sceGeListUpdateStallAddr", [](Runtime &, AllegrexContext &ctx) {
+    hle.add("sceGe_user", "sceGeListUpdateStallAddr", [](Runtime &rt, AllegrexContext &ctx) {
         auto found = media().ge_lists.find(arg(ctx, 0));
         if (found == media().ge_lists.end()) {
             kernel().finish(ctx, error::kIllegalArgument);
             return;
         }
         found->second.stall = arg(ctx, 1) & 0x0FFFFFFFu;
+        if (found->second.runner) found->second.runner->set_stall(found->second.stall);
+        run_ge_list(rt, arg(ctx, 0));
         kernel().finish(ctx, 0u);
     });
     hle.add("sceGe_user", "sceGeListSync", [](Runtime &, AllegrexContext &ctx) {

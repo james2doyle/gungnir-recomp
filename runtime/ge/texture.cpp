@@ -248,4 +248,44 @@ void TextureCache::clear() {
     images_.clear();
 }
 
+void TextureRangeIndex::track(std::uint32_t address, std::uint32_t size, std::uint64_t key) {
+    forget(key);
+    ranges_.push_back({address, size, key});
+}
+
+void TextureRangeIndex::forget(std::uint64_t key) {
+    std::erase_if(ranges_, [key](const Range &range) { return range.key == key; });
+}
+
+std::vector<std::uint64_t> TextureRangeIndex::overlapping(std::uint32_t address, std::uint32_t size) const {
+    std::vector<std::uint64_t> keys;
+    const std::uint64_t end = static_cast<std::uint64_t>(address) + size;
+    for (const Range &range : ranges_) {
+        const std::uint64_t range_end = static_cast<std::uint64_t>(range.address) + range.size;
+        if (static_cast<std::uint64_t>(address) < range_end && static_cast<std::uint64_t>(range.address) < end)
+            keys.push_back(range.key);
+    }
+    return keys;
+}
+
+std::size_t TextureRangeIndex::invalidate_write(std::uint32_t address, std::uint32_t size, TextureCache &cache,
+                                                TextureUploader *uploader) {
+    const std::vector<std::uint64_t> keys = overlapping(address, size);
+    for (const std::uint64_t key : keys) {
+        cache.invalidate(key, uploader);
+        forget(key);
+    }
+    return keys.size();
+}
+
+std::size_t TextureRangeIndex::invalidate_write(std::uint32_t address, std::uint32_t size,
+                                                const std::function<void(std::uint64_t)> &invalidate) {
+    const std::vector<std::uint64_t> keys = overlapping(address, size);
+    for (const std::uint64_t key : keys) {
+        invalidate(key);
+        forget(key);
+    }
+    return keys.size();
+}
+
 } // namespace gungnir::ge

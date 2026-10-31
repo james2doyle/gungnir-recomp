@@ -175,6 +175,9 @@ void ge_contracts() {
     mem.store32(Fixture::kText + 4u, 0xAAu);
     mem.store32(Fixture::kText + 8u, 0x08825004u);
     mem.store32(Fixture::kText + 12u, 0xBBu);
+    mem.store32(0x08826000u, 0x0E000000u);
+    mem.store32(0x08826004u, 0x0F000000u);
+    mem.store32(0x08826008u, 0x0C000000u);
 
     const std::uint32_t callback = f.ge("sceGeSetCallback", {Fixture::kText});
     check(static_cast<std::int32_t>(callback) >= 0, "GE callback registered");
@@ -193,6 +196,16 @@ void ge_contracts() {
 
     check(f.ge("sceGeListSync", {list, 0u}) == 0u, "completed list syncs immediately");
     check(f.ge("sceGeListUpdateStallAddr", {list, 0x08826014u}) == 0u, "stall address update accepted");
+
+    mem.store32(0x08827000u, 0x00000000u);
+    mem.store32(0x08827004u, 0x00000000u);
+    mem.store32(0x08827008u, 0x0C000000u);
+    (void)f.ge("sceGeListEnQueue", {0x08827000u, 0x08827008u, 0xFFFFFFFFu, 0u});
+    const std::uint32_t stalled = f.ctx.gpr[2];
+    check(f.ge("sceGeListSync", {stalled, 0u}) == 2u, "a list stopped at its stall address is still drawing");
+    check(f.ge("sceGeListUpdateStallAddr", {stalled, 0u}) == 0u, "clearing the stall resumes the list");
+    check(f.ge("sceGeListSync", {stalled, 0u}) == 0u, "the resumed list completes");
+
     check(f.ge("sceGeDrawSync", {0u}) == 0u, "draw sync completes lists");
     check(f.ge("sceGeBreak", {0u}) == 0u, "GE break accepted");
     check(f.ge("sceGeContinue") == 0u, "GE continue accepted");
