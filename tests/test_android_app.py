@@ -99,9 +99,19 @@ class TestAndroidScripts(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("--offline", proc.stdout)
 
+    def test_emulator_script_is_reproducible(self):
+        script = (REPO / "scripts" / "android" / "emulator.sh").read_text()
+        for flag in ("-avd", "-port", "-no-window", "-no-audio", "-no-boot-anim",
+                     "swiftshader_indirect", "-no-snapshot", "-wipe-data",
+                     "-netdelay none", "-netspeed full"):
+            self.assertIn(flag, script, f"emulator flag recorded: {flag}")
+        self.assertIn("sys.boot_completed", script, "boot completion is awaited")
+        self.assertIn("emulator-", script, "the serial is reported")
+
     def test_deploy_scripts_exist(self):
         scripts = REPO / "scripts" / "android"
-        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh", "lifecycle.sh"):
+        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh", "lifecycle.sh",
+                     "screenshot.sh", "emulator.sh"):
             path = scripts / name
             self.assertTrue(path.is_file(), f"{name} exists")
             self.assertTrue(path.stat().st_mode & 0o111, f"{name} is executable")

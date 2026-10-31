@@ -69,6 +69,35 @@ devices is mandatory, structured, and recorded (device matrix, build SHA,
 steps, expected/actual, sign-off) per `.dex/plan.md` §8.3 and `docs/QA.md`.
 "CI is green" is not evidence; three consecutive cold boots are.
 
+### Emulator vs physical device
+
+The emulator is the right tool during the initial phases of a feature:
+fast iteration, no device claim, quick UI/logcat checks. It does **not**
+close a feature sprint. At the end of every device-facing feature sprint,
+run the manual QA on a physical device (currently the arm64 Adreno phone);
+emulator runs may supplement that evidence but never replace it. Record
+the physical device model, ABI/API, GPU/driver, build SHA, steps,
+expected/actual and sign-off in `docs/qa/` per `.dex/plan.md` §8.3.
+
+Use `scripts/android/emulator.sh` for a reproducible run. It uses the
+`gungnir` AVD on port `5554` and the same flags every time:
+
+```sh
+ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-$HOME/.config/.android/avd} \
+  scripts/android/emulator.sh
+# exact emulator command:
+# $ANDROID_HOME/emulator/emulator -avd gungnir -port 5554 \
+#   -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect \
+#   -no-snapshot -wipe-data -netdelay none -netspeed full
+```
+
+The script waits for `sys.boot_completed=1` and prints
+`emulator ready: emulator-5554`. `-no-window` means headless: interact
+through `adb`, `uiautomator`, and `scripts/android/screenshot.sh`.
+`-wipe-data` deliberately erases emulator state for a clean boot; re-push
+the user ISO and any driver fixtures afterwards. Use `ADB_SERIAL` to
+target the emulator or the phone explicitly.
+
 ## Third-party code
 
 - License must be GPL-3.0-compatible (MIT/BSD/Apache-2.0/LGPL/GPL-2.0-or-later

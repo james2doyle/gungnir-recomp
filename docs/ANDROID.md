@@ -101,10 +101,19 @@ a failed render up to three times. A failed surface recreation is logged as
 
 ## Emulator notes
 
-The x86_64 image needs Vulkan support; the headless test uses
-`-gpu swiftshader_indirect`. Unlock/dismiss the keyguard before `run.sh` or
+Use `scripts/android/emulator.sh` for a reproducible headless run. It starts
+the `gungnir` AVD on `emulator-5554` with
+`-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot
+-wipe-data -netdelay none -netspeed full`, then waits for
+`sys.boot_completed=1`. `-wipe-data` clears the AVD each start, so re-push
+the user ISO and any driver fixtures. The x86_64 image needs Vulkan; the
+chooser uses SwiftShader. Unlock/dismiss the keyguard before `run.sh` or
 `lifecycle.sh`, otherwise the scripts stop with `device_locked`. Emulator
 frames are 640x320 in the current AVD; the phone renders 3063x1335.
+
+The emulator is for early feature iteration. A device-facing feature sprint
+closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
+`.dex/plan.md` §8.3); emulator evidence supplements it.
 
 ## Named failures
 
