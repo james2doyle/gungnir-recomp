@@ -123,3 +123,20 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
 
 Golden-file tests (post-processing pins) and PPSSPP diffs arrive with T7;
 device QA with T13.
+
+## GE renderer gates (T7)
+
+`tests/test_ge_suite.py` is the consolidated TC-7.1–TC-7.4 gate: it runs the
+display-list, vertex, texture, software-rasterizer, Vulkan and post fixtures
+and checks the renderer/shader documents. Synthetic fixtures only.
+
+- TC-7.1: commands, vertex formats, textures, triangles/strips/fans/sprites,
+  blend, scissor, depth, alpha test and stencil-lite.
+- TC-7.2: software vs Vulkan readback, tolerance 1 LSB per 8-bit channel.
+- TC-7.3: pinned post-preset hashes (default, integer, scanline, LCD-grid,
+  FSR-lite).
+- TC-7.4: texture-range and CLUT re-upload invalidation.
+
+Mutation evidence and the remaining named gaps (full GE state machine -> draw
+path wiring, DXT textures, Vulkan post passes, Android presentation,
+validation-layer availability) are recorded in `docs/RENDERER.md`.

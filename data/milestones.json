@@ -94,40 +94,61 @@
     },
     "M3": {
       "name": "Bounded boot on Linux desktop",
-      "state": "in_progress",
-      "recorded": "2026-10-30",
+      "state": "closed",
+      "recorded": "2026-10-31",
       "criteria": [
         "bounded boot passes module init + first frame on Linux (TC-6.2)",
         "GE fixtures pass on Vulkan (T7)"
       ],
       "evidence": {
         "boot": "docs/HLE.md - entry 0x08972544, image_end 0x08B37DCC, 158/215 imports bound, 85 executed all bound, zero missing/silent NIDs; module_init_complete=true, stop_cause=dispatch_limit, thread table shows user_main / SOUND thread(sas) / at3mem thread / SOUND thread(UMD); deterministic 200,000-dispatch run is 2,178 vblanks, 738 flips, 36,345,296 us; 30 s unpaced run reaches 1,810,000 dispatches and 7,394 flips. T6 gaps are counted in HLE.md",
-        "tests": "64 tests green; tests/test_boot.py (TC-6.2 first flip, TC-6.4 identical 200,000-dispatch reports), tests/hle/module_tests.cpp (TC-6.3 synthetic corpus reload), tests/hle/media_tests.cpp, tests/hle/kernel_tests.cpp async IoFileMgr and savedata SIZES contracts",
+        "tests": "75 tests green; tests/test_ge_suite.py is the TC-7.1\u2013TC-7.4 gate over display-list, vertex, texture, software, Vulkan and post fixtures; tests/test_boot.py keeps the TC-6.2 first-flip and deterministic 200,000-dispatch gates",
         "gates": [
-          "tools/repository_check.py PASS (177 files, 17 ignore probes)",
+          "tools/repository_check.py PASS (211 files, 17 ignore probes)",
           "tools/deps.py verify OK (yakumo-framework-subset @ b61852af, pspsdk-nids @ c3da4314)"
         ],
         "tasks": [
           "T6a",
           "T6b",
           "T6c",
-          "T6d"
+          "T6d",
+          "T7a",
+          "T7b",
+          "T7c",
+          "T7d",
+          "T7e",
+          "T7f",
+          "T7g",
+          "T7h"
         ],
         "commits": [
           "f3a112b (T6a)",
           "7de649d (T6b)",
-          "769a87a (T6c)"
+          "769a87a (T6c)",
+          "4239038 (T7a decoder)",
+          "691ee84 (T7b vertex/T&L)",
+          "1602b0d (T7c software oracle)",
+          "163c2a7 (T7d textures)",
+          "f9df667 (T7e Vulkan first triangle)",
+          "d781567 (T7f Vulkan draw path + GE queue)",
+          "eaa54f6 (T7g post chain)"
         ]
       },
       "documents": [
         "docs/HLE.md",
         "docs/BRINGUP.md",
         "docs/ARCHITECTURE.md",
-        "docs/TESTING.md"
+        "docs/TESTING.md",
+        "docs/RENDERER.md",
+        "docs/SHADERS.md"
       ],
-      "open": [
-        "T7 Vulkan GE renderer + GE fixtures (required to close M3)",
-        "first rendered GE frame on the Linux runtime (T7)"
+      "open": [],
+      "gaps": [
+        "full GE register/state machine mapping real PRIM packets into the vertex/renderer path",
+        "DXT texture formats 8-10",
+        "Vulkan post passes (CPU post chain is the current oracle)",
+        "Android ANativeWindow presentation and device QA (T9/T13)",
+        "KHRONOS validation layer unavailable on the T7 host; named-skip evidence only"
       ]
     },
     "M4": {
