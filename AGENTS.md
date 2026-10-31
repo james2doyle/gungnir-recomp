@@ -97,3 +97,8 @@ steps, expected/actual, sign-off) per `.dex/plan.md` §8.3 and `docs/QA.md`.
   Keep the list current as work proceeds.
 - `docs/BRINGUP.md` is the living findings journal (symptom → falsification →
   root cause → regression test; log retractions).
+- **Reference discovery (every task):** before implementing, search code for
+  the relevant API or symbol (`gh search code "<api-or-symbol>"`, adding
+  `--extension cpp` for C/C++ HLE work) to find concrete implementations and
+  their projects; follow with `gh search issues "<api-or-symbol>"` for
+  semantics and regressions. Record the references used.
