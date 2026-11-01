@@ -174,7 +174,8 @@ int main(int argc, char **argv) {
         std::vector<gungnir::ge::Draw> first_frame;
         if (!frame_path.empty()) {
             gungnir::hle::set_ge_frame_sink([&first_frame, frame_at](const std::vector<gungnir::ge::Draw> &draws) {
-                if (gungnir::hle::ge_frame_count() == frame_at && !draws.empty()) first_frame = draws;
+                if (first_frame.empty() && gungnir::hle::ge_frame_count() >= frame_at && !draws.empty())
+                    first_frame = draws;
             });
         }
         if (!snapshot_in.empty() && !session.load_snapshot(snapshot_in, error)) {
@@ -255,6 +256,10 @@ int main(int argc, char **argv) {
                 if (d != 0u) frame_out << ", ";
                 frame_out << "{\"vertices\": " << draw.vertices.size()
                           << ", \"indices\": " << draw.indices.size()
+                          << ", \"primitive\": \"" << gungnir::ge::primitive_name(draw.primitive) << "\""
+                          << ", \"target\": \"0x" << std::hex << draw.state.draw_buffer << std::dec << "\""
+                          << ", \"clear\": " << (draw.state.clear ? "true" : "false")
+                          << ", \"mask\": \"0x" << std::hex << draw.state.write_mask << std::dec << "\""
                           << ", \"scissor\": [" << draw.state.scissor_x0 << ", " << draw.state.scissor_y0
                           << ", " << draw.state.scissor_x1 << ", " << draw.state.scissor_y1 << "]"
                           << ", \"textured\": " << (draw.state.texture != nullptr ? "true" : "false");
@@ -352,6 +357,8 @@ int main(int argc, char **argv) {
                 state.depth_write = draw.state.depth_write;
                 state.depth_function = draw.state.depth_function;
                 state.blend = draw.state.blend;
+                state.write_mask = draw.state.write_mask;
+                state.texture_enabled = draw.state.texture_cpu != nullptr;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;
                 state.texture = draw.state.texture_cpu;
                 gungnir::ge::SoftwareRasterizer rasterizer(framebuffer, state);

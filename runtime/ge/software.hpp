@@ -35,6 +35,18 @@ enum class BlendFactor : std::uint8_t {
     OneMinusSrcAlpha,
     DstAlpha,
     OneMinusDstAlpha,
+    // PSP BLENDMODE codes 0/1 are the "other color": the destination color
+    // for the source operand, the source color for the destination operand.
+    SrcColor,
+    OneMinusSrcColor,
+    DstColor,
+    OneMinusDstColor,
+    DoubleSrcAlpha,
+    DoubleOneMinusSrcAlpha,
+    DoubleDstAlpha,
+    DoubleOneMinusDstAlpha,
+    // Codes 10+: per-channel FIX color from BLENDFIXEDA (source) / B (dest).
+    Fix,
 };
 
 enum class BlendEquation : std::uint8_t { Add, Subtract, ReverseSubtract, Min, Max };
@@ -44,6 +56,8 @@ struct BlendState {
     BlendFactor source{BlendFactor::One};
     BlendFactor destination{BlendFactor::Zero};
     BlendEquation equation{BlendEquation::Add};
+    std::uint32_t fixed_source{0u};
+    std::uint32_t fixed_destination{0u};
 
     bool operator==(const BlendState &) const = default;
 };
@@ -72,6 +86,9 @@ struct RasterState {
     BlendState blend{};
     bool texture_enabled{};
     const Texture *texture{};
+    // Write mask: bits set = keep destination (PMASK 0xE8/0xE9, or the
+    // CLEAR-mode bits). Zero means a full write.
+    std::uint32_t write_mask{};
 
     bool operator==(const RasterState &) const = default;
 };

@@ -20,13 +20,26 @@ std::uint32_t channel(std::uint32_t color, int shift) {
 }
 
 std::uint32_t blend_channel(std::uint32_t source, std::uint32_t destination, BlendFactor source_factor,
-                            BlendFactor destination_factor, BlendEquation equation, int shift) {
-    const auto sf = [&](BlendFactor factor) {
+                            BlendFactor destination_factor, BlendEquation equation, int shift,
+                            std::uint32_t fixed_source, std::uint32_t fixed_destination) {
+    const auto fix_byte = [](std::uint32_t fixed, int byte) -> std::uint32_t {
+        return (fixed >> (8 * (byte > 2 ? 2 : byte))) & 255u;
+    };
+    const auto sf = [&](BlendFactor factor, bool is_source) {
+        const std::uint32_t fixed = is_source ? fixed_source : fixed_destination;
         switch (factor) {
         case BlendFactor::Zero:
             return 0u;
         case BlendFactor::One:
             return 255u;
+        case BlendFactor::SrcColor:
+            return channel(source, shift);
+        case BlendFactor::OneMinusSrcColor:
+            return 255u - channel(source, shift);
+        case BlendFactor::DstColor:
+            return channel(destination, shift);
+        case BlendFactor::OneMinusDstColor:
+            return 255u - channel(destination, shift);
         case BlendFactor::SrcAlpha:
             return channel(source, 24);
         case BlendFactor::OneMinusSrcAlpha:
@@ -35,6 +48,24 @@ std::uint32_t blend_channel(std::uint32_t source, std::uint32_t destination, Ble
             return channel(destination, 24);
         case BlendFactor::OneMinusDstAlpha:
             return 255u - channel(destination, 24);
+        case BlendFactor::DoubleSrcAlpha: {
+            const std::uint32_t doubled = 2u * channel(source, 24);
+            return doubled > 255u ? 255u : doubled;
+        }
+        case BlendFactor::DoubleOneMinusSrcAlpha: {
+            const std::uint32_t doubled = 2u * channel(source, 24);
+            return doubled > 255u ? 0u : 255u - doubled;
+        }
+        case BlendFactor::DoubleDstAlpha: {
+            const std::uint32_t doubled = 2u * channel(destination, 24);
+            return doubled > 255u ? 255u : doubled;
+        }
+        case BlendFactor::DoubleOneMinusDstAlpha: {
+            const std::uint32_t doubled = 2u * channel(destination, 24);
+            return doubled > 255u ? 0u : 255u - doubled;
+        }
+        case BlendFactor::Fix:
+            return shift >= 24 ? 255u : fix_byte(fixed, shift / 8);
         }
         return 0u;
     };
@@ -42,11 +73,15 @@ std::uint32_t blend_channel(std::uint32_t source, std::uint32_t destination, Ble
     const std::uint32_t d = channel(destination, shift);
     switch (equation) {
     case BlendEquation::Add:
-        return (s * sf(source_factor) + d * sf(destination_factor)) / 255u;
+        return (s * sf(source_factor, true) + d * sf(destination_factor, false)) / 255u;
     case BlendEquation::Subtract:
-        return std::max(0, static_cast<int>(s * sf(source_factor)) - static_cast<int>(d * sf(destination_factor))) / 255;
+        return std::max(0, static_cast<int>(s * sf(source_factor, true)) -
+                               static_cast<int>(d * sf(destination_factor, false))) /
+               255;
     case BlendEquation::ReverseSubtract:
-        return std::max(0, static_cast<int>(d * sf(destination_factor)) - static_cast<int>(s * sf(source_factor))) / 255;
+        return std::max(0, static_cast<int>(d * sf(destination_factor, false)) -
+                               static_cast<int>(s * sf(source_factor, true))) /
+               255;
     case BlendEquation::Min:
         return std::min(s, d);
     case BlendEquation::Max:
@@ -170,15 +205,21 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
     if (state_.blend.enabled) {
         const std::uint32_t destination = target_.color[index];
         source = rgba8(blend_channel(source, destination, state_.blend.source, state_.blend.destination,
-                                     state_.blend.equation, 0),
+                                     state_.blend.equation, 0, state_.blend.fixed_source,
+                                     state_.blend.fixed_destination),
                        blend_channel(source, destination, state_.blend.source, state_.blend.destination,
-                                     state_.blend.equation, 8),
+                                     state_.blend.equation, 8, state_.blend.fixed_source,
+                                     state_.blend.fixed_destination),
                        blend_channel(source, destination, state_.blend.source, state_.blend.destination,
-                                     state_.blend.equation, 16),
+                                     state_.blend.equation, 16, state_.blend.fixed_source,
+                                     state_.blend.fixed_destination),
                        blend_channel(source, destination, state_.blend.source, state_.blend.destination,
-                                     state_.blend.equation, 24));
+                                     state_.blend.equation, 24, state_.blend.fixed_source,
+                                     state_.blend.fixed_destination));
     }
-    target_.color[index] = source;
+    // Write mask: bits set keep the destination (CLEAR alpha clears and
+    // PMASK depth/stencil primes rely on this).
+    target_.color[index] = (source & ~state_.write_mask) | (target_.color[index] & state_.write_mask);
 }
 
 void SoftwareRasterizer::draw_triangle(const ScreenVertex &a, const ScreenVertex &b, const ScreenVertex &c) {

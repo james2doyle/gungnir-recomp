@@ -44,6 +44,13 @@ struct DrawState {
     std::shared_ptr<const TextureImage> texture_storage;
     std::shared_ptr<const CpuTexture> texture_cpu_storage;
     std::uint64_t texture_key{};
+    // Render-target awareness: the guest draw buffer (FBP 0x9C) this draw
+    // targets, whether CLEAR mode (0xD3 bit 0) turns it into a clear, and
+    // the color write mask (PMASK 0xE8/0xE9, or the clear bits).
+    std::uint32_t draw_buffer{};
+    bool clear{};
+    // PMASK bits set = keep destination (PSP reset 0 = full write).
+    std::uint32_t write_mask{};
 };
 
 struct Draw {

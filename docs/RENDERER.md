@@ -96,6 +96,11 @@ Unimplemented or unexercised GE paths, counted as named gaps:
    with SDL3's Android Vulkan surface on the emulator and phone (T9b); the
    software oracle remains the parity path.
 6. No validation-layer binary is available in this environment.
+7. Blend approximations: doubled-alpha codes 6-9 map to the single variant
+   on Vulkan (no doubled Vulkan factor exists); when both sides are `FIX`
+   with different `BLENDFIXEDA/B` registers the source register wins on both
+   backends; `FIX` alpha uses 1.0. Covered by `blend_factor_table`,
+   software `blending` and the Vulkan parity cases.
 
 ## M3 evidence
 

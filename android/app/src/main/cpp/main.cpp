@@ -268,6 +268,7 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.cull = in.cull;
         out.front_face = in.front_face;
         out.blend = in.blend;
+        out.write_mask = in.write_mask;
         out.texture = in.texture;
         out.texture_key = in.texture_key;
         out.linear = in.linear;
@@ -413,9 +414,14 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
     if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
         return env->NewStringUTF("session_not_started");
-    if (g_snapshot_finished->load()) return env->NewStringUTF("snapshot_load_failed: session finished");
-    g_snapshot_session->request_stop();
-    if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
+    // Like reset-to-title: a finished session restarts from the snapshot
+    // instead of refusing. Only join a live worker.
+    if (!g_snapshot_finished->load()) {
+        g_snapshot_session->request_stop();
+        if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
+    } else if (g_snapshot_thread->joinable()) {
+        g_snapshot_thread->join();
+    }
     std::string error;
     if (!g_snapshot_session->load_snapshot(file, error)) return env->NewStringUTF(error.c_str());
     GUNGNIR_LOGI("snapshot_loaded path=%s\n", file.c_str());

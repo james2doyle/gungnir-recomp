@@ -53,6 +53,22 @@ class TestNativeWiring(unittest.TestCase):
         for needle in ("save_snapshot", "load_snapshot", "request_resume", "restart_to_title"):
             self.assertIn(needle, text, f"GameSession is missing {needle}")
 
+    def test_load_revives_finished_session(self):
+        text = MAIN_CPP.read_text()
+        start = text.index("nativeLoadSnapshot")
+        body = text[start:start + 1500]
+        self.assertNotIn("session finished", body,
+                        "Load must revive a finished session (reset-style join+relaunch), not refuse it")
+
+    def test_run_starts_unstopped(self):
+        session_cpp = (REPO / "runtime" / "session" / "game_session.cpp").read_text()
+        start = session_cpp.index("void GameSession::run()")
+        body = session_cpp[start:start + 1200]
+        self.assertIn("stop_requested.store(false", body,
+                      "run() must clear a stale stop request (stop-join-load-relaunch "
+                      "otherwise dies at the first post-resume heartbeat: exactly "
+                      "+10k dispatches then host_stop, twice observed on device)")
+
 
 class TestBootRunnerFlags(unittest.TestCase):
     def test_snapshot_flags_accepted(self):

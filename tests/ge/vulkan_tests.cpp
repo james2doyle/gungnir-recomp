@@ -249,6 +249,87 @@ void parity_tests() {
     compare_frames(blend_software, vulkan, 1, true, "source-alpha blend matches software");
     check(backend.pipeline_count() == before_blend + 1u, "blend state creates one additional pipeline");
 
+    // PSP modulate (other-color): white over red stays red on both
+    // backends. Pre-fix this decoded to (Zero, One) in software and
+    // (One, One) in Vulkan, so parity failed.
+    const Quad red_base = make_quad({rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0)});
+    Framebuffer modulate_software(32, 32);
+    modulate_software.clear(rgba8(0, 0, 0));
+    RasterState red_state;
+    SoftwareRasterizer red_rasterizer(modulate_software, red_state);
+    draw_quad_software(red_rasterizer, red_base);
+    RasterState modulate_state;
+    modulate_state.blend.enabled = true;
+    modulate_state.blend.source = BlendFactor::DstColor;
+    modulate_state.blend.destination = BlendFactor::OneMinusSrcColor;
+    SoftwareRasterizer modulate_rasterizer(modulate_software, modulate_state);
+    std::array<ScreenVertex, 3> modulate_sw;
+    std::array<VulkanDrawVertex, 3> modulate_vk;
+    for (std::size_t i = 0; i < 3; ++i) {
+        modulate_sw[i] = {};
+        modulate_sw[i].x = blend_positions[i][0];
+        modulate_sw[i].y = blend_positions[i][1];
+        modulate_sw[i].z = 0.5f;
+        modulate_sw[i].inv_w = 1.0f;
+        modulate_sw[i].color = {1.0f, 1.0f, 1.0f, 1.0f};
+        modulate_vk[i] = {blend_positions[i][0], blend_positions[i][1], 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+                          1.0f};
+    }
+    modulate_rasterizer.draw_triangle(modulate_sw[0], modulate_sw[1], modulate_sw[2]);
+    VulkanDrawState vk_red;
+    VulkanDrawState vk_modulate;
+    vk_modulate.blend = modulate_state.blend;
+    const std::array<VulkanDrawCall, 2> modulate_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(red_base.vk), red_base.indices, vk_red},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(modulate_vk), blend_indices, vk_modulate}};
+    check(backend.render_headless_draws(modulate_calls, vulkan, error), error.c_str());
+    compare_frames(modulate_software, vulkan, 1, false, "other-color modulate matches software");
+    check(modulate_software.color_at(0, 0) == rgba8(255, 0, 0), "modulate keeps the red base");
+
+    // FIX factors read the latched BLENDFIXED registers via blend constants.
+    Framebuffer fix_software(32, 32);
+    fix_software.clear(rgba8(255, 0, 0));
+    RasterState fix_state;
+    fix_state.blend.enabled = true;
+    fix_state.blend.source = BlendFactor::Fix;
+    fix_state.blend.destination = BlendFactor::Zero;
+    fix_state.blend.fixed_source = 0x0000FF00u;
+    SoftwareRasterizer fix_rasterizer(fix_software, fix_state);
+    fix_rasterizer.draw_triangle(modulate_sw[0], modulate_sw[1], modulate_sw[2]);
+    VulkanDrawState vk_fix;
+    vk_fix.blend = fix_state.blend;
+    check(backend.render_headless_draw(modulate_vk, blend_indices, vk_fix, vulkan, error), error.c_str());
+    compare_frames(fix_software, vulkan, 1, false, "FIX blend matches software");
+
+    // Write mask: an alpha-only clear sprite over red must preserve red.
+    // Pre-fix both backends ignored the mask and wrote black.
+    Framebuffer mask_software(32, 32);
+    mask_software.clear(rgba8(255, 0, 0));
+    RasterState mask_state;
+    mask_state.blend.enabled = false;
+    mask_state.write_mask = 0x00FFFFFFu;
+    SoftwareRasterizer mask_rasterizer(mask_software, mask_state);
+    std::array<ScreenVertex, 3> mask_sw;
+    for (std::size_t i = 0; i < 3; ++i) {
+        mask_sw[i] = {};
+        mask_sw[i].x = blend_positions[i][0];
+        mask_sw[i].y = blend_positions[i][1];
+        mask_sw[i].z = 0.5f;
+        mask_sw[i].inv_w = 1.0f;
+        mask_sw[i].color = {0.0f, 0.0f, 0.0f, 0.0f};
+    }
+    mask_rasterizer.draw_triangle(mask_sw[0], mask_sw[1], mask_sw[2]);
+    std::array<VulkanDrawVertex, 3> mask_vk;
+    for (std::size_t i = 0; i < 3; ++i)
+        mask_vk[i] = {blend_positions[i][0], blend_positions[i][1], 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    VulkanDrawState vk_mask;
+    vk_mask.write_mask = 0x00FFFFFFu;
+    const std::array<VulkanDrawCall, 2> mask_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(red_base.vk), red_base.indices, vk_red},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(mask_vk), blend_indices, vk_mask}};
+    check(backend.render_headless_draws(mask_calls, vulkan, error), error.c_str());
+    compare_frames(mask_software, vulkan, 1, false, "write mask preserves masked channels");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

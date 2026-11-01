@@ -39,27 +39,33 @@ CompareFunc compare_from_ge(std::uint32_t value) {
 
 BlendFactor source_factor(std::uint32_t code) {
     switch (code & 0xFu) {
+    case 0u: return BlendFactor::DstColor;
+    case 1u: return BlendFactor::OneMinusDstColor;
     case 2u: return BlendFactor::SrcAlpha;
     case 3u: return BlendFactor::OneMinusSrcAlpha;
     case 4u: return BlendFactor::DstAlpha;
     case 5u: return BlendFactor::OneMinusDstAlpha;
-    case 6u: return BlendFactor::SrcAlpha;
-    case 7u: return BlendFactor::OneMinusSrcAlpha;
-    case 1u: return BlendFactor::One;
-    default: return BlendFactor::Zero;
+    case 6u: return BlendFactor::DoubleSrcAlpha;
+    case 7u: return BlendFactor::DoubleOneMinusSrcAlpha;
+    case 8u: return BlendFactor::DoubleDstAlpha;
+    case 9u: return BlendFactor::DoubleOneMinusDstAlpha;
+    default: return BlendFactor::Fix;
     }
 }
 
 BlendFactor destination_factor(std::uint32_t code) {
     switch (code & 0xFu) {
+    case 0u: return BlendFactor::SrcColor;
+    case 1u: return BlendFactor::OneMinusSrcColor;
     case 2u: return BlendFactor::SrcAlpha;
     case 3u: return BlendFactor::OneMinusSrcAlpha;
     case 4u: return BlendFactor::DstAlpha;
     case 5u: return BlendFactor::OneMinusDstAlpha;
-    case 6u: return BlendFactor::SrcAlpha;
-    case 7u: return BlendFactor::OneMinusSrcAlpha;
-    case 0u: return BlendFactor::Zero;
-    default: return BlendFactor::One;
+    case 6u: return BlendFactor::DoubleSrcAlpha;
+    case 7u: return BlendFactor::DoubleOneMinusSrcAlpha;
+    case 8u: return BlendFactor::DoubleDstAlpha;
+    case 9u: return BlendFactor::DoubleOneMinusDstAlpha;
+    default: return BlendFactor::Fix;
     }
 }
 
@@ -404,6 +410,7 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     for (std::uint32_t i = 0; i < count; ++i) clips[i] = pipeline.transform(decoded[i]);
 
     Draw draw;
+    draw.primitive = command.primitive;
     const std::uint32_t scissor1 = reg_param(0xD4u);
     const std::uint32_t scissor2 = reg_param(0xD5u);
     draw.state.scissor_x0 = static_cast<int>(scissor1 & 0x3FFu);
@@ -423,12 +430,24 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     draw.state.depth_function = compare_from_ge(reg_param(0xDEu));
     draw.state.cull = state.cull;
     draw.state.front_face = state.front_face;
-    if (reg_on(0x21u)) {
+    draw.state.draw_buffer = reg_param(0x9Cu) & 0x00FFFFFFu;
+    draw.state.clear = (reg_param(0xD3u) & 1u) != 0u;
+    if (draw.state.clear) {
+        const std::uint32_t clear = reg_param(0xD3u);
+        draw.state.write_mask = ((clear & 0x100u) != 0u ? 0u : 0x00FFFFFFu) |
+                                ((clear & 0x200u) != 0u ? 0u : 0xFF000000u);
+    } else {
+        draw.state.write_mask =
+            (reg_param(0xE8u) & 0x00FFFFFFu) | ((reg_param(0xE9u) & 0xFFu) << 24u);
+    }
+    if (reg_on(0x21u) && !draw.state.clear) {
         const std::uint32_t mode = reg_param(0xDFu);
         draw.state.blend.enabled = true;
         draw.state.blend.source = source_factor(mode & 0xFu);
         draw.state.blend.destination = destination_factor((mode >> 4u) & 0xFu);
         draw.state.blend.equation = blend_equation((mode >> 8u) & 7u);
+        draw.state.blend.fixed_source = reg_param(0xE0u);
+        draw.state.blend.fixed_destination = reg_param(0xE1u);
     }
     if (reg_on(0x22u)) gap("alpha_test_unsupported");
     if (reg_on(0x17u) && !layout_.through && (reg_param(0x50u) & 1u) == 0u) gap("flat_shading_unsupported");

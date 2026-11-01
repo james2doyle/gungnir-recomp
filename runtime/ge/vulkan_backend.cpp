@@ -64,6 +64,27 @@ VkBlendFactor to_vk_blend(BlendFactor factor) {
         return VK_BLEND_FACTOR_DST_ALPHA;
     case BlendFactor::OneMinusDstAlpha:
         return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    case BlendFactor::SrcColor:
+        return VK_BLEND_FACTOR_SRC_COLOR;
+    case BlendFactor::OneMinusSrcColor:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case BlendFactor::DstColor:
+        return VK_BLEND_FACTOR_DST_COLOR;
+    case BlendFactor::OneMinusDstColor:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    // No doubled-alpha factors in Vulkan: approximate with the single
+    // variant (matches the pre-fix software behavior for codes 6/7).
+    case BlendFactor::DoubleSrcAlpha:
+        return VK_BLEND_FACTOR_SRC_ALPHA;
+    case BlendFactor::DoubleOneMinusSrcAlpha:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case BlendFactor::DoubleDstAlpha:
+        return VK_BLEND_FACTOR_DST_ALPHA;
+    case BlendFactor::DoubleOneMinusDstAlpha:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    // FIX reads the per-draw blend constants set at draw time.
+    case BlendFactor::Fix:
+        return VK_BLEND_FACTOR_CONSTANT_COLOR;
     }
     return VK_BLEND_FACTOR_ONE;
 }
@@ -102,14 +123,23 @@ VkFrontFace to_vk_front_face(FrontFace face) {
 
 std::uint64_t draw_pipeline_key(const VulkanDrawState &state) {
     std::uint64_t key = state.blend.enabled ? 1u : 0u;
+    // BlendFactor now spans 0-14 (four bits); the old packing overlapped
+    // source and destination once values exceeded 5.
     key |= static_cast<std::uint64_t>(state.blend.source) << 1u;
-    key |= static_cast<std::uint64_t>(state.blend.destination) << 4u;
-    key |= static_cast<std::uint64_t>(state.blend.equation) << 7u;
-    key |= state.depth_test ? 1ull << 11u : 0ull;
-    key |= state.depth_write ? 1ull << 12u : 0ull;
-    key |= static_cast<std::uint64_t>(state.depth_function) << 13u;
-    key |= static_cast<std::uint64_t>(state.cull) << 16u;
-    key |= static_cast<std::uint64_t>(state.front_face) << 18u;
+    key |= static_cast<std::uint64_t>(state.blend.destination) << 6u;
+    key |= static_cast<std::uint64_t>(state.blend.equation) << 10u;
+    key |= state.depth_test ? 1ull << 13u : 0ull;
+    key |= state.depth_write ? 1ull << 14u : 0ull;
+    key |= static_cast<std::uint64_t>(state.depth_function) << 15u;
+    key |= static_cast<std::uint64_t>(state.cull) << 19u;
+    key |= static_cast<std::uint64_t>(state.front_face) << 21u;
+    // Write-mask channels (bit set = channel written).
+    std::uint64_t channels = 0u;
+    if ((state.write_mask & 0xFFu) != 0xFFu) channels |= 1u;
+    if ((state.write_mask & 0xFF00u) != 0xFF00u) channels |= 2u;
+    if ((state.write_mask & 0xFF0000u) != 0xFF0000u) channels |= 4u;
+    if ((state.write_mask & 0xFF000000u) != 0xFF000000u) channels |= 8u;
+    key |= channels << 22u;
     return key;
 }
 
@@ -447,10 +477,11 @@ struct VulkanBackend::Impl {
         depth.depthWriteEnable = VK_FALSE;
         depth.depthCompareOp = VK_COMPARE_OP_ALWAYS;
 
-        const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                                     VK_DYNAMIC_STATE_BLEND_CONSTANTS};
         VkPipelineDynamicStateCreateInfo dynamic{};
         dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamic.dynamicStateCount = 2;
+        dynamic.dynamicStateCount = 3;
         dynamic.pDynamicStates = dynamic_states;
 
         VkGraphicsPipelineCreateInfo info{};
@@ -795,17 +826,24 @@ struct VulkanBackend::Impl {
         blend.srcAlphaBlendFactor = to_vk_blend(state.blend.source);
         blend.dstAlphaBlendFactor = to_vk_blend(state.blend.destination);
         blend.alphaBlendOp = to_vk_equation(state.blend.equation);
-        blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                               VK_COLOR_COMPONENT_A_BIT;
+        // Write mask bits set = keep destination. A channel is writable
+        // unless its mask byte is fully set; partial-byte masks fall back
+        // to writing the channel (named gap: partial-channel PMASK).
+        blend.colorWriteMask = 0;
+        if ((state.write_mask & 0xFFu) != 0xFFu) blend.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
+        if ((state.write_mask & 0xFF00u) != 0xFF00u) blend.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
+        if ((state.write_mask & 0xFF0000u) != 0xFF0000u) blend.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
+        if ((state.write_mask & 0xFF000000u) != 0xFF000000u) blend.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
         VkPipelineColorBlendStateCreateInfo color_blend{};
         color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
         color_blend.attachmentCount = 1;
         color_blend.pAttachments = &blend;
 
-        const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                                     VK_DYNAMIC_STATE_BLEND_CONSTANTS};
         VkPipelineDynamicStateCreateInfo dynamic{};
         dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamic.dynamicStateCount = 2;
+        dynamic.dynamicStateCount = 3;
         dynamic.pDynamicStates = dynamic_states;
 
         VkGraphicsPipelineCreateInfo info{};
@@ -1507,6 +1545,19 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         vkCmdBindIndexBuffer(impl_->command_buffer, impl_->draw_index_buffer, index_bind_offset, VK_INDEX_TYPE_UINT16);
         VkRect2D scissor{{x0, y0}, {static_cast<std::uint32_t>(x1 - x0), static_cast<std::uint32_t>(y1 - y0)}};
         vkCmdSetScissor(impl_->command_buffer, 0, 1, &scissor);
+        if (calls[i].state.blend.enabled &&
+            (calls[i].state.blend.source == BlendFactor::Fix ||
+             calls[i].state.blend.destination == BlendFactor::Fix)) {
+            // FIX reads BLENDFIXEDA (source) or B (destination); when both
+            // sides are FIX with different registers the source wins (named gap).
+            const std::uint32_t fixed = calls[i].state.blend.source == BlendFactor::Fix
+                                            ? calls[i].state.blend.fixed_source
+                                            : calls[i].state.blend.fixed_destination;
+            const float constants[4] = {static_cast<float>(fixed & 255u) / 255.0f,
+                                        static_cast<float>((fixed >> 8u) & 255u) / 255.0f,
+                                        static_cast<float>((fixed >> 16u) & 255u) / 255.0f, 1.0f};
+            vkCmdSetBlendConstants(impl_->command_buffer, constants);
+        }
         vkCmdDrawIndexed(impl_->command_buffer, static_cast<std::uint32_t>(calls[i].indices.size()), 1, 0, 0, 0);
     }
     vkCmdEndRenderPass(impl_->command_buffer);

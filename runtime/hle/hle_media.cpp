@@ -16,6 +16,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 namespace gungnir::hle {
 namespace {
@@ -373,8 +376,12 @@ void reset_media_state() {
     });
     state.ge.set_gap_sink([&state](const std::string &gap) {
         ++state.ge_gaps;
-        if (state.logged_ge_gaps.insert(gap).second)
+        if (state.logged_ge_gaps.insert(gap).second) {
             std::cerr << "[ge] gap: " << gap << "\n";
+#if defined(__ANDROID__)
+            __android_log_print(ANDROID_LOG_INFO, "gungnir", "ge_gap=%s", gap.c_str());
+#endif
+        }
     });
 }
 
@@ -713,7 +720,12 @@ bool import_snapshot_media(std::span<const std::uint8_t> bytes, Runtime &runtime
     state.ge.set_draw_sink([&state](const gungnir::ge::Draw &draw) { state.pending_draws.push_back(draw); });
     state.ge.set_gap_sink([&state](const std::string &gap) {
         ++state.ge_gaps;
-        if (state.logged_ge_gaps.insert(gap).second) std::cerr << "[ge] gap: " << gap << "\n";
+        if (state.logged_ge_gaps.insert(gap).second) {
+            std::cerr << "[ge] gap: " << gap << "\n";
+#if defined(__ANDROID__)
+            __android_log_print(ANDROID_LOG_INFO, "gungnir", "ge_gap=%s", gap.c_str());
+#endif
+        }
     });
     error.clear();
     return true;

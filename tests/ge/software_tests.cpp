@@ -115,6 +115,41 @@ void blending() {
     full_screen(rasterizer, rgba8(255, 0, 0, 128));
     check(channel(framebuffer.color_at(0, 0), 0) == 128u,
           "source-alpha blend produces the hand-computed half red");
+
+    // PSP modulate: source * destination. White over red stays red;
+    // red over blue goes black.
+    framebuffer.clear(rgba8(255, 0, 0));
+    rasterizer.state().blend.source = BlendFactor::DstColor;
+    rasterizer.state().blend.destination = BlendFactor::Zero;
+    full_screen(rasterizer, rgba8(255, 255, 255));
+    check(framebuffer.color_at(0, 0) == rgba8(255, 0, 0), "other-color source modulates");
+    framebuffer.clear(rgba8(0, 0, 255));
+    full_screen(rasterizer, rgba8(255, 0, 0));
+    check(framebuffer.color_at(0, 0) == rgba8(0, 0, 0), "disjoint modulate goes black");
+
+    // FIX reads the latched BLENDFIXED register color: green FIX over
+    // anything yields green.
+    framebuffer.clear(rgba8(255, 0, 0));
+    rasterizer.state().blend.source = BlendFactor::Fix;
+    rasterizer.state().blend.destination = BlendFactor::Zero;
+    rasterizer.state().blend.fixed_source = 0x0000FF00u;
+    full_screen(rasterizer, rgba8(255, 255, 255));
+    check(framebuffer.color_at(0, 0) == rgba8(0, 255, 0), "FIX source applies the fixed color");
+
+    // Doubled source alpha clamps: 128 doubled saturates, so red wins fully.
+    framebuffer.clear(rgba8(0, 0, 0));
+    rasterizer.state().blend.source = BlendFactor::DoubleSrcAlpha;
+    rasterizer.state().blend.destination = BlendFactor::Zero;
+    // Write mask: bits set keep the destination. RGB-only source over
+    // blue keeps blue's alpha; a full-keep mask leaves the target alone.
+    framebuffer.clear(rgba8(0, 0, 255, 128));
+    rasterizer.state().blend.enabled = false;
+    rasterizer.state().write_mask = 0xFF000000u;
+    full_screen(rasterizer, rgba8(255, 0, 0, 255));
+    check(framebuffer.color_at(0, 0) == rgba8(255, 0, 0, 128), "write mask keeps the masked channels");
+    rasterizer.state().write_mask = 0xFFFFFFFFu;
+    full_screen(rasterizer, rgba8(0, 255, 0, 255));
+    check(framebuffer.color_at(0, 0) == rgba8(255, 0, 0, 128), "full write mask is a no-op");
 }
 
 void scissor_and_alpha_test() {

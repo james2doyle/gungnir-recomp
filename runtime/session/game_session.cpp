@@ -290,6 +290,11 @@ void GameSession::run() {
         impl_->result.error = "session_not_started";
         return;
     }
+    // A worker entry always starts unstopped: the stop-join-load-relaunch
+    // path (and save-resume) sets the flag before joining, and neither load
+    // nor resume clears it. Without this the relaunched worker inherits the
+    // stale request and dies at the first heartbeat (~10k dispatches).
+    impl_->stop_requested.store(false, std::memory_order_relaxed);
     if (impl_->load_failed) {
         impl_->result.ok = false;
         impl_->result.error = impl_->load_error;

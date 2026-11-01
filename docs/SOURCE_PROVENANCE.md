@@ -256,3 +256,55 @@ is modelled because the title only reads GPI.
   relative to ... so time doesn't move strangely with savestates, turbo
   speed, etc." Behavioral reference only, no code copied; our `wall_base_us`
   in the clock section is the same idea (host boot epoch + virtual now).
+
+### T18 reference review — text upscaling (2026-11-01)
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later): `GPU/Common/TextureScalerCommon.h`
+  exposes the load-time scalers (XBRZ, HYBRID, BICUBIC, HYBRID_BICUBIC, with an
+  optional deposterize pass); `GPU/Common/TextureReplacer.cpp` parses
+  `[filtering]` (`nearest`/`linear`) per replacement and `[hashranges]`, and
+  `ReplacedTexture::Prepare` divides by `newW`/`newH`, which is how a
+  replacement at a different size keeps normalized UVs. Behavioral reference
+  only; never linked, vendored or copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `mods/README.md` documents texture packs at any resolution ("4x for an HD
+  pack") with PPSSPP pack compatibility (`runtime/src/rt/texpack_ppsspp.c`), and
+  `runtime/src/rt/pgf.c` parses PGF for system-font text. Behavioral only.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0): `docs/OPTIONS.md` — fullscreen
+  keeps the 480:272 frame fitted, `render_scale` raises internal resolution,
+  `filter` chooses nearest/linear, and `hud_scale` shrinks HUD elements; no
+  texture upscaling. Behavioral only.
+- `Chlumsky/msdfgen` (MIT): the candidate generator if the SDF/MSDF option is
+  chosen; a tool/build dependency only, not vendored. The underlying technique
+  is Valve, "Improved Alpha-Tested Magnification for Vector Textures and
+  Special Effects" (SIGGRAPH 2007).
+- Decision: the HD-atlas path reuses our own T8c/T8d content keys and
+  `tools/textures/repack_font_atlas.py`; no reference code is copied. Any
+  generated atlas comes from the user's own dump and a user-supplied glyph
+  source, is written under gitignored user paths, and is never committed
+  (AGENTS hard limits 1-2). The existing byte-identical identity gate on the
+  repack tool stays.
+
+### GE blend/clear/write-mask reference review (2026-11-01)
+
+- `pspsdk` (`src/gu/pspgu.h`, `GU_OTHER_COLOR`/`GU_ONE_MINUS_OTHER_COLOR`/
+  `GU_FIX` factor codes): source of truth for BLENDMODE factor semantics —
+  code 0 is the other color (dst for src operand, src for dst operand).
+  Behavioral reference only.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `blend_factor` (other-color/double-alpha/FIX
+  table), `setup_pipe` (`p.clear` from `0xD3`, clear/PMASK `writeMask`,
+  clears disable tex/blend/alpha/depth-test), `current_target()` + `fboTexAddr`
+  render-to-texture sampling, `decode_dxt`. Behavioral reference only; no
+  code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `factor_component` (identical factor table),
+  `put_px_rgba` (CLEAR via `clear_mode` bits `0x100`/`0x200`, per-byte
+  `r=(r&~m)|(d&m)` masking, blend-then-mask order), `ge.fbp/fbw` guest-VRAM
+  writes. Behavioral reference only; no code copied.
+- Adopted: full factor table + `FIX` register latching + Vulkan blend
+  constants; CLEAR-mode draws (flat source, no blend/tex) with channel
+  write masks in the software rasterizer and via `colorWriteMask` on
+  Vulkan (partial-byte masks fall back to full write — named gap).
+  Our own additions: per-draw `draw_buffer`/`clear`/`write_mask` capture
+  and `blend_factor_table` red-first contracts.

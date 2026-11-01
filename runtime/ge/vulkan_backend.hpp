@@ -60,6 +60,10 @@ struct VulkanDrawState {
     bool linear{};
     bool wrap_u{};
     bool wrap_v{};
+    // Write mask: bits set = keep destination. Channel-exact masks map to
+    // the pipeline color write mask; anything else falls back to a full
+    // write (named gap, logged at pipeline build).
+    std::uint32_t write_mask{};
 };
 
 struct VulkanDrawCall {

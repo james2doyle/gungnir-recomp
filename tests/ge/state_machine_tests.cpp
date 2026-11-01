@@ -214,6 +214,91 @@ void scissor_and_gaps() {
     check(!gaps.empty(), "unsupported primitive is a named gap");
 }
 
+void blend_factor_table() {
+    // pspsdk pspgu.h: 0 = other color (dst for src operand, src for dst
+    // operand), 1 = one-minus-other, 2/3 src alpha, 4/5 dst alpha,
+    // 6/7 doubled src alpha, 8/9 doubled dst alpha, 10+ = FIX register.
+    // The event-scene world draws use src=0/dst=1; decoding those as
+    // (Zero, One) turns the lighting pass into a no-op and the world black.
+    struct Case {
+        std::uint32_t mode;
+        BlendFactor source;
+        BlendFactor destination;
+    };
+    const Case cases[] = {
+        {0u | (1u << 4u), BlendFactor::DstColor, BlendFactor::OneMinusSrcColor},
+        {2u | (3u << 4u), BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha},
+        {4u | (5u << 4u), BlendFactor::DstAlpha, BlendFactor::OneMinusDstAlpha},
+        {6u | (7u << 4u), BlendFactor::DoubleSrcAlpha, BlendFactor::DoubleOneMinusSrcAlpha},
+        {8u | (9u << 4u), BlendFactor::DoubleDstAlpha, BlendFactor::DoubleOneMinusDstAlpha},
+        {10u | (10u << 4u), BlendFactor::Fix, BlendFactor::Fix},
+        {15u | (11u << 4u), BlendFactor::Fix, BlendFactor::Fix},
+    };
+    for (const Case &entry : cases) {
+        Memory memory;
+        write_through_triangle(memory, 0x1000u);
+        StateMachine machine;
+        std::vector<Draw> draws;
+        machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+        machine.command(command(CommandKind::State, 0x00223344u, 0xE0u), view(memory));
+        machine.command(command(CommandKind::State, 0x00667788u, 0xE1u), view(memory));
+        machine.command(command(CommandKind::State, 1u, 0x21u), view(memory));
+        machine.command(command(CommandKind::State, entry.mode, 0xDFu), view(memory));
+        machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                               0x12u), view(memory));
+        machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+        machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+        const std::string what = "blend mode 0x" + std::to_string(entry.mode);
+        check(!draws.empty(), what + " emits a draw");
+        if (draws.empty()) continue;
+        check(draws[0].state.blend.source == entry.source, what + " source factor");
+        check(draws[0].state.blend.destination == entry.destination, what + " destination factor");
+        if (entry.source == BlendFactor::Fix)
+            check(draws[0].state.blend.fixed_source == 0x00223344u, what + " fixed source color");
+        if (entry.destination == BlendFactor::Fix)
+            check(draws[0].state.blend.fixed_destination == 0x00667788u,
+                  what + " fixed destination color");
+    }
+}
+
+void clear_and_write_mask() {
+    // CLEAR mode (0xD3 bit 0) turns a draw into a clear; the write mask
+    // comes from the clear bits, otherwise from PMASK (0xE8/0xE9, bits
+    // set = keep destination). Blending is forced off for clears.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.command(command(CommandKind::State, 1u, 0xD3u), view(memory));
+    machine.command(command(CommandKind::State, 1u, 0x21u), view(memory));
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    check(!draws.empty(), "clear draw emits");
+    if (draws.empty()) return;
+    check(draws[0].state.clear, "CLEAR mode flagged");
+    check(!draws[0].state.blend.enabled, "clear forces blending off");
+    check(!draws[0].state.texture_enabled, "clear disables texturing");
+
+    Memory masked;
+    write_through_triangle(masked, 0x1000u);
+    StateMachine keeper;
+    std::vector<Draw> kept;
+    keeper.set_draw_sink([&kept](const Draw &draw) { kept.push_back(draw); });
+    keeper.command(command(CommandKind::State, 0x00FFFF00u, 0xE8u), view(masked));
+    keeper.command(command(CommandKind::State, 0x000000FFu, 0xE9u), view(masked));
+    keeper.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                          0x12u), view(masked));
+    keeper.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(masked));
+    keeper.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(masked));
+    check(!kept.empty(), "masked draw emits");
+    if (kept.empty()) return;
+    check(!kept[0].state.clear, "normal draw is not a clear");
+    check(kept[0].state.write_mask == 0xFFFFFF00u, "PMASK latched as the write mask");
+}
+
 void bounded_texture_retention() {
     Memory memory(0x200000u);
     write_through_triangle(memory, 0x1000u);
@@ -282,6 +367,8 @@ int main() {
     indexed_and_textured();
     through_sprite_quad();
     scissor_and_gaps();
+    blend_factor_table();
+    clear_and_write_mask();
     bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";
