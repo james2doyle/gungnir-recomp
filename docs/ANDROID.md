@@ -1,12 +1,11 @@
 # ANDROID — build, deploy and game-data intake
 
-Status: T13a. The APK now compiles the shared session, HLE boot set, ATRAC
-decode and savedata chain and can run a bounded game session. VERIFIED on the
-arm64 phone: the real-corpus build reaches the first guest display flip with
-`missing_import=0` and `module_init_complete=true`
-(`docs/qa/2026-10-31-t13a-runtime.md`). The title-screen rendering path and menu
-bring-up are T13b. The synthetic Vulkan triangle still backs the shell until
-then.
+Status: T13b. The APK runs the shared session, HLE boot set, ATRAC decode,
+SAS mixing and savedata chain, and presents guest GE frames. VERIFIED on the
+arm64 phone: the title screen renders upright at the fitted aspect, music
+plays through the AAudio backend, and touch input drives the title menu and
+the difficulty selection (`docs/qa/2026-11-01-t13b-title.md`). The bounded
+first-flip record is `docs/qa/2026-10-31-t13a-runtime.md`.
 
 ## Prerequisites
 
@@ -23,8 +22,8 @@ properties; `ANDROID_HOME`/`JAVA_HOME` are accepted as defaults.
 
 ```sh
 scripts/android/build.sh \
-  -Pgungnir.sdkDir=/opt/android-sdk \
-  -Pgungnir.javaHome=/usr/lib/jvm/java-21-openjdk
+  -Pgungnir.sdkDir="$ANDROID_HOME" \
+  -Pgungnir.javaHome="$JAVA_HOME"
 ```
 
 | Property | Meaning |
@@ -49,15 +48,55 @@ be dropped to `-O1` through `-Pgungnir.o1Sources`; the choice is visible in
 ## Deploy
 
 ```sh
-ADB_SERIAL=30c1f958 scripts/android/install.sh
-ADB_SERIAL=30c1f958 scripts/android/run.sh        # waits for "session_stop" or "first frame"
-ADB_SERIAL=30c1f958 scripts/android/logcat.sh     # gungnir/SDL/crash tags
-ADB_SERIAL=30c1f958 scripts/android/screenshot.sh # PNG under build/qa/android/
-ADB_SERIAL=30c1f958 scripts/android/lifecycle.sh  # 3 pause/resume cycles
+ADB_SERIAL=<serial> scripts/android/install.sh
+ADB_SERIAL=<serial> scripts/android/run.sh        # waits for "session_stop" or "first frame"
+ADB_SERIAL=<serial> scripts/android/logcat.sh     # gungnir/SDL/crash tags
+ADB_SERIAL=<serial> scripts/android/screenshot.sh # PNG under build/qa/android/
+ADB_SERIAL=<serial> scripts/android/lifecycle.sh  # 3 pause/resume cycles
 ```
 
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.
+
+## Runtime session and intent extras
+
+A normal launch runs the guest continuously against `files/game/game.elf` and
+presents guest GE frames through the swapchain. The bring-up and QA forms are
+selected with intent extras:
+
+```sh
+adb shell am start -n com.gungnir.recomp/.GungnirActivity \
+  --ei dispatch_limit 5000000 --ei wall_seconds 30 \
+  --ez stop_at_flip true --ez pacing false
+```
+
+| Extra | Default | Meaning |
+|---|---|---|
+| `dispatch_limit` | 5,000,000,000 | hard upper bound on guest dispatches |
+| `wall_seconds` | 0 (unbounded) | wall-clock bound for a bounded run |
+| `stop_at_flip` | false | stop at the first `sceDisplaySetFrameBuf` |
+| `pacing` | true | pace the guest clock to real time (59.94 Hz vblanks) |
+| `debug_quad` | false | draw the synthetic test quad instead of the guest |
+| `audio_smoke` | false | run the AAudio/SAS smoke instead of a game session |
+| `audio_smoke_ms` | 500 | smoke duration |
+
+The bounded run logs, in order:
+
+```text
+audio_output_ready
+session_start elf=...
+first frame <width>x<height>
+guest_frame=<n> draws=<n> vertices=<n> ge_gaps=<n>
+audio_mixer pulled=<n> underrun=<n> submitted=<n> overruns=<n> rejected=<n> peak=<n> xruns=<n>
+session_stop cause=<first_flip|dispatch_limit|wall_clock|missing_import|host_stop|guest_stop|scheduler_deadlock> dispatches=<n> flips=<n> imports_bound=<n> imports_total=<n> stop_pc=<addr>
+session_stop_reason=<reason>
+```
+
+`imports_unbound` is the number of counted gaps (the JSON report lists them);
+`missing_import=1` means an unbound import executed and stopped the run with
+its library and NID. `overruns` and
+`rejected` describe the audio mixer (a rejected buffer is a programming error);
+`xruns` is the AAudio underrun count from the driver.
 
 ## Game data
 
@@ -83,8 +122,10 @@ adb push build/game/modules/SYSDIR__EBOOT.BIN.decrypted.elf \
 ```
 
 The APK is built with the matching AOT corpus
-(`-Pgungnir.gameCorpus=build/profile-test/generated`); without one, the session
-fails with `game_corpus_missing` instead of running empty. The NID registry is
+(`-Pgungnir.gameCorpus=build/generated`, the output of the codegen step in
+[`BUILDING.md`](BUILDING.md)); without one, the session fails with
+`game_corpus_missing` instead of running empty. Synthetic-corpus builds use
+the same property with the fixture corpus and never touch the real disc. The NID registry is
 packaged from `configs/nids.csv` into app storage as `runtime/nids.csv`. The
 memory stick is app-private at `getFilesDir()/psp/` (`PSP/SAVEDATA/...`).
 
@@ -110,11 +151,21 @@ version reported by the running session. Zips dropped in
 reports that custom drivers require arm64 and keeps the system driver. See
 [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the package contract.
 
-## Audio smoke
+## Audio
 
-The runtime now links an AAudio low-latency 44.1 kHz stereo backend. A normal
-launch still plays the SDL lifecycle tone; a debug smoke can be run without
-touching the UI:
+The runtime links an AAudio low-latency 44.1 kHz stereo backend. Game audio
+reaches it through the mixer in `runtime/audio/audio_mixer.cpp`: every
+`sceAudio` channel is summed onto one timeline, with a 46 ms lead, counted
+resyncs when a channel falls behind and counted restarts when the timeline
+outgrows the ring. `audio_mixer` logs the peak and the health counters.
+
+ATRAC tracks are decoded locally; `sceAtracDecodeData` charges the media-engine
+frame time on every attempt so the sound thread yields to the guest. SAS VAG
+voices (including the long ADSR controls) render into guest memory before the
+game submits them. Noise voices are silent and reverb is stored but not mixed;
+both are named gaps in [`AUDIO.md`](AUDIO.md).
+
+A backend smoke can be run without touching the UI:
 
 ```sh
 adb shell am force-stop com.gungnir.recomp
@@ -124,9 +175,9 @@ adb logcat -d | grep audio_smoke
 
 The native smoke opens AAudio, submits a 440 Hz tone and a synthetic VAG
 through `SasCore`, then logs `audio_smoke ok/vag/pulled/underrun/xruns`. It is
-for backend bring-up, not a soak: the short queue drains before the wait ends.
-The partial phone evidence is in `docs/qa/2026-10-31-t12a-audio.md`; the 60 s
-no-underrun soak and game audio remain T12/T13 work.
+for backend bring-up, not a soak. The title/audio device evidence is
+`docs/qa/2026-11-01-t13b-title.md`; the backend record is
+`docs/qa/2026-10-31-t12a-audio.md`.
 
 ## Input
 
@@ -138,10 +189,13 @@ gamepad profiles/remap and touch haptics are documented in
 ## Lifecycle and orientation
 
 The Activity is fixed to landscape (`LandscapeLeft`), so user rotation locks
-do not rotate the app. Background/foreground pauses and resumes a synthetic
-SDL audio tone, recreates the `VkSurfaceKHR`/swapchain on resume, and retries
-a failed render up to three times. A failed surface recreation is logged as
-`surface_recreate_failed` and retried after 500 ms. Actual game audio is T12.
+do not rotate the app. Entering the background releases held input, requests a
+session stop, pauses AAudio and logs `lifecycle_paused`; returning to the
+foreground resumes the audio stream and recreates the `VkSurfaceKHR`/
+swapchain (`lifecycle_resumed`). The guest session itself is not restarted
+after a background stop — a named lifecycle gap for the manual QA matrix. A
+failed render is retried up to three times, and a failed surface recreation is
+logged as `surface_recreate_failed` and retried after 500 ms.
 
 ## Emulator notes
 
@@ -204,11 +258,18 @@ Each mutation was applied locally and the named gate failed for that reason:
 
 ## Current limits
 
-- The game session reaches and reports the first guest display flip (T13a);
-  GE-list presentation, the title screen and menu input are T13b.
+- The title screen and menu work on the arm64 device; confirming a difficulty
+  currently faults in the new-game initialisation path (tracked work, not a
+  title/menu failure).
+- Frame production is bound by guest execution speed on the phone (~20 fps at
+  the title); the guest clock is paced, but full-speed play is hardening work.
+- MPEG/PMF movie playback is deferred: the opening movie is skipped with a
+  counted gap and boot continues.
 - Game audio is fed through the 44.1 kHz mixer to AAudio; if AAudio cannot
   open, the named silent sink is used and the failure is logged.
-- Savedata is mounted under `files/psp/PSP/SAVEDATA`; the save tree is not
+- SAS noise voices are silent and reverb is stored but not mixed.
+- Savedata is mounted under `files/psp/PSP/SAVEDATA`; LOAD/SAVE/SIZES work,
+  while the picker, LIST and DELETE remain named gaps. The save tree is not
   bundled and must be pushed by the user.
 - Custom Adreno drivers are complete for arm64/API 28+; packages are
   user-supplied and never bundled. See
@@ -216,4 +277,7 @@ Each mutation was applied locally and the named gate failed for that reason:
 - The affinity heuristic uses the highest allowed CPU, not topology/frequency.
 - Debug APK only; release signing is not configured.
 
-Manual QA evidence: [`docs/qa/2026-10-30-t9-android-shell.md`](qa/2026-10-30-t9-android-shell.md).
+Manual QA evidence: [`docs/qa/2026-11-01-t13b-title.md`](qa/2026-11-01-t13b-title.md)
+(title, audio, touch menu) and
+[`docs/qa/2026-10-30-t9-android-shell.md`](qa/2026-10-30-t9-android-shell.md)
+(shell and first frame).

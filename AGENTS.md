@@ -7,7 +7,8 @@ If another document conflicts with this one, this one wins.
 
 Static recompilation of *Gungnir* (USA, ULUS-10592) for PSP to native C++,
 targeting Android. See `.dex/plan.md` for the master plan and `README.md` for
-orientation. Work is tracked as dex tasks in `.dex/tasks.jsonl` (in-repo).
+orientation. The from-scratch build and deploy flow is `docs/BUILDING.md`.
+Work is tracked as dex tasks in `.dex/tasks.jsonl` (in-repo).
 
 ## Hard limits (never relaxed)
 

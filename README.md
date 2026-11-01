@@ -29,7 +29,7 @@ rendered on an adb-connected device with navigable menus** (touch + gamepad).
 | M1 | Recomp pipeline proven on synthetic fixtures (Linux) | **closed** (T4; `data/milestones.json`) |
 | M2 | Gungnir analyzed, AOT generated locally | **closed** (T5; `data/milestones.json`) |
 | M3 | Bounded boot on Linux desktop | **closed** (T6+T7; ledger: `data/milestones.json`) |
-| M4 | **Title screen on adb device** | planned |
+| M4 | **Title screen on adb device** | **in progress** (title + menu verified; milestone QA pending) |
 | M5 | Hardening: audio, saves, texture upscaling, driver picker, perf | planned |
 
 Analysis details and the current census: [`docs/ANALYSIS.md`](docs/ANALYSIS.md);
@@ -73,11 +73,12 @@ build/       GITIGNORED: your game tree, generated recompiled code, outputs
 
 ## Building
 
-Android shell setup, build/deploy and SAF/adb intake are in
-[`docs/ANDROID.md`](docs/ANDROID.md). See `docs/BUILDING.md` (landing with
-milestone M4) for the full from-scratch flow. Prerequisites:
-`cmake`, `ninja`, a C++20 compiler, Python 3.11+, Android SDK/NDK (arm64),
-and your own disc image.
+The full from-scratch flow — intake, decryption, analysis, codegen, host
+tests, Android build and device run — is in
+[`docs/BUILDING.md`](docs/BUILDING.md). Android shell setup and deploy are in
+[`docs/ANDROID.md`](docs/ANDROID.md). Prerequisites: `cmake`, `ninja`, a C++20
+compiler, Python 3.11+, JDK 17–23, Android SDK/NDK (arm64), and your own disc
+image.
 
 **Have a `.chd`?** The pipeline's input is a UMD **ISO** — converters, the
 identity gate, and the full intake flow live in

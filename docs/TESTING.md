@@ -139,7 +139,13 @@ python3 -m unittest tests.test_audio_mixer -v      # T12a mixer ring/volumes/und
 python3 -m unittest tests.test_sdl_audio -v        # T12a SDL3 tone smoke
 python3 -m unittest tests.test_savedata -v         # T12b store/SFO/save-load + PPSSPP saves
 python3 -m unittest tests.test_dar -v              # T12b DAR list/extract/repack
+python3 -m unittest tests.test_docs_building -v    # T13c BUILDING.md contract
 python3 -m unittest discover -s tests -p 'test_*.py' -v   # full battery
+
+`tests.test_docs_building` checks that [`BUILDING.md`](BUILDING.md) exists,
+that every script and build flag it names is real, that relative links
+resolve, and that it contains no machine paths, dump hashes, screenshots or
+performance claims the tree does not support.
 
 Consolidated gates (`test_android_suite`, `test_adreno_suite`,
 `test_input_suite`, `test_texture_suite`, `test_ge_suite`) still run their
