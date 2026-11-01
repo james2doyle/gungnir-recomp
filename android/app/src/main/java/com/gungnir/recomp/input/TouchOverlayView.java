@@ -46,12 +46,22 @@ public final class TouchOverlayView extends View {
 
     private boolean editing;
     private boolean suppressed;
+    private boolean remapToastShown;
     private final Runnable gamepadPoll = new Runnable() {
         @Override
         public void run() {
+            boolean pad = GamepadBridge.active();
             if (!suppressed) {
-                int desired = GamepadBridge.active() ? INVISIBLE : VISIBLE;
+                int desired = pad ? INVISIBLE : VISIBLE;
                 if (getVisibility() != desired) setVisibility(desired);
+            }
+            if (!pad) {
+                remapToastShown = false;
+            } else if (!remapToastShown && GamepadBridge.needsRemap()) {
+                remapToastShown = true;
+                android.widget.Toast.makeText(getContext(),
+                        "Controller not set up — remap it in Menu > Gamepad",
+                        android.widget.Toast.LENGTH_LONG).show();
             }
             if (isAttachedToWindow()) postDelayed(this, 400);
         }

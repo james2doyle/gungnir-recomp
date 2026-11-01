@@ -34,6 +34,22 @@ class TestInputHostGate(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertEqual(proc.returncode, 0, f"input host gates failed:\n{output}")
 
+    def test_unmapped_pad_toast_wired(self):
+        bridge = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir" / "recomp"
+                  / "input" / "GamepadBridge.java").read_text()
+        overlay = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir" / "recomp"
+                   / "input" / "TouchOverlayView.java").read_text()
+        native = (REPO / "android" / "app" / "src" / "main" / "cpp" / "main.cpp").read_text()
+        gamepad = (REPO / "runtime" / "platform" / "sdl_gamepad.cpp").read_text()
+        self.assertIn("needsRemap", bridge, "GamepadBridge exposes the remap-needed flag")
+        self.assertIn("GamepadBridge_needsRemap", native, "native layer answers needsRemap")
+        self.assertIn("GetGamepadMappingForGUID", gamepad,
+                      "unmapped detection uses the SDL mapping for the GUID")
+        self.assertIn("remap", overlay.lower(), "overlay poll handles the unmapped case")
+        self.assertIn("Menu > Gamepad", overlay, "toast points at the remap page")
+        self.assertIn("gamecontrollerdb", DOC.read_text().lower(),
+                      "docs explain the SDL-mapping gap behind the toast")
+
     def test_docs_cover_the_input_path(self):
         self.assertTrue(DOC.is_file(), "docs/INPUT.md exists")
         text = DOC.read_text()

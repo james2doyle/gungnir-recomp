@@ -87,14 +87,27 @@ shoulders L/R, d-pad Up/Down/Left/Right.
 
 - Shipped profiles live in
   `android/app/src/main/assets/input_profiles/profiles.json` and are matched
-  by case-insensitive device-name substring (`default`, `Ayn Odin`, `AYANEO`).
-  An unknown name uses `default`.
+  by case-insensitive device-name substring: `default` (fallback `*`), Xbox,
+  DualSense, PlayStation Wireless (`Wireless Controller`, after DualSense so
+  it does not steal it), Switch Pro Controller, Joy-Con, 8BitDo, Razer Kishi,
+  Backbone One, GameSir, Flydigi, PowerA, `Ayn Odin`, `AYANEO`.
+  An unknown name uses `default`. All shipped entries share the standard
+  layout; they differ by dead zone (Joy-Con 0.15, Flydigi 0.10, most 0.12).
 - User remaps save a versioned per-GUID profile at
   `files/input_profiles/<guid>.json`. On connect the user profile wins; a
   corrupt/older/same-axis file logs `gamepad_profile_fallback: ...` and falls
   back to the shipped profile.
 - Open failure logs `gamepad_open_failed: ...`; connect/remove log
   `gamepad_connected`/`gamepad_removed` with name, GUID and profile id.
+- A connected pad whose GUID has no SDL mapping and no saved user remap
+  cannot work: its buttons arrive at raw, non-standard indices that no
+  shipped profile listens to. The touch overlay toasts once per connection
+  ("Controller not set up — remap it in Menu > Gamepad"); the remap wizard
+  records raw indices, so it covers unmapped pads. The deeper fix — a
+  `gamecontrollerdb.txt` SDL-mapping layer like upstream Yakumo's
+  `profiles/mhp3rd/host/input/gamepad_devices.cpp` (user-editable mapping
+  file loaded at startup) — does not exist here yet; shipped profiles only
+  tune dead zones over SDL standard positions and cannot substitute for it.
 
 ### Remap
 

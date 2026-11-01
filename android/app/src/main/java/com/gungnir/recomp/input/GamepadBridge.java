@@ -8,6 +8,8 @@ public final class GamepadBridge {
 
     public static native boolean active();
 
+    public static native boolean needsRemap();
+
     public static native String info();
 
     public static native void beginRemap();

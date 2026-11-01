@@ -121,8 +121,18 @@ void SdlGamepad::publish() {
     input.set_analog(gungnir::input::Source::Gamepad, static_cast<int>(id_), 0, state_.analog());
 }
 
-void SdlGamepad::release_all() {
+bool SdlGamepad::needs_remap() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!connected_ || guid_.empty()) return false;
+    std::error_code file_error;
+    if (std::filesystem::exists(store_.file_for(guid_), file_error)) return false;
+    char *mapping = SDL_GetGamepadMappingForGUID(SDL_StringToGUID(guid_.c_str()));
+    const bool mapped = mapping != nullptr && mapping[0] != '\0';
+    SDL_free(mapping);
+    return !mapped;
+}
+
+void SdlGamepad::release_all() {    std::lock_guard<std::mutex> lock(mutex_);
     state_.release_all();
     remap_.cancel();
     publish();

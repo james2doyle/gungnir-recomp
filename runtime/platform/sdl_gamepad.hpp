@@ -41,6 +41,10 @@ public:
     [[nodiscard]] std::string remap_status() const;
     [[nodiscard]] bool save_remap(std::string &error);
     [[nodiscard]] bool reset_profile(std::string &error);
+    // True when the connected pad is likely unusable: SDL has no mapping for
+    // its GUID (buttons arrive at raw indices) and no user remap was saved.
+    // The overlay toasts once per connection in that case.
+    [[nodiscard]] bool needs_remap() const;
 
 private:
     void open(SDL_JoystickID id);
