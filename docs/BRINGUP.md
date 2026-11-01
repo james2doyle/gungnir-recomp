@@ -891,3 +891,150 @@ fault are ordinary: `sceRtcGetCurrentTick`, four
 again `sceAudioOutputPannedBlocking` before the failed 104-byte request. No
 HLE return looks wrong, so the divergence is in guest state rather than a
 bad import result.
+
+### Reference research for the shared null-object fault (2026-11-01)
+
+**Diagnostics inventory.** `PSPRECOMP_TRACE_ON_ERROR=1` already keeps a
+64-entry ring of *outer dispatches* (pc + a0-a3 + sp + ra) and prints it on an
+error. The chained-call hooks (`set_runtime_pre/post_chained_call_hook`) fire
+for dynamic `Runtime::invoke_chained_call` targets only; the compile-time
+`Runtime::invoke_chained_direct<...>` template bypasses them, so a guest call
+ring built on the hooks alone misses direct calls. `GUNGNIR_HLE_RING` covers
+imports only. The ADVANCE fault happens deep inside one outer dispatch, which
+is why the existing rings show only ordinary calls before it.
+
+**Call site.** `0x0880602C` is a descriptor dispatch: it loads
+`desc = [object + 248]`, adds the 16-bit `this` adjustment at `desc + 0`, and
+calls `[desc + 4]`. The descriptor array is static: 116 eight-byte
+`{u32 offset, u32 fn}` entries at guest `0x08AD0B7C`. The descriptor whose
+function is `0x08838A44` sits at `0x08AD0DE0` (offset 0). `0x08838A44` is a
+forwarding thunk: `copy(dest = a1, src = a2)` through `0x0899B3F0`, which
+loads four VFPU vectors from `src` and writes them to `dest`. The faulting
+argument is `src = 0`, not the descriptor. The preceding `0x08838A40` is the
+delay slot of the previous `jr $ra`; the analyzer's function seed there is a
+false entry (harmless here, but it must not be read as the thunk's prologue).
+
+**Basic allocator.** `0x0880A8F0` requests 104 bytes from the game allocator
+at `0x08985BE8` and then constructs the result at `0x088104F8`; the
+constructor stores the vtable `0x08AD0308` at `object + 100`, so this is a
+C++ `new` of a 104-byte class instance. The allocator is the game's own
+(`faile[%s]:%dbyte Allocation(rest[%d])` is its diagnostic, not a public
+allocator), and the failing call is not sbrk exhaustion. Immediately before
+it, the ring shows a successful 112-byte request (`CpuSuspendIntr`
+`a1 = 0x70`), and the allocator state at `0x08ACF3A8` holds small-bin heads
+`0x08ACF58C` / `0x08ACF5E4` / `0x08ACF63C`, 0x58 bytes apart. HYPOTHESIS: a
+size-class/free-list bookkeeping or chunk-header corruption, not a missing HLE
+allocator contract.
+
+**Reference behaviour.** PPSSPP runs Gungnir past new game (its two open
+reports are texture sampling at `#15449` and an old battle crash at `#4446`);
+`sceKernelCpuSuspendIntr`/`ResumeIntr` there return/consume the previous
+interrupt state and test bit 0 on resume, which matches our handler, so the
+allocator's critical section is not obviously broken by the HLE. No
+decompilation or symbol source exists for the title.
+
+**Next instrumentation (proposal).**
+1. A dynamic chained-call ring on the pre/post hooks (target, depth, a0-a3),
+   filtered around `0x08838A44`, to identify its caller and the null `src`
+   argument. The hooks already fire for `invoke_chained_call`.
+2. A dispatch-boundary guard that snapshots the allocator header region
+   (`0x08ACF3A8`..`0x08ACF700`) before and after each outer dispatch and
+   reports the first dispatch that changes it without going through the
+   allocator, giving a guest PC for the corrupting write.
+
+### Root cause: blocking audio clobbered the resumed thread's registers
+
+The chained-call ring (`GUNGNIR_CHAIN_RING`) showed the null matrix source was
+passed down a dynamic chain: `0x08834804` receives `a1 = 0` and forwards it as
+the wrapper's `src` to `0x0899B3F0`. The descriptor table and wrapper were
+sound; the argument was already zero. The ring then showed the switch to
+`user_main` happening inside `sceAudioOutputPannedBlocking`, and a dispatch
+trace (`PSPRECOMP_TRACE_PC=0x08806034`) showed the resumed context had
+`v0 = 0` even though the saved context held the correct `0x08B38730`.
+
+`hle_audio.cpp` evaluated `kernel().finish(ctx, enqueue_blocking(...))`.
+`enqueue_blocking` parks the caller in `Kernel::block` and may switch to
+another thread; `kernel().finish(ctx, ...)` then wrote the audio result into
+the **new** context. That zeroed the resumed thread's `v0`, so the engine
+continued with a null matrix pointer. The fix captures the execution-context
+token before the blocking call and only finishes when the same thread is still
+current; the parked thread's result is already recorded by `block`.
+
+Red-first contract: `audio_contracts` sets a sentinel in the parked loader's
+`v0`, then blocks another thread in `sceAudioOutputPannedBlocking`; the old
+code failed "blocking output must not clobber the resumed thread's result",
+the fix passes it. PPSSPP's `sceAudioOutputPannedBlocking` also returns the
+result to the parked thread when it resumes, not to whichever thread the
+scheduler switched to.
+
+With the fix, the ADVANCE pad script no longer faults: it reaches the
+dispatch limit at `0x08805DEC` with 6,965 flips instead of dying on the null
+matrix at `0x0899B3F0`. The BASIC pad script also runs past the former
+1969th-allocation failure: 1,500,000 dispatches, 6,665 flips, dispatch limit
+at `0x0883AAC0`. Both new-game paths now survive the transition instead of
+dying in guest code.
+
+### Native-heap growth after the new-game transition (T13j)
+
+**Symptom.** After the ADVANCE confirm the session reaches the "Dept. Heaven
+Episode" prologue with no guest fault, then Android kills the process:
+`dumpsys meminfo` reports `Native Heap Pss Total 8022869 KB` (heap size
+8.5 GB) after ~1140 guest frames (20 fps), and `dumpsys activity exit-info`
+records `reason=3 (LOW_MEMORY)`. Guest RAM is 32 MiB, so the growth is host
+retention, not guest memory.
+
+**Falsified causes.** The session heap is not the frame queue (`FrameQueue`
+holds only the latest frame and drops the rest, counted) and not the GE list
+map (`ge_lists` drops finished lists). The descriptor pool exhaustion from
+T13b is separate: the pool is 4096 sets with the free flag and no
+`VK_ERROR_OUT_OF_POOL_MEMORY` appears in the run.
+
+**Root cause.** `StateMachine::resolve_texture` appended every decoded texture
+to `cpu_textures_`, which only `StateMachine::reset()` cleared; production
+never calls `reset()`, so one raw guest-texture buffer plus its `Texture`
+object stayed alive per textured draw forever. `TextureCache` (decoded RGBA
+pixels keyed by content hash) was also unbounded, and the Vulkan
+`Impl::textures` map kept one `VkImage` per content key for the process
+lifetime. Animated/CLUT-swapped content changes the content hash, so all three
+grew every frame: 79 draws/frame and ~6.6 MB/frame matches the measured
+8 GB in 30 s.
+
+**Reference behaviour.** PPSSPP keeps `lastFrame` and
+`EstimateTexMemoryUsage` per texture and runs `TextureCacheCommon::Decimate`
+on a 13-frame cadence: above 128 MiB of estimated host memory it drops
+entries unused for 200 flips (6 for CLUT variants, issue #10418), with a
+separate 32 MiB/100-flip second cache
+(`GPU/Common/TextureCacheCommon.cpp`, `TEXCACHE_MIN_PRESSURE`,
+`TEXTURE_KILL_AGE`). psprecore evicts GPU textures after
+`frame_number - last_frame > 240` and defers destruction into the frame-slot
+garbage list (`runtime/src/platform/gpu_vulkan.cpp`, `evict_textures`). Both
+use an age/size limit rather than process-lifetime retention.
+
+**Fix (bounded, ownership-correct).**
+- `DrawState` carries `shared_ptr` owners for the decoded image and the source
+  texture, so a frame queued for presentation keeps exactly what it samples;
+  the cache only owns its own entries.
+- `TextureCache` is an LRU with a 64 MiB default byte budget; eviction drops
+  only the cache reference, never an in-flight draw's data.
+- The Vulkan texture map is LRU-bounded by count (512) and bytes (128 MiB).
+  Eviction runs after the frame fence (or readback) at frame end, and the
+  destroyed images move to a retired list reaped at the next idle frame, so a
+  descriptor bound by the current frame is never freed underneath the GPU.
+- `invalidate_texture` also defers destruction instead of waiting the device
+  idle on the guest thread.
+
+**Regression.** `tests/ge/state_machine_tests.cpp::bounded_texture_retention`
+drives 400 unique 256x256 textures and checks the retained entry count and
+bytes stay inside the budget while an early in-flight draw can still decode
+its source texture. It was red against the unbounded cache (399 entries,
+~100 MB) and is green with the budget. `tests/ge/vulkan_tests.cpp::
+bounded_gpu_texture_cache` checks the GPU limit and byte budget across 32
+distinct uploads. The state-machine binary is now wired into
+`tests/test_ge.py`, which previously built but never ran it.
+
+**Device verification.** APK `ce3a32a5c416f…` (debug, arm64-v8a) on the
+M2102K1AC: `qa-newgame.sh` reached `NEW_GAME_REACHED` with native-heap PSS
+180-182 MB for the first ~23 s, a 168-235 MB band during the prologue scene
+change (79 -> 272 draws/frame), then 190 MB at 60 s and 1,620 guest frames.
+The pre-fix run reached 8.0 GB at ~1,140 frames and was killed; the same
+script now exits 0 instead of `PROCESS_MEMORY_GROWTH`/`PROCESS_KILLED`.

@@ -45,7 +45,7 @@ cross-library alias path, and a bound handler invocation.
 | ThreadMan / SysMem / IoFileMgr | VERIFIED (T6b) | TC-6.1 unit fixtures: memory, create/start/exit/delay, sema/eventflag blocking, VTimer interrupt, ISO disc read + memory-stick write/read |
 | VPL / lightweight mutex (T6c boot discoveries) | VERIFIED | create/delete/try-allocate/free/refer pools; work-area LW mutexes shared by ThreadMan and Kernel_Library aliases |
 | MsgPipe / FPL / thread-end (T6e boot discoveries) | VERIFIED | byte-stream pipes with blocking/try send and receive, timeouts, CB variants, cancel and status; fixed pools with blocking/try/CB allocate, free, cancel and status; `sceKernelWaitThreadEnd`/`CB`; `sceKernelWaitSemaCB` |
-| sceAudio output channels (T6f boot discoveries) | VERIFIED | reserve/release, blocking and non-blocking single/panned output, both rest-length calls, data length, config and volume with the hardware check order; one buffer per channel, one parked waiter, 44.1 kHz virtual drain; explicit host sink seam (the boot runner records buffers) |
+| sceAudio output channels (T6f boot discoveries) | VERIFIED | reserve/release, blocking and non-blocking single/panned output, both rest-length calls, data length, config and volume with the hardware check order; one buffer per channel, one parked waiter, 44.1 kHz virtual drain; explicit host sink seam (the boot runner records buffers). A blocking output that switches threads leaves the resumed thread's registers untouched (the result belongs to the parked thread) |
 | sceSasCore (T6g boot discoveries) | VERIFIED | MIT Yakumo VAG/ADPCM software mixer (32 voices, pitch, volume, simple ADSR, pause, grain/output mode, end flag, envelope heights); init validation and hand-computed VAG grain contract; reverb/ATRAC3/noise voices remain unbound and stop loudly |
 | sceAtrac3plus (T6h boot discoveries) | VERIFIED (ID lifecycle) | GetAtracID/Release with AT3 (0x1001) and AT3+ (0x1000) codec types; the FFmpeg n4.4 ATRAC3/3+ decoder subset is vendored with a public 4,149-check self-test. Track parse/decode handlers are added only as the title executes them; no decode call has run at this depth |
 | Async IoFileMgr (T6i boot discoveries) | VERIFIED | Open/read/write/lseek/close async variants plus poll, wait, waitCB and getAsyncStat; host I/O completes synchronously but the result is staged per descriptor and delivered only by Wait/Poll/GetAsyncStat, with one outstanding operation and kernel error codes. `sceIoLseek32Async` is covered too |
@@ -247,5 +247,10 @@ python3 -m unittest tests.test_nids tests.test_hle -v
 logs savedata init/status/list operations (limit with
 `GUNGNIR_TRACE_SAVEDATA_LIMIT=N`). `GUNGNIR_HLE_RING=N` keeps the last N HLE
 import calls with `a0`-`a3`, `v0`/`v1` and the return PC, and the session
-prints them when a run stops on a fault. All are opt-in and add no work when
-unset.
+prints them when a run stops on a fault. `GUNGNIR_CHAIN_RING=N` does the same
+for dynamic `invoke_chained_call` frames (target, depth, return PC, `a0`-`a3`,
+thread, in-flight markers), which is how a fault deep inside one outer
+dispatch is attributed to its callers. `PSPRECOMP_WATCH_WRITE=0xADDR` with
+`PSPRECOMP_WATCH_WRITE_SIZE=bytes` arms a guest write watch and logs every
+overlapping store with its dispatch PC, thread and old/new value (narrow the
+range; each store prints a line). All are opt-in and add no work when unset.

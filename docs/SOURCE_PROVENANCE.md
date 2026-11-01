@@ -168,3 +168,29 @@ adopted.
 - `jrouwe/JoltPhysics` (MIT): `preTransform` usage example. No code copied.
 - `uofw/uofw`: sceMpeg error constants used by the explicit deferral stubs.
   No code copied.
+
+### T13j reference review — texture-cache lifetime and eviction
+
+The native-heap leak was fixed **after** an initial implementation, which was a
+process mistake: `AGENTS.md` requires reference discovery before coding. The
+missed review was done retroactively and changed only prose/validation, not
+the code path.
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later), behavioral only, never linked or
+  vendored. `GPU/Common/TextureCacheCommon.{h,cpp}` keeps `lastFrame` and
+  `EstimateTexMemoryUsage` per entry, runs `Decimate` every 13 frames, and
+  above `TEXCACHE_MIN_PRESSURE` (128 MiB) drops entries unused for
+  `TEXTURE_KILL_AGE` (200 flips; 6 for CLUT variants, source comment cites
+  `#10418`). GitHub issue `#21961` reports the secondary texture cache growing
+  during video playback; `#19559` discusses content-addressed caching. No code
+  copied.
+- `AdamFull/psprecore` (MIT), behavioral only. `runtime/src/platform/gpu_vulkan.cpp`
+  evicts GPU textures after `frame_number - last_frame > 240` and defers image
+  destruction into the frame slot's garbage list. No code copied.
+
+Our implementation differs in mechanism: draws hold `shared_ptr` owners for
+the decoded image and source bytes, and the CPU/GPU caches are LRU byte
+budgets (64 MiB / 512 entries, 128 MiB) with GPU destruction deferred to the
+next idle frame. The sources above informed the size/age policy and the
+deferred-destruction requirement; no upstream code, constants table, or file
+was copied.
