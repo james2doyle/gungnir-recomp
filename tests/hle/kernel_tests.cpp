@@ -634,9 +634,11 @@ void audio_contracts() {
     const std::uint32_t waiter = static_cast<std::uint32_t>(waiter_uid);
     k.delay_current(f.ctx, 10u, 0u);
     check(k.current_uid() == waiter, "audio waiter gets the CPU");
-    check(audio("sceAudioOutputPannedBlocking", {2u, 0x8000u, 0x8000u, buffer2}) == 0u,
-        "blocking output parks the caller");
+    k.find_thread(loader)->context.set_gpr(2, 0x12345678u);
+    (void)audio("sceAudioOutputPannedBlocking", {2u, 0x8000u, 0x8000u, buffer2});
     check(k.current_uid() == loader, "blocking output returns to the loader");
+    check(f.ctx.gpr[2] == 0x12345678u,
+        "blocking output must not clobber the resumed thread's result");
     check(audio("sceAudioChRelease", {2u}) == 0x80260002u, "release refused while a thread is parked");
     check(audio("sceAudioGetChannelRestLen", {2u}) == 128u, "parked buffer counted once");
     check(audio("sceAudioGetChannelRestLength", {2u}) == 128u, "parked buffer counted by both rest calls");

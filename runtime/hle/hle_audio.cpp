@@ -645,7 +645,9 @@ void register_audio(HleRegistrar &hle) {
                 return;
             }
             if (blocking) {
-                kernel().finish(ctx, enqueue_blocking(rt, ctx, channel, address, left, right));
+                const auto caller = psprecomp::capture_runtime_execution_context();
+                const std::uint32_t result = enqueue_blocking(rt, ctx, channel, address, left, right);
+                if (psprecomp::runtime_execution_context_matches(caller)) kernel().finish(ctx, result);
                 return;
             }
             finish(ctx, enqueue(rt, channel, address, left, right, kernel().now_us()));
