@@ -1,10 +1,13 @@
 #include "kernel.hpp"
 
+#include "session/snapshot.hpp"
+
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <thread>
 
@@ -1142,6 +1145,975 @@ void Kernel::guest_call_return_stub(AllegrexContext &ctx) {
 void Kernel::idle_stub(AllegrexContext &ctx) {
     current_uid_ = 0;
     schedule(ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot export/import (T15b). Deterministic LE encoding; maps iterate in
+// UID order (std::map), vectors in index order. Host-only state (poll/cancel
+// closures, vblank hooks, pacing base, guest-call continuations, pending
+// interrupt payloads) is never serialized: quiesce first, so export fails
+// loudly when such state is live.
+
+namespace {
+
+void kput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+void kput_u64(std::vector<std::uint8_t> &out, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::uint8_t>((value >> (i * 8)) & 0xFFu));
+}
+
+void kput_str(std::vector<std::uint8_t> &out, const std::string &text) {
+    kput_u32(out, static_cast<std::uint32_t>(text.size()));
+    out.insert(out.end(), text.begin(), text.end());
+}
+
+struct KReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint64_t u64() {
+        if (left < 8u) {
+            ok = false;
+            return 0u;
+        }
+        std::uint64_t v = 0u;
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(p[i]) << (i * 8);
+        p += 8;
+        left -= 8;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+
+    [[nodiscard]] std::string str() {
+        const std::uint32_t len = u32();
+        if (!ok || left < len) {
+            ok = false;
+            return {};
+        }
+        std::string text(reinterpret_cast<const char *>(p), len);
+        p += len;
+        left -= len;
+        return text;
+    }
+
+    [[nodiscard]] bool consumed() const { return ok && left == 0u; }
+};
+
+void kput_uids(std::vector<std::uint8_t> &out, const std::deque<SceUID> &waiters) {
+    kput_u32(out, static_cast<std::uint32_t>(waiters.size()));
+    for (SceUID uid : waiters) kput_u32(out, static_cast<std::uint32_t>(uid));
+}
+
+bool kget_uids(KReader &in, std::deque<SceUID> &waiters) {
+    const std::uint32_t count = in.u32();
+    if (!in.ok || count > 4096u) return false;
+    for (std::uint32_t i = 0; i < count; ++i)
+        waiters.push_back(static_cast<SceUID>(in.u32()));
+    return in.ok;
+}
+
+void kput_wait(std::vector<std::uint8_t> &out, const WaitState &wait) {
+    kput_u32(out, static_cast<std::uint32_t>(wait.type));
+    kput_u32(out, static_cast<std::uint32_t>(wait.object));
+    kput_u32(out, wait.value);
+    kput_u32(out, wait.mode);
+    kput_u32(out, wait.out_address);
+    kput_u32(out, wait.timeout_address);
+    kput_u32(out, wait.buffer_address);
+    kput_u32(out, wait.total);
+    kput_u32(out, wait.deadline_us ? 1u : 0u);
+    kput_u64(out, wait.deadline_us ? *wait.deadline_us : 0u);
+}
+
+bool kget_wait(KReader &in, WaitState &wait) {
+    wait.type = static_cast<WaitType>(in.u32());
+    wait.object = static_cast<SceUID>(in.u32());
+    wait.value = in.u32();
+    wait.mode = in.u32();
+    wait.out_address = in.u32();
+    wait.timeout_address = in.u32();
+    wait.buffer_address = in.u32();
+    wait.total = in.u32();
+    const std::uint32_t has_deadline = in.u32();
+    const std::uint64_t deadline = in.u64();
+    if (!in.ok) return false;
+    if (static_cast<int>(wait.type) < 0 || wait.type > WaitType::Host) return false;
+    if (has_deadline > 1u) return false;
+    if (has_deadline != 0u) wait.deadline_us = deadline;
+    wait.host_poll = nullptr;
+    wait.cancel_hook = nullptr;
+    return true;
+}
+
+} // namespace
+
+void Kernel::restore_clock(
+    std::uint64_t now_us, std::uint64_t next_vblank_us, std::uint64_t vblank_count) noexcept {
+    now_us_ = now_us;
+    next_vblank_us_ = next_vblank_us;
+    vblank_count_ = vblank_count;
+    resync_real_time();
+}
+
+bool Kernel::export_snapshot_kernel(std::vector<std::vector<std::uint8_t>> &sections_out, std::string &error) const {
+    if (interrupt_active_) {
+        error = "snapshot_busy: interrupt active at save";
+        return false;
+    }
+    if (!pending_interrupts_.empty()) {
+        error = "snapshot_busy: pending interrupts at save";
+        return false;
+    }
+    for (const auto &[uid, calls] : guest_calls_) {
+        if (!calls.empty()) {
+            error = "snapshot_busy: guest call in flight at save";
+            return false;
+        }
+    }
+    for (const auto &[uid, thread] : threads_) {
+        // Audio waits are rebuildable: hle_audio reattaches the drain poll
+        // and the parked-marker cancel hook from the channel index on load
+        // (T15c). Host waits have no such owner and are never serializable.
+        if (thread->wait.type == WaitType::Host) {
+            error = "snapshot_host_wait: thread uid=" + std::to_string(uid) + " has host wait";
+            return false;
+        }
+        if (thread->wait.type != WaitType::Audio &&
+            (thread->wait.host_poll != nullptr || thread->wait.cancel_hook != nullptr)) {
+            error = "snapshot_host_wait: thread uid=" + std::to_string(uid) + " has unexpected host closure";
+            return false;
+        }
+    }
+
+    std::map<SceUID, int> seen;
+    auto note = [&](SceUID uid, const char *what) -> bool {
+        if (seen.count(uid) != 0u) {
+            error = std::string("snapshot_duplicate_uid: uid=") + std::to_string(uid) + " (" + what + ")";
+            return false;
+        }
+        seen[uid] = 1;
+        return true;
+    };
+    for (const auto &[uid, thread] : threads_)
+        if (!note(uid, "thread")) return false;
+    for (const auto &[uid, object] : semaphores)
+        if (!note(uid, "sema")) return false;
+    for (const auto &[uid, object] : event_flags)
+        if (!note(uid, "event")) return false;
+    for (const auto &[uid, object] : mutexes)
+        if (!note(uid, "mutex")) return false;
+    for (const auto &[uid, object] : vpls)
+        if (!note(uid, "vpl")) return false;
+    for (const auto &[uid, object] : fpls)
+        if (!note(uid, "fpl")) return false;
+    for (const auto &[uid, object] : msgpipes)
+        if (!note(uid, "msgpipe")) return false;
+    for (const auto &[uid, object] : callbacks)
+        if (!note(uid, "callback")) return false;
+    for (const auto &[uid, object] : vtimers)
+        if (!note(uid, "vtimer")) return false;
+    for (const auto &[uid, object] : blocks_)
+        if (!note(uid, "block")) return false;
+    for (const auto &[uid, max] : seen) {
+        (void)max;
+        if (next_uid_ <= uid) {
+            error = "snapshot_duplicate_uid: next_uid reuses uid=" + std::to_string(uid);
+            return false;
+        }
+    }
+
+    sections_out.clear();
+    sections_out.reserve(12);
+
+    {
+        std::vector<std::uint8_t> kids;
+        kput_u32(kids, static_cast<std::uint32_t>(next_uid_));
+        kput_u32(kids, static_cast<std::uint32_t>(current_uid_));
+        kput_u64(kids, next_ready_sequence_);
+        kput_u64(kids, idle_vblanks_);
+        kids.push_back(interrupts_enabled_ ? 1u : 0u);
+        kids.push_back(dispatch_enabled_ ? 1u : 0u);
+        sections_out.push_back(std::move(kids));
+    }
+
+    {
+        std::vector<std::uint8_t> threads;
+        kput_u32(threads, static_cast<std::uint32_t>(threads_.size()));
+        for (const auto &[uid, thread] : threads_) {
+            kput_u32(threads, static_cast<std::uint32_t>(uid));
+            kput_str(threads, thread->name);
+            kput_u32(threads, thread->entry);
+            kput_u32(threads, thread->priority);
+            kput_u32(threads, thread->initial_priority);
+            kput_u32(threads, thread->attributes);
+            kput_u32(threads, thread->stack_size);
+            kput_u32(threads, thread->stack_bottom);
+            kput_u32(threads, thread->control_block);
+            kput_u32(threads, thread->gp);
+            kput_u32(threads, static_cast<std::uint32_t>(thread->stack_block));
+            kput_u32(threads, static_cast<std::uint32_t>(thread->status));
+            gungnir::session::encode_context(thread->context, threads);
+            kput_wait(threads, thread->wait);
+            kput_u32(threads, static_cast<std::uint32_t>(thread->exit_status));
+            kput_u32(threads, thread->wakeup_count);
+            kput_u64(threads, thread->ready_sequence);
+        }
+        sections_out.push_back(std::move(threads));
+    }
+
+    {
+        std::vector<std::uint8_t> sema;
+        kput_u32(sema, static_cast<std::uint32_t>(semaphores.size()));
+        for (const auto &[uid, object] : semaphores) {
+            kput_u32(sema, static_cast<std::uint32_t>(uid));
+            kput_str(sema, object.name);
+            kput_u32(sema, object.attributes);
+            kput_u32(sema, static_cast<std::uint32_t>(object.count));
+            kput_u32(sema, static_cast<std::uint32_t>(object.max_count));
+            kput_uids(sema, object.waiters);
+        }
+        sections_out.push_back(std::move(sema));
+    }
+
+    {
+        std::vector<std::uint8_t> ev;
+        kput_u32(ev, static_cast<std::uint32_t>(event_flags.size()));
+        for (const auto &[uid, object] : event_flags) {
+            kput_u32(ev, static_cast<std::uint32_t>(uid));
+            kput_str(ev, object.name);
+            kput_u32(ev, object.attributes);
+            kput_u32(ev, object.pattern);
+            kput_uids(ev, object.waiters);
+        }
+        sections_out.push_back(std::move(ev));
+    }
+
+    {
+        std::vector<std::uint8_t> mutex;
+        kput_u32(mutex, static_cast<std::uint32_t>(mutexes.size()));
+        for (const auto &[uid, object] : mutexes) {
+            kput_u32(mutex, static_cast<std::uint32_t>(uid));
+            kput_str(mutex, object.name);
+            kput_u32(mutex, object.attributes);
+            kput_u32(mutex, static_cast<std::uint32_t>(object.owner));
+            kput_u32(mutex, static_cast<std::uint32_t>(object.lock_count));
+            kput_uids(mutex, object.waiters);
+            kput_u32(mutex, object.workarea);
+        }
+        sections_out.push_back(std::move(mutex));
+    }
+
+    {
+        std::vector<std::uint8_t> vpl;
+        kput_u32(vpl, static_cast<std::uint32_t>(vpls.size()));
+        for (const auto &[uid, object] : vpls) {
+            kput_u32(vpl, static_cast<std::uint32_t>(uid));
+            kput_str(vpl, object.name);
+            kput_u32(vpl, object.attributes);
+            kput_u32(vpl, object.pool_address);
+            kput_u32(vpl, object.pool_size);
+            kput_u32(vpl, static_cast<std::uint32_t>(object.pool_block));
+            kput_u32(vpl, static_cast<std::uint32_t>(object.allocations.size()));
+            for (const auto &[address, size] : object.allocations) {
+                kput_u32(vpl, address);
+                kput_u32(vpl, size);
+            }
+        }
+        sections_out.push_back(std::move(vpl));
+    }
+
+    {
+        std::vector<std::uint8_t> fpl;
+        kput_u32(fpl, static_cast<std::uint32_t>(fpls.size()));
+        for (const auto &[uid, object] : fpls) {
+            kput_u32(fpl, static_cast<std::uint32_t>(uid));
+            kput_str(fpl, object.name);
+            kput_u32(fpl, object.attributes);
+            kput_u32(fpl, object.block_size);
+            kput_u32(fpl, object.block_count);
+            kput_u32(fpl, object.aligned_size);
+            kput_u32(fpl, object.pool_address);
+            kput_u32(fpl, static_cast<std::uint32_t>(object.pool_block));
+            kput_u32(fpl, static_cast<std::uint32_t>(object.used.size()));
+            for (bool bit : object.used) fpl.push_back(bit ? 1u : 0u);
+            kput_uids(fpl, object.waiters);
+        }
+        sections_out.push_back(std::move(fpl));
+    }
+
+    {
+        std::vector<std::uint8_t> pipe;
+        kput_u32(pipe, static_cast<std::uint32_t>(msgpipes.size()));
+        for (const auto &[uid, object] : msgpipes) {
+            kput_u32(pipe, static_cast<std::uint32_t>(uid));
+            kput_str(pipe, object.name);
+            kput_u32(pipe, object.attributes);
+            kput_u32(pipe, object.buffer_size);
+            kput_u32(pipe, static_cast<std::uint32_t>(object.buffer.size()));
+            pipe.insert(pipe.end(), object.buffer.begin(), object.buffer.end());
+            kput_u32(pipe, static_cast<std::uint32_t>(object.buffer_block));
+            kput_uids(pipe, object.send_waiters);
+            kput_uids(pipe, object.receive_waiters);
+        }
+        sections_out.push_back(std::move(pipe));
+    }
+
+    {
+        std::vector<std::uint8_t> cb;
+        kput_u32(cb, static_cast<std::uint32_t>(callbacks.size()));
+        for (const auto &[uid, object] : callbacks) {
+            kput_u32(cb, static_cast<std::uint32_t>(uid));
+            kput_str(cb, object.name);
+            kput_u32(cb, object.function);
+            kput_u32(cb, object.argument);
+            kput_u32(cb, static_cast<std::uint32_t>(object.owner));
+            kput_u32(cb, object.notify_count);
+            kput_u32(cb, object.notify_argument);
+            cb.push_back(object.pending ? 1u : 0u);
+        }
+        sections_out.push_back(std::move(cb));
+    }
+
+    {
+        std::vector<std::uint8_t> timer;
+        kput_u32(timer, static_cast<std::uint32_t>(vtimers.size()));
+        for (const auto &[uid, object] : vtimers) {
+            kput_u32(timer, static_cast<std::uint32_t>(uid));
+            kput_str(timer, object.name);
+            timer.push_back(object.active ? 1u : 0u);
+            kput_u64(timer, object.base_us);
+            kput_u64(timer, object.accumulated_us);
+            kput_u64(timer, object.schedule_us);
+            kput_u32(timer, object.handler);
+            kput_u32(timer, object.common);
+        }
+        sections_out.push_back(std::move(timer));
+    }
+
+    {
+        std::vector<std::uint8_t> blocks;
+        kput_u32(blocks, static_cast<std::uint32_t>(blocks_.size()));
+        for (const auto &[uid, object] : blocks_) {
+            kput_u32(blocks, static_cast<std::uint32_t>(uid));
+            kput_str(blocks, object.name);
+            kput_u32(blocks, object.address);
+            kput_u32(blocks, object.size);
+        }
+        kput_u32(blocks, static_cast<std::uint32_t>(free_ranges_.size()));
+        for (const auto &range : free_ranges_) {
+            kput_u32(blocks, range.address);
+            kput_u32(blocks, range.size);
+        }
+        sections_out.push_back(std::move(blocks));
+    }
+
+    {
+        std::vector<std::uint8_t> sub;
+        kput_u32(sub, static_cast<std::uint32_t>(sub_interrupts.size()));
+        for (const auto &[irq, inner] : sub_interrupts) {
+            kput_u32(sub, irq);
+            kput_u32(sub, static_cast<std::uint32_t>(inner.size()));
+            for (const auto &[subno, handler] : inner) {
+                kput_u32(sub, subno);
+                kput_u32(sub, handler.handler);
+                kput_u32(sub, handler.argument);
+                sub.push_back(handler.enabled ? 1u : 0u);
+            }
+        }
+        sections_out.push_back(std::move(sub));
+    }
+
+    return true;
+}
+
+bool Kernel::import_snapshot_kernel(
+    const std::map<std::uint32_t, std::vector<std::uint8_t>> &sections, std::string &error) {
+    constexpr std::uint32_t want[12] = {5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u, 14u, 15u, 16u};
+    for (std::uint32_t tag : want) {
+        if (sections.count(tag) == 0u) {
+            error = "snapshot_incomplete: missing kernel section tag=" + std::to_string(tag);
+            return false;
+        }
+    }
+
+    SceUID next_uid = 0;
+    SceUID current_uid = 0;
+    std::uint64_t next_ready = 0u;
+    std::uint64_t idle_vblanks = 0u;
+    bool interrupts_enabled = true;
+    bool dispatch_enabled = true;
+    {
+        const auto &bytes = sections.at(5u);
+        KReader in{bytes.data(), bytes.size()};
+        next_uid = static_cast<SceUID>(in.u32());
+        current_uid = static_cast<SceUID>(in.u32());
+        next_ready = in.u64();
+        idle_vblanks = in.u64();
+        const std::uint8_t irq = in.u8();
+        const std::uint8_t disp = in.u8();
+        if (!in.consumed() || irq > 1u || disp > 1u) {
+            error = "snapshot_bad_length: kids section malformed";
+            return false;
+        }
+        interrupts_enabled = irq != 0u;
+        dispatch_enabled = disp != 0u;
+    }
+
+    std::map<SceUID, std::unique_ptr<Thread>> threads;
+    {
+        const auto &bytes = sections.at(6u);
+        KReader in{bytes.data(), bytes.size()};
+        const std::uint32_t count = in.u32();
+        if (!in.ok || count > 256u) {
+            error = "snapshot_truncated: threads count malformed";
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            auto thread = std::make_unique<Thread>();
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            thread->uid = uid;
+            thread->name = in.str();
+            thread->entry = in.u32();
+            thread->priority = in.u32();
+            thread->initial_priority = in.u32();
+            thread->attributes = in.u32();
+            thread->stack_size = in.u32();
+            thread->stack_bottom = in.u32();
+            thread->control_block = in.u32();
+            thread->gp = in.u32();
+            thread->stack_block = static_cast<SceUID>(in.u32());
+            thread->status = static_cast<ThreadStatus>(in.u32());
+            if (!in.ok || static_cast<int>(thread->status) < 0 || thread->status > ThreadStatus::Dead) {
+                error = "snapshot_bad_length: thread status malformed";
+                return false;
+            }
+            if (thread->name.size() > 256u) {
+                error = "snapshot_bad_length: thread name too long";
+                return false;
+            }
+            std::array<std::uint8_t, 848> ctx_bytes{};
+            if (in.left < ctx_bytes.size()) {
+                error = "snapshot_truncated: thread context truncated";
+                return false;
+            }
+            std::span<const std::uint8_t> ctx_span(in.p, ctx_bytes.size());
+            std::string ctx_error;
+            gungnir::session::SnapshotError cerr{};
+            if (!gungnir::session::decode_context(ctx_span, thread->context, cerr)) {
+                error = "snapshot_bad_length: thread context malformed";
+                return false;
+            }
+            in.p += ctx_bytes.size();
+            in.left -= ctx_bytes.size();
+            if (!kget_wait(in, thread->wait)) {
+                error = "snapshot_bad_length: thread wait malformed";
+                return false;
+            }
+            thread->exit_status = static_cast<std::int32_t>(in.u32());
+            thread->wakeup_count = in.u32();
+            thread->ready_sequence = in.u64();
+            if (!in.ok) {
+                error = "snapshot_truncated: thread entry truncated";
+                return false;
+            }
+            if (threads.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate thread uid=" + std::to_string(uid);
+                return false;
+            }
+            threads[uid] = std::move(thread);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in threads section";
+            return false;
+        }
+    }
+
+    auto decode_map_header = [&](std::uint32_t tag, KReader &in, std::uint32_t &count, std::string &why) -> bool {
+        const auto found = sections.find(tag);
+        if (found == sections.end()) {
+            why = "snapshot_incomplete: missing kernel section tag=" + std::to_string(tag);
+            return false;
+        }
+        in = KReader{found->second.data(), found->second.size()};
+        count = in.u32();
+        if (!in.ok || count > 4096u) {
+            why = "snapshot_truncated: section tag=" + std::to_string(tag) + " count malformed";
+            return false;
+        }
+        return true;
+    };
+
+    std::map<SceUID, Semaphore> semaphores;
+    std::map<SceUID, EventFlag> event_flags;
+    std::map<SceUID, Mutex> mutexes;
+    std::map<SceUID, Vpl> vpls;
+    std::map<SceUID, Fpl> fpls;
+    std::map<SceUID, MsgPipe> msgpipes;
+    std::map<SceUID, Callback> callbacks;
+    std::map<SceUID, VTimer> vtimers;
+    std::map<SceUID, MemoryBlock> blocks;
+    std::vector<FreeRange> free_ranges;
+    std::map<std::uint32_t, std::map<std::uint32_t, SubInterruptHandler>> sub_interrupts;
+
+    std::string why;
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(7u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            Semaphore object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.count = static_cast<std::int32_t>(in.u32());
+            object.max_count = static_cast<std::int32_t>(in.u32());
+            if (!kget_uids(in, object.waiters) || !in.ok) {
+                error = "snapshot_truncated: sema entry truncated";
+                return false;
+            }
+            if (semaphores.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate sema uid=" + std::to_string(uid);
+                return false;
+            }
+            semaphores[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in sema section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(8u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            EventFlag object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.pattern = in.u32();
+            if (!kget_uids(in, object.waiters) || !in.ok) {
+                error = "snapshot_truncated: event entry truncated";
+                return false;
+            }
+            if (event_flags.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate event uid=" + std::to_string(uid);
+                return false;
+            }
+            event_flags[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in event section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(9u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            Mutex object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.owner = static_cast<SceUID>(in.u32());
+            object.lock_count = static_cast<std::int32_t>(in.u32());
+            if (!kget_uids(in, object.waiters) || !in.ok) {
+                error = "snapshot_truncated: mutex entry truncated";
+                return false;
+            }
+            object.workarea = in.u32();
+            if (!in.ok) {
+                error = "snapshot_truncated: mutex entry truncated";
+                return false;
+            }
+            if (mutexes.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate mutex uid=" + std::to_string(uid);
+                return false;
+            }
+            mutexes[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in mutex section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(10u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            Vpl object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.pool_address = in.u32();
+            object.pool_size = in.u32();
+            object.pool_block = static_cast<SceUID>(in.u32());
+            const std::uint32_t allocs = in.u32();
+            if (!in.ok || allocs > 65536u) {
+                error = "snapshot_truncated: vpl entry truncated";
+                return false;
+            }
+            for (std::uint32_t a = 0; a < allocs; ++a) {
+                const std::uint32_t address = in.u32();
+                const std::uint32_t size = in.u32();
+                if (!in.ok) {
+                    error = "snapshot_truncated: vpl entry truncated";
+                    return false;
+                }
+                object.allocations[address] = size;
+            }
+            if (vpls.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate vpl uid=" + std::to_string(uid);
+                return false;
+            }
+            vpls[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in vpl section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(11u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            Fpl object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.block_size = in.u32();
+            object.block_count = in.u32();
+            object.aligned_size = in.u32();
+            object.pool_address = in.u32();
+            object.pool_block = static_cast<SceUID>(in.u32());
+            const std::uint32_t used = in.u32();
+            if (!in.ok || used > 65536u || in.left < used) {
+                error = "snapshot_truncated: fpl entry truncated";
+                return false;
+            }
+            object.used.reserve(used);
+            for (std::uint32_t b = 0; b < used; ++b) {
+                const std::uint8_t bit = in.u8();
+                if (!in.ok || bit > 1u) {
+                    error = "snapshot_bad_length: fpl used bit malformed";
+                    return false;
+                }
+                object.used.push_back(bit != 0u);
+            }
+            if (!kget_uids(in, object.waiters) || !in.ok) {
+                error = "snapshot_truncated: fpl entry truncated";
+                return false;
+            }
+            if (fpls.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate fpl uid=" + std::to_string(uid);
+                return false;
+            }
+            fpls[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in fpl section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(12u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            MsgPipe object;
+            object.name = in.str();
+            object.attributes = in.u32();
+            object.buffer_size = in.u32();
+            const std::uint32_t buffered = in.u32();
+            if (!in.ok || buffered > 1048576u || in.left < buffered) {
+                error = "snapshot_truncated: msgpipe entry truncated";
+                return false;
+            }
+            object.buffer.assign(in.p, in.p + buffered);
+            in.p += buffered;
+            in.left -= buffered;
+            object.buffer_block = static_cast<SceUID>(in.u32());
+            if (!kget_uids(in, object.send_waiters) || !kget_uids(in, object.receive_waiters) || !in.ok) {
+                error = "snapshot_truncated: msgpipe entry truncated";
+                return false;
+            }
+            if (msgpipes.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate msgpipe uid=" + std::to_string(uid);
+                return false;
+            }
+            msgpipes[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in msgpipe section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(13u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            Callback object;
+            object.name = in.str();
+            object.function = in.u32();
+            object.argument = in.u32();
+            object.owner = static_cast<SceUID>(in.u32());
+            object.notify_count = in.u32();
+            object.notify_argument = in.u32();
+            const std::uint8_t pending = in.u8();
+            if (!in.ok || pending > 1u) {
+                error = "snapshot_bad_length: callback entry malformed";
+                return false;
+            }
+            object.pending = pending != 0u;
+            if (callbacks.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate callback uid=" + std::to_string(uid);
+                return false;
+            }
+            callbacks[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in callback section";
+            return false;
+        }
+    }
+    {
+        KReader in{nullptr, 0};
+        std::uint32_t count = 0u;
+        if (!decode_map_header(14u, in, count, why)) {
+            error = why;
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            VTimer object;
+            object.name = in.str();
+            const std::uint8_t active = in.u8();
+            if (!in.ok || active > 1u) {
+                error = "snapshot_bad_length: vtimer entry malformed";
+                return false;
+            }
+            object.active = active != 0u;
+            object.base_us = in.u64();
+            object.accumulated_us = in.u64();
+            object.schedule_us = in.u64();
+            object.handler = in.u32();
+            object.common = in.u32();
+            if (!in.ok) {
+                error = "snapshot_truncated: vtimer entry truncated";
+                return false;
+            }
+            if (vtimers.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate vtimer uid=" + std::to_string(uid);
+                return false;
+            }
+            vtimers[uid] = std::move(object);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in vtimer section";
+            return false;
+        }
+    }
+    {
+        const auto &bytes = sections.at(15u);
+        KReader in{bytes.data(), bytes.size()};
+        const std::uint32_t count = in.u32();
+        if (!in.ok || count > 4096u) {
+            error = "snapshot_truncated: memblocks count malformed";
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const SceUID uid = static_cast<SceUID>(in.u32());
+            MemoryBlock object;
+            object.name = in.str();
+            object.address = in.u32();
+            object.size = in.u32();
+            if (!in.ok) {
+                error = "snapshot_truncated: memblock entry truncated";
+                return false;
+            }
+            if (blocks.count(uid) != 0u) {
+                error = "snapshot_duplicate_uid: duplicate block uid=" + std::to_string(uid);
+                return false;
+            }
+            blocks[uid] = std::move(object);
+        }
+        const std::uint32_t ranges = in.u32();
+        if (!in.ok || ranges > 4096u) {
+            error = "snapshot_truncated: free ranges malformed";
+            return false;
+        }
+        for (std::uint32_t i = 0; i < ranges; ++i) {
+            FreeRange range;
+            range.address = in.u32();
+            range.size = in.u32();
+            if (!in.ok) {
+                error = "snapshot_truncated: free range truncated";
+                return false;
+            }
+            free_ranges.push_back(range);
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in memblocks section";
+            return false;
+        }
+    }
+    {
+        const auto &bytes = sections.at(16u);
+        KReader in{bytes.data(), bytes.size()};
+        const std::uint32_t outer = in.u32();
+        if (!in.ok || outer > 32u) {
+            error = "snapshot_truncated: subint count malformed";
+            return false;
+        }
+        for (std::uint32_t o = 0; o < outer; ++o) {
+            const std::uint32_t irq = in.u32();
+            const std::uint32_t inner = in.u32();
+            if (!in.ok || inner > 32u) {
+                error = "snapshot_truncated: subint inner malformed";
+                return false;
+            }
+            for (std::uint32_t s = 0; s < inner; ++s) {
+                const std::uint32_t subno = in.u32();
+                SubInterruptHandler handler;
+                handler.handler = in.u32();
+                handler.argument = in.u32();
+                const std::uint8_t enabled = in.u8();
+                if (!in.ok || enabled > 1u) {
+                    error = "snapshot_bad_length: subint entry malformed";
+                    return false;
+                }
+                handler.enabled = enabled != 0u;
+                sub_interrupts[irq][subno] = handler;
+            }
+        }
+        if (!in.consumed()) {
+            error = "snapshot_truncated: trailing bytes in subint section";
+            return false;
+        }
+    }
+
+    std::map<SceUID, int> seen;
+    auto note = [&](SceUID uid) -> bool {
+        if (seen.count(uid) != 0u) {
+            error = "snapshot_duplicate_uid: cross-map duplicate uid=" + std::to_string(uid);
+            return false;
+        }
+        seen[uid] = 1;
+        return true;
+    };
+    for (const auto &[uid, thread] : threads)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : semaphores)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : event_flags)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : mutexes)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : vpls)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : fpls)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : msgpipes)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : callbacks)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : vtimers)
+        if (!note(uid)) return false;
+    for (const auto &[uid, object] : blocks)
+        if (!note(uid)) return false;
+    for (const auto &[uid, max] : seen) {
+        (void)max;
+        if (next_uid <= uid) {
+            error = "snapshot_duplicate_uid: next_uid reuses uid=" + std::to_string(uid);
+            return false;
+        }
+    }
+    if (current_uid != 0 && threads.count(current_uid) == 0u) {
+        error = "snapshot_incomplete: current thread missing uid=" + std::to_string(current_uid);
+        return false;
+    }
+
+    threads_.clear();
+    for (auto &[uid, thread] : threads) threads_[uid] = std::move(thread);
+    this->semaphores = std::move(semaphores);
+    this->event_flags = std::move(event_flags);
+    this->mutexes = std::move(mutexes);
+    this->vpls = std::move(vpls);
+    this->fpls = std::move(fpls);
+    this->msgpipes = std::move(msgpipes);
+    this->callbacks = std::move(callbacks);
+    this->vtimers = std::move(vtimers);
+    blocks_ = std::move(blocks);
+    free_ranges_ = std::move(free_ranges);
+    this->sub_interrupts = std::move(sub_interrupts);
+    next_uid_ = next_uid;
+    current_uid_ = current_uid;
+    next_ready_sequence_ = next_ready;
+    idle_vblanks_ = idle_vblanks;
+    interrupts_enabled_ = interrupts_enabled;
+    dispatch_enabled_ = dispatch_enabled;
+    pending_interrupts_.clear();
+    guest_calls_.clear();
+    interrupt_active_ = false;
+    interrupted_idle_ = false;
+    interrupt_on_return_ = nullptr;
+    resync_real_time();
+    return true;
 }
 
 } // namespace gungnir::hle

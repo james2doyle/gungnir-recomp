@@ -56,6 +56,9 @@ public:
     [[nodiscard]] std::uint32_t frames() const noexcept;
     bool decode_frame(std::uint32_t frame, std::vector<std::int16_t> &pcm, std::string &error);
     bool append(std::span<const std::uint8_t> bytes, std::string &error);
+    // Source bytes buffered so far (RIFF + appended stream data). Snapshot
+    // re-opens the track from these bytes and restores the play position.
+    [[nodiscard]] std::span<const std::uint8_t> file_bytes() const noexcept;
 
 private:
     struct Impl;

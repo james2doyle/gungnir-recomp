@@ -621,4 +621,154 @@ void register_atrac(HleRegistrar &hle) {
         [](Runtime &, AllegrexContext &ctx) { entry_guard(ctx); });
 }
 
+namespace {
+
+void tput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+struct TReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+};
+
+constexpr std::size_t kMaxTrackBytes = 16u * 1024u * 1024u;
+
+} // namespace
+
+bool export_snapshot_atrac(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    bytes_out.clear();
+    for (const Slot &slot : g_slots) {
+        bytes_out.push_back(slot.used ? 1u : 0u);
+        tput_u32(bytes_out, slot.codec);
+        const std::span<const std::uint8_t> file =
+            (slot.used && slot.track) ? slot.track->file_bytes() : std::span<const std::uint8_t>{};
+        if (file.size() > kMaxTrackBytes) {
+            error = "snapshot_bad_length: atrac track oversize";
+            bytes_out.clear();
+            return false;
+        }
+        tput_u32(bytes_out, static_cast<std::uint32_t>(file.size()));
+        bytes_out.insert(bytes_out.end(), file.begin(), file.end());
+        tput_u32(bytes_out, slot.position);
+        tput_u32(bytes_out, slot.end_sample);
+        tput_u32(bytes_out, slot.loop_start);
+        tput_u32(bytes_out, slot.loop_end);
+        bytes_out.push_back(slot.has_loop ? 1u : 0u);
+        tput_u32(bytes_out, static_cast<std::uint32_t>(slot.loops_left));
+        bytes_out.push_back(slot.streaming ? 1u : 0u);
+        tput_u32(bytes_out, slot.stream_buffer);
+        tput_u32(bytes_out, slot.stream_buffer_size);
+        tput_u32(bytes_out, slot.stream_offset);
+    }
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_atrac(std::span<const std::uint8_t> bytes, std::string &error) {
+    TReader in{bytes.data(), bytes.size()};
+    std::array<Slot, kMaxTracks> staged;
+    for (std::size_t i = 0; i < kMaxTracks; ++i) {
+        const std::uint8_t used = in.u8();
+        const std::uint32_t codec = in.u32();
+        const std::uint32_t file_len = in.u32();
+        if (!in.ok || used > 1u || file_len > kMaxTrackBytes || in.left < file_len) {
+            error = "snapshot_truncated: atrac slot header truncated";
+            return false;
+        }
+        std::vector<std::uint8_t> file(in.p, in.p + file_len);
+        in.p += file_len;
+        in.left -= file_len;
+        const std::uint32_t position = in.u32();
+        const std::uint32_t end_sample = in.u32();
+        const std::uint32_t loop_start = in.u32();
+        const std::uint32_t loop_end = in.u32();
+        const std::uint8_t has_loop = in.u8();
+        const std::int32_t loops_left = static_cast<std::int32_t>(in.u32());
+        const std::uint8_t streaming = in.u8();
+        const std::uint32_t stream_buffer = in.u32();
+        const std::uint32_t stream_buffer_size = in.u32();
+        const std::uint32_t stream_offset = in.u32();
+        if (!in.ok || has_loop > 1u || streaming > 1u) {
+            error = "snapshot_bad_length: atrac slot malformed";
+            return false;
+        }
+        if (used == 0u) continue;
+        if (file.empty()) {
+            if (codec != kCodecAt3Plus && codec != kCodecAt3) {
+                error = "snapshot_bad_config: atrac codec changed";
+                return false;
+            }
+            if (position != 0u || end_sample != 0u || has_loop != 0u || loops_left != 0 || streaming != 0u ||
+                stream_buffer != 0u || stream_buffer_size != 0u || stream_offset != 0u) {
+                error = "snapshot_bad_length: atrac dataless slot has playback state";
+                return false;
+            }
+            staged[i].used = true;
+            staged[i].codec = codec;
+            continue;
+        }
+        std::string open_error;
+        auto track = audio::AtracTrack::open(file, open_error);
+        if (!track) {
+            error = "snapshot_open_failed: atrac track no longer decodes: " + open_error;
+            return false;
+        }
+        const std::uint32_t actual_codec = track->info().codec == audio::AtracCodec::Atrac3Plus
+            ? kCodecAt3Plus
+            : kCodecAt3;
+        if (codec != 0u && codec != actual_codec) {
+            error = "snapshot_bad_config: atrac codec changed";
+            return false;
+        }
+        staged[i].used = true;
+        staged[i].codec = actual_codec;
+        staged[i].track = std::move(track);
+        staged[i].position = position;
+        staged[i].end_sample = end_sample;
+        staged[i].loop_start = loop_start;
+        staged[i].loop_end = loop_end;
+        staged[i].has_loop = has_loop != 0u;
+        staged[i].loops_left = loops_left;
+        staged[i].streaming = streaming != 0u;
+        staged[i].stream_buffer = stream_buffer;
+        staged[i].stream_buffer_size = stream_buffer_size;
+        staged[i].stream_offset = stream_offset;
+    }
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in atrac section";
+        return false;
+    }
+    for (std::size_t i = 0; i < kMaxTracks; ++i) g_slots[i] = std::move(staged[i]);
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::hle

@@ -6,7 +6,11 @@
 #include "psprecomp/guest_memory.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace gungnir::audio {
 
@@ -108,9 +112,13 @@ public:
     // One bit per voice, set while the voice is *not* playing.
     [[nodiscard]] std::uint32_t end_flag() const noexcept;
     [[nodiscard]] std::int32_t envelope_height(std::uint32_t voice) const noexcept;
-
     // Renders `frames` stereo frames into `output`, overwriting it.
     void render(const psprecomp::GuestMemory &memory, std::int16_t *output, std::size_t frames);
+
+    // Snapshot codec (T15c): deterministic fixed-size record (voices carry
+    // VAG decoder cursors, so a restored core resumes mid-stream).
+    void export_snapshot(std::vector<std::uint8_t> &out) const;
+    bool import_snapshot(std::span<const std::uint8_t> bytes, std::string &error);
 
 private:
     void advance_source(const psprecomp::GuestMemory &memory, SasVoice &voice);
@@ -139,5 +147,9 @@ private:
 // it is keyed rather than assumed.
 [[nodiscard]] SasCore &sas_core(std::uint32_t handle);
 void reset_sas_cores();
+
+// Snapshot export/import over all cores (T15c). Import is fail-closed.
+[[nodiscard]] bool export_snapshot_sas(std::vector<std::uint8_t> &bytes_out, std::string &error);
+bool import_snapshot_sas(std::span<const std::uint8_t> bytes, std::string &error);
 
 } // namespace gungnir::audio

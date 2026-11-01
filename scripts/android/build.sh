@@ -59,7 +59,28 @@ while [ $# -gt 0 ]; do
             DEPS_DIR=${1#*=}
             ;;
         -P*)
-            GRADLE_PROPS+=("$1")
+            case "$1" in
+                -Pgungnir.gameCorpus=*)
+                    CORPUS_DIR=${1#-Pgungnir.gameCorpus=}
+                    case "$CORPUS_DIR" in
+                        /*) ;;
+                        *) CORPUS_DIR="$ROOT/$CORPUS_DIR" ;;
+                    esac
+                    if [ ! -f "$CORPUS_DIR/generated_registry.cpp" ] || \
+                       [ ! -f "$CORPUS_DIR/recomp_units.hpp" ]; then
+                        echo "game_corpus_missing: $CORPUS_DIR needs generated_registry.cpp and recomp_units.hpp" >&2
+                        exit 2
+                    fi
+                    if ! ls "$CORPUS_DIR"/generated_unit_*.cpp >/dev/null 2>&1; then
+                        echo "game_corpus_missing: $CORPUS_DIR has no generated_unit_*.cpp" >&2
+                        exit 2
+                    fi
+                    GRADLE_PROPS+=("-Pgungnir.gameCorpus=$CORPUS_DIR")
+                    ;;
+                *)
+                    GRADLE_PROPS+=("$1")
+                    ;;
+            esac
             ;;
         *)
             echo "build.sh: unknown argument: $1" >&2

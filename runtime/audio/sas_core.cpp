@@ -402,4 +402,238 @@ void reset_sas_cores() {
     g_cores.clear();
 }
 
+namespace {
+
+void sput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+void sput_i16(std::vector<std::uint8_t> &out, std::int16_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFF));
+    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFF));
+}
+
+struct SReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::int16_t i16() {
+        if (left < 2u) {
+            ok = false;
+            return 0;
+        }
+        const std::int16_t v =
+            static_cast<std::int16_t>(static_cast<std::uint16_t>(p[0]) | (static_cast<std::uint16_t>(p[1]) << 8u));
+        p += 2;
+        left -= 2;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+};
+
+void sput_voice(std::vector<std::uint8_t> &out, const SasVoice &voice) {
+    sput_u32(out, voice.address);
+    sput_u32(out, voice.size);
+    out.push_back(voice.looping ? 1u : 0u);
+    out.push_back(voice.pcm ? 1u : 0u);
+    out.push_back(voice.noise ? 1u : 0u);
+    sput_u32(out, voice.pitch);
+    sput_u32(out, static_cast<std::uint32_t>(voice.left));
+    sput_u32(out, static_cast<std::uint32_t>(voice.right));
+    out.push_back(voice.playing ? 1u : 0u);
+    out.push_back(voice.paused ? 1u : 0u);
+    sput_u32(out, voice.block);
+    sput_u32(out, voice.loop_block);
+    sput_u32(out, static_cast<std::uint32_t>(voice.index));
+    sput_u32(out, voice.phase);
+    sput_u32(out, static_cast<std::uint32_t>(voice.history1));
+    sput_u32(out, static_cast<std::uint32_t>(voice.history2));
+    for (std::int16_t sample : voice.decoded) sput_i16(out, sample);
+    sput_i16(out, voice.previous);
+    sput_i16(out, voice.current);
+    out.push_back(voice.source_ended ? 1u : 0u);
+    out.push_back(voice.primed ? 1u : 0u);
+    out.push_back(voice.have_adsr ? 1u : 0u);
+    sput_u32(out, voice.adsr1);
+    sput_u32(out, voice.adsr2);
+    sput_u32(out, static_cast<std::uint32_t>(voice.stage));
+    sput_u32(out, static_cast<std::uint32_t>(voice.envelope));
+    sput_u32(out, static_cast<std::uint32_t>(voice.envelope_counter));
+}
+
+bool sget_voice(SReader &in, SasVoice &voice) {
+    voice.address = in.u32();
+    voice.size = in.u32();
+    const std::uint8_t looping = in.u8();
+    const std::uint8_t pcm = in.u8();
+    const std::uint8_t noise = in.u8();
+    voice.pitch = in.u32();
+    voice.left = static_cast<std::int32_t>(in.u32());
+    voice.right = static_cast<std::int32_t>(in.u32());
+    const std::uint8_t playing = in.u8();
+    const std::uint8_t paused = in.u8();
+    voice.block = in.u32();
+    voice.loop_block = in.u32();
+    voice.index = static_cast<std::int32_t>(in.u32());
+    voice.phase = in.u32();
+    voice.history1 = static_cast<std::int32_t>(in.u32());
+    voice.history2 = static_cast<std::int32_t>(in.u32());
+    for (std::int16_t &sample : voice.decoded) sample = in.i16();
+    voice.previous = in.i16();
+    voice.current = in.i16();
+    const std::uint8_t source_ended = in.u8();
+    const std::uint8_t primed = in.u8();
+    const std::uint8_t have_adsr = in.u8();
+    voice.adsr1 = in.u32();
+    voice.adsr2 = in.u32();
+    const std::uint32_t stage = in.u32();
+    voice.envelope = static_cast<std::int32_t>(in.u32());
+    voice.envelope_counter = static_cast<std::int32_t>(in.u32());
+    if (!in.ok || looping > 1u || pcm > 1u || noise > 1u || playing > 1u || paused > 1u || source_ended > 1u ||
+        primed > 1u || have_adsr > 1u || stage > static_cast<std::uint32_t>(EnvelopeStage::Release)) {
+        return false;
+    }
+    voice.looping = looping != 0u;
+    voice.pcm = pcm != 0u;
+    voice.noise = noise != 0u;
+    voice.playing = playing != 0u;
+    voice.paused = paused != 0u;
+    voice.source_ended = source_ended != 0u;
+    voice.primed = primed != 0u;
+    voice.have_adsr = have_adsr != 0u;
+    voice.stage = static_cast<EnvelopeStage>(stage);
+    return true;
+}
+
+} // namespace
+
+void SasCore::export_snapshot(std::vector<std::uint8_t> &out) const {
+    sput_u32(out, grain_);
+    sput_u32(out, max_voices_);
+    sput_u32(out, output_mode_);
+    sput_u32(out, static_cast<std::uint32_t>(reverb_.type));
+    sput_u32(out, static_cast<std::uint32_t>(reverb_.delay));
+    sput_u32(out, static_cast<std::uint32_t>(reverb_.feedback));
+    sput_u32(out, static_cast<std::uint32_t>(reverb_.left));
+    sput_u32(out, static_cast<std::uint32_t>(reverb_.right));
+    out.push_back(reverb_.dry ? 1u : 0u);
+    out.push_back(reverb_.wet ? 1u : 0u);
+    for (const SasVoice &voice : voices_) sput_voice(out, voice);
+}
+
+bool SasCore::import_snapshot(std::span<const std::uint8_t> bytes, std::string &error) {
+    SReader in{bytes.data(), bytes.size()};
+    const std::uint32_t grain = in.u32();
+    const std::uint32_t max_voices = in.u32();
+    const std::uint32_t output_mode = in.u32();
+    const std::int32_t type = static_cast<std::int32_t>(in.u32());
+    const std::int32_t delay = static_cast<std::int32_t>(in.u32());
+    const std::int32_t feedback = static_cast<std::int32_t>(in.u32());
+    const std::int32_t left = static_cast<std::int32_t>(in.u32());
+    const std::int32_t right = static_cast<std::int32_t>(in.u32());
+    const std::uint8_t dry = in.u8();
+    const std::uint8_t wet = in.u8();
+    if (!in.ok || dry > 1u || wet > 1u || max_voices == 0u || max_voices > kSasMaxVoices) {
+        error = "snapshot_bad_length: sas core header malformed";
+        return false;
+    }
+    std::array<SasVoice, kSasMaxVoices> voices{};
+    for (std::uint32_t i = 0; i < kSasMaxVoices; ++i) {
+        if (!sget_voice(in, voices[i])) {
+            error = "snapshot_bad_length: sas voice malformed";
+            return false;
+        }
+    }
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in sas core record";
+        return false;
+    }
+    grain_ = grain != 0u && grain <= 2048u ? grain : 256u;
+    max_voices_ = max_voices;
+    output_mode_ = output_mode;
+    reverb_.type = type;
+    reverb_.delay = delay;
+    reverb_.feedback = feedback;
+    reverb_.left = left;
+    reverb_.right = right;
+    reverb_.dry = dry != 0u;
+    reverb_.wet = wet != 0u;
+    voices_ = voices;
+    error.clear();
+    return true;
+}
+
+bool export_snapshot_sas(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    bytes_out.clear();
+    sput_u32(bytes_out, static_cast<std::uint32_t>(g_cores.size()));
+    for (const auto &[handle, core] : g_cores) {
+        sput_u32(bytes_out, handle);
+        std::vector<std::uint8_t> record;
+        core.export_snapshot(record);
+        sput_u32(bytes_out, static_cast<std::uint32_t>(record.size()));
+        bytes_out.insert(bytes_out.end(), record.begin(), record.end());
+    }
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_sas(std::span<const std::uint8_t> bytes, std::string &error) {
+    SReader in{bytes.data(), bytes.size()};
+    const std::uint32_t count = in.u32();
+    if (!in.ok || count > 16u) {
+        error = "snapshot_truncated: sas core count malformed";
+        return false;
+    }
+    std::map<std::uint32_t, SasCore> staged;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const std::uint32_t handle = in.u32();
+        const std::uint32_t length = in.u32();
+        if (!in.ok || length == 0u || length > 65536u || in.left < length) {
+            error = "snapshot_truncated: sas core record truncated";
+            return false;
+        }
+        SasCore core;
+        if (!core.import_snapshot(std::span<const std::uint8_t>(in.p, length), error)) return false;
+        in.p += length;
+        in.left -= length;
+        if (!staged.emplace(handle, std::move(core)).second) {
+            error = "snapshot_duplicate_uid: duplicate sas handle";
+            return false;
+        }
+    }
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in sas section";
+        return false;
+    }
+    g_cores = std::move(staged);
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::audio

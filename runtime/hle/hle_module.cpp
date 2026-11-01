@@ -143,4 +143,130 @@ void register_modulemgr(HleRegistrar &hle) {
         });
 }
 
+namespace {
+
+void pput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+struct PReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+
+    [[nodiscard]] std::string str() {
+        const std::uint32_t len = u32();
+        if (!in_ok(len)) {
+            ok = false;
+            return {};
+        }
+        std::string text(reinterpret_cast<const char *>(p), len);
+        p += len;
+        left -= len;
+        return text;
+    }
+
+    [[nodiscard]] bool in_ok(std::uint32_t len) const { return ok && left >= len && len <= 256u; }
+};
+
+} // namespace
+
+bool export_snapshot_modules(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    bytes_out.clear();
+    pput_u32(bytes_out, static_cast<std::uint32_t>(next_module_id()));
+    pput_u32(bytes_out, static_cast<std::uint32_t>(modules().size()));
+    for (const auto &[id, module] : modules()) {
+        pput_u32(bytes_out, static_cast<std::uint32_t>(id));
+        pput_u32(bytes_out, static_cast<std::uint32_t>(module.name.size()));
+        bytes_out.insert(bytes_out.end(), module.name.begin(), module.name.end());
+        pput_u32(bytes_out, module.base);
+        pput_u32(bytes_out, module.size);
+        pput_u32(bytes_out, module.gp);
+        bytes_out.push_back(module.main ? 1u : 0u);
+        bytes_out.push_back(module.started ? 1u : 0u);
+    }
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_modules(std::span<const std::uint8_t> bytes, std::string &error) {
+    PReader in{bytes.data(), bytes.size()};
+    const SceUID next = static_cast<SceUID>(in.u32());
+    const std::uint32_t count = in.u32();
+    if (!in.ok || count > 64u) {
+        error = "snapshot_truncated: module header malformed";
+        return false;
+    }
+    std::map<SceUID, Module> staged;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const SceUID id = static_cast<SceUID>(in.u32());
+        Module module;
+        module.id = id;
+        module.name = in.str();
+        module.base = in.u32();
+        module.size = in.u32();
+        module.gp = in.u32();
+        const std::uint8_t main = in.u8();
+        const std::uint8_t started = in.u8();
+        if (!in.ok || main > 1u || started > 1u || module.size == 0u || (module.base & 3u) != 0u) {
+            error = "snapshot_bad_length: module record malformed";
+            return false;
+        }
+        module.main = main != 0u;
+        module.started = started != 0u;
+        if (!staged.emplace(id, std::move(module)).second) {
+            error = "snapshot_duplicate_uid: duplicate module id=" + std::to_string(id);
+            return false;
+        }
+    }
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in module section";
+        return false;
+    }
+    for (const auto &[id, module] : staged) {
+        if (next <= id) {
+            error = "snapshot_duplicate_uid: next module id reuses live id";
+            return false;
+        }
+        for (const auto &[other_id, other] : staged) {
+            if (other_id != id && module.base < other.base + other.size &&
+                other.base < module.base + module.size) {
+                error = "snapshot_bad_length: module windows overlap";
+                return false;
+            }
+        }
+    }
+    modules().clear();
+    for (auto &[id, module] : staged) modules().emplace(id, std::move(module));
+    next_module_id() = next;
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::hle

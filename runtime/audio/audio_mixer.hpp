@@ -38,7 +38,7 @@ public:
     // input is silence and is counted in underrun_frames.
     std::size_t pull(std::span<std::int16_t> output);
 
-    void reset();
+    void reset() override;
 
     [[nodiscard]] MixerStats stats() const;
     [[nodiscard]] std::size_t available_frames() const;

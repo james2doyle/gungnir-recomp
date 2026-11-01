@@ -533,4 +533,216 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     }
 }
 
+namespace {
+
+void mput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+void mput_u64(std::vector<std::uint8_t> &out, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::uint8_t>((value >> (i * 8)) & 0xFFu));
+}
+
+void mput_f32(std::vector<std::uint8_t> &out, float value) {
+    mput_u32(out, std::bit_cast<std::uint32_t>(value));
+}
+
+struct MReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint64_t u64() {
+        if (left < 8u) {
+            ok = false;
+            return 0u;
+        }
+        std::uint64_t v = 0u;
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(p[i]) << (i * 8);
+        p += 8;
+        left -= 8;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+
+    [[nodiscard]] std::uint16_t u16() {
+        if (left < 2u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint16_t v =
+            static_cast<std::uint16_t>(p[0] | (static_cast<std::uint16_t>(p[1]) << 8u));
+        p += 2;
+        left -= 2;
+        return v;
+    }
+
+    [[nodiscard]] float f32() { return std::bit_cast<float>(u32()); }
+};
+
+void mput_layout(std::vector<std::uint8_t> &out, const VertexLayout &layout) {
+    mput_u32(out, layout.raw);
+    out.push_back(layout.texcoord);
+    out.push_back(layout.color);
+    out.push_back(layout.normal);
+    out.push_back(layout.position);
+    out.push_back(layout.weight);
+    out.push_back(layout.index);
+    out.push_back(layout.weight_count);
+    out.push_back(layout.morph_count);
+    out.push_back(layout.through ? 1u : 0u);
+    out.push_back(layout.index_size);
+    mput_u32(out, (static_cast<std::uint32_t>(layout.weight_offset) << 16u) | layout.stride);
+    const std::uint16_t offsets[5] = {layout.texcoord_offset, layout.color_offset, layout.normal_offset,
+        layout.position_offset, layout.weight_offset};
+    for (std::uint16_t offset : offsets) {
+        out.push_back(static_cast<std::uint8_t>(offset & 0xFFu));
+        out.push_back(static_cast<std::uint8_t>((offset >> 8u) & 0xFFu));
+    }
+}
+
+bool mget_layout(MReader &in, VertexLayout &layout) {
+    layout.raw = in.u32();
+    layout.texcoord = in.u8();
+    layout.color = in.u8();
+    layout.normal = in.u8();
+    layout.position = in.u8();
+    layout.weight = in.u8();
+    layout.index = in.u8();
+    layout.weight_count = in.u8();
+    layout.morph_count = in.u8();
+    const std::uint8_t through = in.u8();
+    layout.index_size = in.u8();
+    const std::uint32_t packed = in.u32();
+    layout.stride = static_cast<std::uint16_t>(packed & 0xFFFFu);
+    const std::uint16_t offsets[5] = {in.u16(), in.u16(), in.u16(), in.u16(), in.u16()};
+    if (!in.ok || through > 1u) return false;
+    layout.through = through != 0u;
+    layout.texcoord_offset = offsets[0];
+    layout.color_offset = offsets[1];
+    layout.normal_offset = offsets[2];
+    layout.position_offset = offsets[3];
+    layout.weight_offset = offsets[4];
+    if (layout.weight_offset != ((packed >> 16u) & 0xFFFFu)) return false;
+    return true;
+}
+
+} // namespace
+
+void StateMachine::export_snapshot(std::vector<std::uint8_t> &out) const {
+    for (std::uint32_t reg : regs_) mput_u32(out, reg);
+    for (float lane : world_) mput_f32(out, lane);
+    for (float lane : view_) mput_f32(out, lane);
+    for (float lane : texture_) mput_f32(out, lane);
+    for (float lane : projection_) mput_f32(out, lane);
+    for (const auto &bone : bones_)
+        for (float lane : bone) mput_f32(out, lane);
+    out.insert(out.end(), clut_.begin(), clut_.end());
+    out.push_back(clut_valid_ ? 1u : 0u);
+    mput_u32(out, vertex_address_);
+    mput_u32(out, index_address_);
+    mput_layout(out, layout_);
+    mput_u32(out, static_cast<std::uint32_t>(world_index_));
+    mput_u32(out, static_cast<std::uint32_t>(view_index_));
+    mput_u32(out, static_cast<std::uint32_t>(texture_index_));
+    mput_u32(out, static_cast<std::uint32_t>(projection_index_));
+    mput_u32(out, static_cast<std::uint32_t>(bone_index_));
+    mput_u64(out, draws_);
+    mput_u64(out, gaps_);
+}
+
+bool StateMachine::import_snapshot(std::span<const std::uint8_t> bytes, std::string &error) {
+    MReader in{bytes.data(), bytes.size()};
+    std::array<std::uint32_t, 256> regs{};
+    for (std::uint32_t &reg : regs) reg = in.u32();
+    std::array<float, 12> world{};
+    for (float &lane : world) lane = in.f32();
+    std::array<float, 12> view{};
+    for (float &lane : view) lane = in.f32();
+    std::array<float, 12> texture{};
+    for (float &lane : texture) lane = in.f32();
+    std::array<float, 16> projection{};
+    for (float &lane : projection) lane = in.f32();
+    std::array<std::array<float, 12>, 8> bones{};
+    for (auto &bone : bones)
+        for (float &lane : bone) lane = in.f32();
+    if (!in.ok) {
+        error = "snapshot_truncated: ge state matrices truncated";
+        return false;
+    }
+    if (in.left < 1024u + 1u + 8u) {
+        error = "snapshot_truncated: ge clut truncated";
+        return false;
+    }
+    std::array<std::uint8_t, 1024> clut{};
+    std::copy_n(in.p, 1024u, clut.begin());
+    in.p += 1024u;
+    in.left -= 1024u;
+    const std::uint8_t clut_valid = in.u8();
+    const std::uint32_t vertex_address = in.u32();
+    const std::uint32_t index_address = in.u32();
+    VertexLayout layout{};
+    if (!mget_layout(in, layout)) {
+        error = "snapshot_bad_length: ge vertex layout malformed";
+        return false;
+    }
+    const int world_index = static_cast<int>(in.u32());
+    const int view_index = static_cast<int>(in.u32());
+    const int texture_index = static_cast<int>(in.u32());
+    const int projection_index = static_cast<int>(in.u32());
+    const int bone_index = static_cast<int>(in.u32());
+    const std::uint64_t draws = in.u64();
+    const std::uint64_t gaps = in.u64();
+    if (!in.ok || in.left != 0u || clut_valid > 1u) {
+        error = "snapshot_truncated: ge state trailing bytes";
+        return false;
+    }
+    regs_ = regs;
+    world_ = world;
+    view_ = view;
+    texture_ = texture;
+    projection_ = projection;
+    bones_ = bones;
+    clut_ = clut;
+    clut_valid_ = clut_valid != 0u;
+    vertex_address_ = vertex_address;
+    index_address_ = index_address;
+    layout_ = layout;
+    world_index_ = world_index;
+    view_index_ = view_index;
+    texture_index_ = texture_index;
+    projection_index_ = projection_index;
+    bone_index_ = bone_index;
+    draws_ = draws;
+    gaps_ = gaps;
+    textures_.clear();
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::ge

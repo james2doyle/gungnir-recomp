@@ -21,6 +21,11 @@ Android CMake files, and `scripts/android/`.
   vendored; no third-party driver binaries are bundled.
 - Game data: SAF or adb push into `getExternalFilesDir()/game/`; enforce size
   `262766592` and CRC32 `183F3EDC`. No `MANAGE_EXTERNAL_STORAGE`.
+- Host save states: Menu-overlay rows drive JNI save/load of
+  `getExternalFilesDir()/snapshots/snapshot.gsnap` (app-private, never
+  committed or bundled). QA loads via `adb push` to that path, then the menu
+  row; no `MANAGE_EXTERNAL_STORAGE`, no SAF export. The `snapshot_in` intent
+  extra is automation-only (loads before the session thread starts).
 
 ## Emulator vs physical device
 

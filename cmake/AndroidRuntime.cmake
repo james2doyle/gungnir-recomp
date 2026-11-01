@@ -134,6 +134,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/session/game_session.cpp"
         "${ARG_ROOT}/runtime/session/diagnostics.cpp"
         "${ARG_ROOT}/runtime/session/session_report.cpp"
+        "${ARG_ROOT}/runtime/session/snapshot.cpp"
         "${ARG_ROOT}/runtime/platform/android/aaudio_out.cpp"
         "${ARG_ROOT}/runtime/platform/android/audio_smoke.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_profile.cpp"

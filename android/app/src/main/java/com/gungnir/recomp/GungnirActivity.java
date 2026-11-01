@@ -51,6 +51,12 @@ public final class GungnirActivity extends SDLActivity {
 
     private static native boolean nativeAudioSmoke(int durationMs);
 
+    private static native String nativeSaveSnapshot(String path);
+
+    private static native String nativeLoadSnapshot(String path);
+
+    private static native String nativeResetToTitle();
+
     @Override
     protected String[] getLibraries() {
         return new String[] {"main"};
@@ -108,6 +114,24 @@ public final class GungnirActivity extends SDLActivity {
             }
 
             @Override
+            public void onSaveState() {
+                closeSettings();
+                runSnapshotOp(true);
+            }
+
+            @Override
+            public void onLoadState() {
+                closeSettings();
+                runSnapshotOp(false);
+            }
+
+            @Override
+            public void onResetToTitle() {
+                closeSettings();
+                runResetToTitle();
+            }
+
+            @Override
             public void onClose() {
                 closeSettings();
             }
@@ -151,6 +175,34 @@ public final class GungnirActivity extends SDLActivity {
         if (customDriversSupported) {
             new Thread(this::importDropFolder, "driver-drop-import").start();
         }
+    }
+
+    private void runSnapshotOp(boolean save) {
+        File dir = new File(getExternalFilesDir(null), "snapshots");
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            Toast.makeText(this, "snapshot dir unavailable", Toast.LENGTH_LONG).show();
+            return;
+        }
+        File file = new File(dir, "snapshot.gsnap");
+        new Thread(() -> {
+            String error = save
+                    ? nativeSaveSnapshot(file.getAbsolutePath())
+                    : nativeLoadSnapshot(file.getAbsolutePath());
+            new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(GungnirActivity.this,
+                    error == null
+                            ? (save ? "State saved" : "State loaded")
+                            : error,
+                    Toast.LENGTH_LONG).show());
+        }, save ? "snapshot-save" : "snapshot-load").start();
+    }
+
+    private void runResetToTitle() {
+        new Thread(() -> {
+            String error = nativeResetToTitle();
+            new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(GungnirActivity.this,
+                    error == null ? "Restarting" : error,
+                    Toast.LENGTH_LONG).show());
+        }, "reset-to-title").start();
     }
 
     private void showSettings() {

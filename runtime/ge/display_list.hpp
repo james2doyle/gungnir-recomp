@@ -12,6 +12,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gungnir::ge {
@@ -150,6 +151,11 @@ public:
     [[nodiscard]] std::uint32_t offset() const { return offset_; }
     [[nodiscard]] std::size_t call_depth() const { return call_stack_.size(); }
     [[nodiscard]] std::uint64_t executed() const { return executed_; }
+    // Snapshot support (T15c): the call stack is guest control flow, so it is
+    // saved verbatim as (return_pc, offset) pairs.
+    [[nodiscard]] std::vector<std::pair<std::uint32_t, std::uint32_t>> call_stack() const;
+    void restore_execution(std::uint32_t pc, std::uint32_t stall, std::uint32_t base, std::uint32_t offset,
+        const std::vector<std::pair<std::uint32_t, std::uint32_t>> &calls, std::uint64_t executed, bool done);
     [[nodiscard]] const std::vector<Command> &trace() const { return trace_; }
 
 private:

@@ -826,4 +826,85 @@ void register_utility(HleRegistrar &hle) {
     });
 }
 
+namespace {
+
+void uput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+struct UReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+};
+
+} // namespace
+
+bool export_snapshot_utility(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    bytes_out.clear();
+    uput_u32(bytes_out, static_cast<std::uint32_t>(g_state.status));
+    uput_u32(bytes_out, g_state.param);
+    uput_u32(bytes_out, g_state.mode);
+    bytes_out.push_back(g_state.started ? 1u : 0u);
+    uput_u32(bytes_out, static_cast<std::uint32_t>(g_dialog.status));
+    uput_u32(bytes_out, g_dialog.param);
+    uput_u32(bytes_out, g_dialog.size);
+    bytes_out.push_back(g_dialog.started ? 1u : 0u);
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_utility(std::span<const std::uint8_t> bytes, std::string &error) {
+    UReader in{bytes.data(), bytes.size()};
+    const std::uint32_t state_status = in.u32();
+    const std::uint32_t state_param = in.u32();
+    const std::uint32_t state_mode = in.u32();
+    const std::uint8_t state_started = in.u8();
+    const std::uint32_t dialog_status = in.u32();
+    const std::uint32_t dialog_param = in.u32();
+    const std::uint32_t dialog_size = in.u32();
+    const std::uint8_t dialog_started = in.u8();
+    if (!in.ok || in.left != 0u || state_status > 4u || dialog_status > 4u || state_started > 1u ||
+        dialog_started > 1u) {
+        error = "snapshot_bad_length: utility section malformed";
+        return false;
+    }
+    g_state.status = static_cast<SavedataStatus>(state_status);
+    g_state.param = state_param;
+    g_state.mode = state_mode;
+    g_state.started = state_started != 0u;
+    g_dialog.status = static_cast<SavedataStatus>(dialog_status);
+    g_dialog.param = dialog_param;
+    g_dialog.size = dialog_size;
+    g_dialog.started = dialog_started != 0u;
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::hle

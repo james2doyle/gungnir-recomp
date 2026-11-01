@@ -108,7 +108,14 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 Tests that need your disc or the generated corpus skip with `exit 77` when
-the private inputs are absent; they never pass silently. The full suite and
+the private inputs are absent; they never pass silently. The suite costs
+minutes per run: always run it through the wrapper, which keeps the full
+output in a timestamped log under `build/test-logs/` (gitignored) and
+reprints failure names at the end — never truncate its pipe, read the log:
+
+```sh
+tools/run_python_suite.sh
+``` The full suite and
 the IP gate must be green before you build the APK:
 
 ```sh

@@ -231,3 +231,28 @@ is modelled because the title only reads GPI.
   waiter), while the mixer/AAudio stream and the GPU texture caches are
   rebuilt on load, matching the reference (GPU flushes on save, resets caches
   on load). This is also the likely field to inspect for the pre-battle stall.
+
+### T15d reference review — snapshot CLI and menu surfaces (2026-11-01)
+
+- `hrydgard/ppsspp` `Core/SaveState.cpp`, `Core/SaveStateRewind.cpp`
+  (GPL-2.0-or-later), `Core/CoreTiming.cpp` comment ("Counts and ids from a
+  savestate are checked against it"): behavioral only, never linked; no code
+  copied. Confirms the T15a/b/c design already recorded above: quiesce-then-
+  serialize in section order with per-section versions, UIDs restored
+  verbatim with duplicate rejection, absolute timer deadlines restored with
+  the virtual clock. The in-game pause/menu entry point for save/load in the
+  reference corresponds to our Menu-overlay rows (SettingsOverlayView), and
+  the headless use corresponds to our boot_runner `--snapshot-out/in`.
+- `gh search code "getStringExtra snapshot" --extension java`: no relevant
+  hits. `gh search issues "snapshot save load"` / `"save state slot menu"`
+  (incl. `--repo hrydgard/ppsspp`): no applicable semantics or regressions.
+  The adb-push-to-app-private flow and the intent-extra automation hook are
+  original to this project (no reference analogue found).
+
+### T15d divergence fix — PPSSPP RTC base reference (2026-11-01)
+
+- `hrydgard/ppsspp` `Core/HLE/sceRtc.cpp` `__RtcDoState` (GPL-2.0-or-later):
+  persists `rtcBaseTime`/`rtcBaseTicks` — "a base time that everything is
+  relative to ... so time doesn't move strangely with savestates, turbo
+  speed, etc." Behavioral reference only, no code copied; our `wall_base_us`
+  in the clock section is the same idea (host boot epoch + virtual now).

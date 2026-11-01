@@ -404,4 +404,319 @@ void register_media(HleRegistrar &hle) {
     register_ge(hle);
 }
 
+namespace {
+
+void dput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+void dput_u64(std::vector<std::uint8_t> &out, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::uint8_t>((value >> (i * 8)) & 0xFFu));
+}
+
+struct DReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint64_t u64() {
+        if (left < 8u) {
+            ok = false;
+            return 0u;
+        }
+        std::uint64_t v = 0u;
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(p[i]) << (i * 8);
+        p += 8;
+        left -= 8;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+};
+
+void dput_runner(std::vector<std::uint8_t> &out, const GeList &list) {
+    const bool has_runner = list.runner != nullptr;
+    out.push_back(has_runner ? 1u : 0u);
+    if (!has_runner) return;
+    dput_u32(out, list.runner->pc());
+    dput_u32(out, list.runner->stall());
+    dput_u32(out, list.runner->base());
+    dput_u32(out, list.runner->offset());
+    dput_u64(out, list.runner->executed());
+    out.push_back(list.runner->completed() ? 1u : 0u);
+    const auto calls = list.runner->call_stack();
+    dput_u32(out, static_cast<std::uint32_t>(calls.size()));
+    for (const auto &[return_pc, offset] : calls) {
+        dput_u32(out, return_pc);
+        dput_u32(out, offset);
+    }
+}
+
+} // namespace
+
+bool export_snapshot_media(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    const MediaState &state = media();
+    // In-flight draws are derived: the game re-submits display lists every
+    // frame, so a save does not fail when a frame is mid-flight. They are
+    // absent from the snapshot and dropped on load (one partial frame at
+    // most); the caller logs the count for evidence.
+    bytes_out.clear();
+    dput_u32(bytes_out, state.display.mode);
+    dput_u32(bytes_out, state.display.width);
+    dput_u32(bytes_out, state.display.height);
+    dput_u32(bytes_out, state.display.framebuffer);
+    dput_u32(bytes_out, state.display.buffer_width);
+    dput_u32(bytes_out, state.display.pixel_format);
+    dput_u64(bytes_out, state.display.flips);
+    dput_u32(bytes_out, state.ctrl_cycle);
+    dput_u32(bytes_out, state.ctrl_mode);
+    dput_u32(bytes_out, state.ctrl_reads);
+    dput_u32(bytes_out, state.ctrl_last_buttons);
+    dput_u32(bytes_out, state.ctrl_latch_make);
+    dput_u32(bytes_out, state.ctrl_latch_break);
+    dput_u32(bytes_out, state.ctrl_latch_press);
+    dput_u32(bytes_out, state.ctrl_latch_release);
+    dput_u64(bytes_out, state.ctrl_latch_samples);
+    dput_u32(bytes_out, static_cast<std::uint32_t>(state.ge_callbacks.size()));
+    for (const auto &[id, callback] : state.ge_callbacks) {
+        dput_u32(bytes_out, static_cast<std::uint32_t>(id));
+        dput_u32(bytes_out, callback.signal_function);
+        dput_u32(bytes_out, callback.signal_argument);
+        dput_u32(bytes_out, callback.finish_function);
+        dput_u32(bytes_out, callback.finish_argument);
+    }
+    dput_u32(bytes_out, static_cast<std::uint32_t>(state.next_ge_callback));
+    dput_u32(bytes_out, static_cast<std::uint32_t>(state.ge_lists.size()));
+    for (const auto &[id, list] : state.ge_lists) {
+        dput_u32(bytes_out, id);
+        dput_u32(bytes_out, list.pc);
+        dput_u32(bytes_out, list.stall);
+        dput_u32(bytes_out, static_cast<std::uint32_t>(list.callback));
+        bytes_out.push_back(list.done ? 1u : 0u);
+        bytes_out.push_back(list.failed ? 1u : 0u);
+        bytes_out.push_back(list.callbacks_delivered ? 1u : 0u);
+        dput_u64(bytes_out, list.commands);
+        dput_u64(bytes_out, list.draws);
+        dput_u32(bytes_out, list.signal);
+        dput_u32(bytes_out, list.finish);
+        bytes_out.push_back(list.has_signal ? 1u : 0u);
+        bytes_out.push_back(list.has_finish ? 1u : 0u);
+        dput_runner(bytes_out, list);
+    }
+    dput_u32(bytes_out, state.next_ge_list);
+    std::vector<std::uint8_t> machine;
+    state.ge.export_snapshot(machine);
+    dput_u32(bytes_out, static_cast<std::uint32_t>(machine.size()));
+    bytes_out.insert(bytes_out.end(), machine.begin(), machine.end());
+    dput_u64(bytes_out, state.ge_frames);
+    dput_u64(bytes_out, state.ge_gaps);
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_media(std::span<const std::uint8_t> bytes, Runtime &runtime, std::string &error) {
+    DReader in{bytes.data(), bytes.size()};
+    DisplayState display{};
+    display.mode = in.u32();
+    display.width = in.u32();
+    display.height = in.u32();
+    display.framebuffer = in.u32();
+    display.buffer_width = in.u32();
+    display.pixel_format = in.u32();
+    display.flips = in.u64();
+    std::uint32_t ctrl_cycle = in.u32();
+    std::uint32_t ctrl_mode = in.u32();
+    std::uint32_t ctrl_reads = in.u32();
+    std::uint32_t ctrl_last_buttons = in.u32();
+    std::uint32_t ctrl_latch_make = in.u32();
+    std::uint32_t ctrl_latch_break = in.u32();
+    std::uint32_t ctrl_latch_press = in.u32();
+    std::uint32_t ctrl_latch_release = in.u32();
+    std::uint64_t ctrl_latch_samples = in.u64();
+    if (!in.ok) {
+        error = "snapshot_truncated: media display truncated";
+        return false;
+    }
+    const std::uint32_t callback_count = in.u32();
+    if (!in.ok || callback_count > 256u) {
+        error = "snapshot_truncated: ge callback count malformed";
+        return false;
+    }
+    std::map<std::int32_t, GeCallback> ge_callbacks;
+    for (std::uint32_t i = 0; i < callback_count; ++i) {
+        const std::int32_t id = static_cast<std::int32_t>(in.u32());
+        GeCallback callback;
+        callback.signal_function = in.u32();
+        callback.signal_argument = in.u32();
+        callback.finish_function = in.u32();
+        callback.finish_argument = in.u32();
+        if (!in.ok) {
+            error = "snapshot_truncated: ge callback truncated";
+            return false;
+        }
+        if (!ge_callbacks.emplace(id, callback).second) {
+            error = "snapshot_duplicate_uid: duplicate ge callback";
+            return false;
+        }
+    }
+    const std::int32_t next_ge_callback = static_cast<std::int32_t>(in.u32());
+    const std::uint32_t list_count = in.u32();
+    if (!in.ok || list_count > 65536u) {
+        error = "snapshot_truncated: ge list count malformed";
+        return false;
+    }
+    struct RunnerState {
+        std::uint32_t pc{};
+        std::uint32_t stall{};
+        std::uint32_t base{};
+        std::uint32_t offset{};
+        std::uint64_t executed{};
+        bool done{};
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> calls;
+    };
+    // Runner closures capture their list by reference, so runners are rebuilt
+    // on the committed map elements after the move, never on temporaries.
+    std::map<std::uint32_t, RunnerState> runners;
+    std::map<std::uint32_t, GeList> ge_lists;
+    for (std::uint32_t i = 0; i < list_count; ++i) {
+        const std::uint32_t id = in.u32();
+        GeList list;
+        list.pc = in.u32();
+        list.stall = in.u32();
+        list.callback = static_cast<std::int32_t>(in.u32());
+        const std::uint8_t done = in.u8();
+        const std::uint8_t failed = in.u8();
+        const std::uint8_t delivered = in.u8();
+        list.commands = in.u64();
+        list.draws = in.u64();
+        list.signal = in.u32();
+        list.finish = in.u32();
+        const std::uint8_t has_signal = in.u8();
+        const std::uint8_t has_finish = in.u8();
+        const std::uint8_t has_runner = in.u8();
+        if (!in.ok || done > 1u || failed > 1u || delivered > 1u || has_signal > 1u || has_finish > 1u ||
+            has_runner > 1u) {
+            error = "snapshot_bad_length: ge list malformed";
+            return false;
+        }
+        list.done = done != 0u;
+        list.failed = failed != 0u;
+        list.callbacks_delivered = delivered != 0u;
+        list.has_signal = has_signal != 0u;
+        list.has_finish = has_finish != 0u;
+        if (has_runner != 0u) {
+            const std::uint32_t runner_pc = in.u32();
+            const std::uint32_t runner_stall = in.u32();
+            const std::uint32_t runner_base = in.u32();
+            const std::uint32_t runner_offset = in.u32();
+            const std::uint64_t runner_executed = in.u64();
+            const std::uint8_t runner_done = in.u8();
+            const std::uint32_t call_count = in.u32();
+            if (!in.ok || runner_done > 1u || call_count > 64u) {
+                error = "snapshot_bad_length: ge runner malformed";
+                return false;
+            }
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> calls;
+            calls.reserve(call_count);
+            for (std::uint32_t c = 0; c < call_count; ++c) {
+                const std::uint32_t return_pc = in.u32();
+                const std::uint32_t call_offset = in.u32();
+                if (!in.ok) {
+                    error = "snapshot_truncated: ge call stack truncated";
+                    return false;
+                }
+                calls.emplace_back(return_pc, call_offset);
+            }
+            RunnerState pending{runner_pc, runner_stall, runner_base, runner_offset, runner_executed,
+                runner_done != 0u, std::move(calls)};
+            if (!runners.emplace(id, std::move(pending)).second) {
+                error = "snapshot_duplicate_uid: duplicate ge list";
+                return false;
+            }
+        }
+        if (!ge_lists.emplace(id, std::move(list)).second) {
+            error = "snapshot_duplicate_uid: duplicate ge list";
+            return false;
+        }
+    }
+    const std::uint32_t next_ge_list = in.u32();
+    const std::uint32_t machine_len = in.u32();
+    if (!in.ok || machine_len == 0u || machine_len > 65536u || in.left < machine_len) {
+        error = "snapshot_truncated: ge state machine truncated";
+        return false;
+    }
+    gungnir::ge::StateMachine machine;
+    if (!machine.import_snapshot(std::span<const std::uint8_t>(in.p, machine_len), error)) return false;
+    in.p += machine_len;
+    in.left -= machine_len;
+    const std::uint64_t ge_frames = in.u64();
+    const std::uint64_t ge_gaps = in.u64();
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in media section";
+        return false;
+    }
+    MediaState &state = media();
+    state.display = display;
+    state.ctrl_cycle = ctrl_cycle;
+    state.ctrl_mode = ctrl_mode;
+    state.ctrl_reads = ctrl_reads;
+    state.ctrl_last_buttons = ctrl_last_buttons;
+    state.ctrl_latch_make = ctrl_latch_make;
+    state.ctrl_latch_break = ctrl_latch_break;
+    state.ctrl_latch_press = ctrl_latch_press;
+    state.ctrl_latch_release = ctrl_latch_release;
+    state.ctrl_latch_samples = ctrl_latch_samples;
+    state.ge_callbacks = std::move(ge_callbacks);
+    state.next_ge_callback = next_ge_callback;
+    state.ge_lists.clear();
+    for (auto &[id, list] : ge_lists) state.ge_lists.emplace(id, std::move(list));
+    state.next_ge_list = next_ge_list;
+    for (const auto &[id, runner] : runners) {
+        const auto found = state.ge_lists.find(id);
+        if (found == state.ge_lists.end()) {
+            error = "snapshot_incomplete: runner without list";
+            return false;
+        }
+        make_ge_runner(runtime, found->second);
+        found->second.runner->restore_execution(runner.pc, runner.stall, runner.base, runner.offset,
+            runner.calls, runner.executed, runner.done);
+    }
+    state.pending_draws.clear();
+    state.logged_ge_gaps.clear();
+    state.ge_frames = ge_frames;
+    state.ge_gaps = ge_gaps;
+    state.ge = std::move(machine);
+    state.ge.set_draw_sink([&state](const gungnir::ge::Draw &draw) { state.pending_draws.push_back(draw); });
+    state.ge.set_gap_sink([&state](const std::string &gap) {
+        ++state.ge_gaps;
+        if (state.logged_ge_gaps.insert(gap).second) std::cerr << "[ge] gap: " << gap << "\n";
+    });
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::hle

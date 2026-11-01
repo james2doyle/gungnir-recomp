@@ -20,6 +20,7 @@
 #include <iosfwd>
 #include <map>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,5 +103,20 @@ void register_threadman(HleRegistrar &hle);
 void register_system(HleRegistrar &hle);
 void register_io(HleRegistrar &hle, const std::filesystem::path &disc_image,
     const std::filesystem::path &memory_stick);
+
+// Snapshot export/import for open file descriptors (T15c). The disc image and
+// the memory-stick directory are session config and are NOT saved; import
+// reopens every descriptor against the current config and fails when a path
+// no longer resolves. Import is fail-closed.
+[[nodiscard]] bool export_snapshot_io(std::vector<std::uint8_t> &bytes_out, std::string &error);
+bool import_snapshot_io(std::span<const std::uint8_t> bytes, std::string &error);
+
+// Guest-visible wall-clock base (T15d): sceRtcGetCurrentTick and the libc time
+// calls observe wall_base_us() + kernel virtual now. The base is host boot
+// time and must be snapshotted, or a restore in a new host process shifts
+// every guest tick by the inter-process gap. Mirrors PPSSPP's rtcBaseTime
+// (Core/HLE/sceRtc.cpp __RtcDoState), behavioral reference only.
+[[nodiscard]] std::uint64_t wall_base_us();
+void set_wall_base_us(std::uint64_t base_us);
 
 } // namespace gungnir::hle

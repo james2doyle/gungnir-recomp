@@ -11,9 +11,11 @@
 #include "ge/vertex.hpp"
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -71,6 +73,11 @@ public:
     [[nodiscard]] std::uint64_t gap_count() const { return gaps_; }
     [[nodiscard]] std::size_t cached_texture_count() const;
     [[nodiscard]] std::size_t cached_texture_bytes() const;
+    // Snapshot codec (T15c): registers, matrices, CLUT, addresses, layout and
+    // counters. The texture cache is derived (re-decoded from guest RAM) and
+    // is dropped on import; sinks are preserved.
+    void export_snapshot(std::vector<std::uint8_t> &out) const;
+    bool import_snapshot(std::span<const std::uint8_t> bytes, std::string &error);
 
 private:
     void draw_primitive(const Command &command, const MemoryView &memory);

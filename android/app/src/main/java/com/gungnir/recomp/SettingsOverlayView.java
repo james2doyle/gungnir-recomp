@@ -18,6 +18,9 @@ public final class SettingsOverlayView extends FrameLayout {
         void onGamepad();
         void onDrivers();
         void onGameData();
+        void onSaveState();
+        void onLoadState();
+        void onResetToTitle();
         void onClose();
     }
 
@@ -42,9 +45,19 @@ public final class SettingsOverlayView extends FrameLayout {
         panel.setBackground(background);
         panel.setOnClickListener(view -> {
         });
-        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
-                dp(380), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
-        addView(panel, panelParams);
+        // The row list grows with every feature (now 8 rows); on short
+        // landscape screens it overflows the panel and the bottom rows are
+        // never laid out. A ScrollView keeps every row reachable (T15e).
+        android.widget.ScrollView scroll = new android.widget.ScrollView(context);
+        scroll.setFillViewport(true);
+        FrameLayout.LayoutParams scrollParams = new FrameLayout.LayoutParams(
+                dp(380), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER);
+        scrollParams.topMargin = dp(12);
+        scrollParams.bottomMargin = dp(12);
+        LinearLayout.LayoutParams panelParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        scroll.addView(panel, panelParams);
+        addView(scroll, scrollParams);
 
         TextView title = new TextView(context);
         title.setText("Settings");
@@ -64,6 +77,9 @@ public final class SettingsOverlayView extends FrameLayout {
         row("Gamepad", listener::onGamepad);
         row("Vulkan driver", listener::onDrivers);
         row("Game data", listener::onGameData);
+        row("Save state", listener::onSaveState);
+        row("Load state", listener::onLoadState);
+        row("Reset to title", listener::onResetToTitle);
         row("Close", listener::onClose);
     }
 

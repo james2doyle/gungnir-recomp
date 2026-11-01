@@ -56,6 +56,37 @@ std::string g_driver_info;
 std::mutex g_touch_mutex;
 std::atomic<gungnir::platform::SdlGamepad *> g_gamepad{nullptr};
 
+// Snapshot menu wiring (T15d). The session runs on a worker thread; menu
+// Save/Load stop it, join it, then save/load/restart under this mutex. The
+// snapshot holds the whole guest, so no guest state is touched mid-dispatch.
+std::mutex g_snapshot_mutex;
+gungnir::session::GameSession *g_snapshot_session = nullptr;
+std::thread *g_snapshot_thread = nullptr;
+std::atomic<bool> *g_snapshot_finished = nullptr;
+
+// Host sinks installed once at startup (GE frame sink) but cleared by
+// GameSession::start()'s HLE reset. Restart paths must re-arm them after a
+// successful restart, or the rebooted guest renders into the void: frames
+// flow nowhere, the screen freezes on a stale frame, and no guest_frame line
+// ever logs (T15e device finding).
+std::function<void()> g_session_rearm;
+
+void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool> &finished) {    session.run();
+    const gungnir::session::Result &result = session.result();
+    GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
+    GUNGNIR_LOGI("session_stop_reason=%s\n", result.stop_reason.c_str());
+    for (const std::string &import : result.imports_unbound)
+        GUNGNIR_LOGI("session_unbound=%s\n", import.c_str());
+    if (!result.ok) GUNGNIR_LOGE("session_error: %s\n", result.error.c_str());
+    finished.store(true);
+}
+
+void launch_session_thread(gungnir::session::GameSession &session, std::atomic<bool> &finished,
+    std::thread &slot) {
+    finished.store(false);
+    slot = std::thread([&session, &finished] { run_session_worker(session, finished); });
+}
+
 gungnir::input::TouchHaptics &touch_haptics() {
     static gungnir::input::TouchHaptics haptics([] {});
     return haptics;
@@ -169,6 +200,42 @@ long long intent_long(const char *key, long long fallback) {
 #else
 long long intent_long(const char *, long long fallback) {
     return fallback;
+}
+#endif
+
+#if defined(__ANDROID__)
+std::string intent_string(const char *key) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (env == nullptr || activity == nullptr) return {};
+    jclass activity_class = env->GetObjectClass(activity);
+    if (activity_class == nullptr) return {};
+    jmethodID get_intent = env->GetMethodID(activity_class, "getIntent",
+                                            "()Landroid/content/Intent;");
+    jobject intent = get_intent != nullptr ? env->CallObjectMethod(activity, get_intent) : nullptr;
+    std::string value;
+    if (intent != nullptr) {
+        jclass intent_class = env->GetObjectClass(intent);
+        jmethodID get_string = intent_class != nullptr ? env->GetMethodID(intent_class, "getStringExtra",
+            "(Ljava/lang/String;)Ljava/lang/String;") : nullptr;
+        jstring name = env->NewStringUTF(key);
+        jobject extra = (get_string != nullptr && name != nullptr)
+            ? env->CallObjectMethod(intent, get_string, name) : nullptr;
+        if (extra != nullptr) {
+            const char *utf = env->GetStringUTFChars(static_cast<jstring>(extra), nullptr);
+            if (utf != nullptr) {
+                value = utf;
+                env->ReleaseStringUTFChars(static_cast<jstring>(extra), utf);
+            }
+            env->DeleteLocalRef(extra);
+        }
+        if (name != nullptr) env->DeleteLocalRef(name);
+        if (intent_class != nullptr) env->DeleteLocalRef(intent_class);
+        env->DeleteLocalRef(intent);
+    }
+    env->DeleteLocalRef(activity_class);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return value;
 }
 #endif
 
@@ -312,6 +379,67 @@ Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobj
         GUNGNIR_LOGE("game_data_invalid: %s\n", result.error.c_str());
     }
     return result.ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeSaveSnapshot(JNIEnv *env, jobject, jstring path) {
+    if (path == nullptr) return env->NewStringUTF("snapshot_save_failed: null path");
+    const char *utf = env->GetStringUTFChars(path, nullptr);
+    if (utf == nullptr) return env->NewStringUTF("snapshot_save_failed: null path bytes");
+    const std::string file(utf);
+    env->ReleaseStringUTFChars(path, utf);
+    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+    if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
+        return env->NewStringUTF("session_not_started");
+    if (g_snapshot_finished->load()) return env->NewStringUTF("snapshot_save_failed: session finished");
+    g_snapshot_session->request_stop();
+    if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
+    std::string error;
+    if (!g_snapshot_session->save_snapshot(file, error)) return env->NewStringUTF(error.c_str());
+    GUNGNIR_LOGI("snapshot_saved path=%s\n", file.c_str());
+    g_snapshot_session->request_resume();
+    launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    return nullptr;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject, jstring path) {
+    if (path == nullptr) return env->NewStringUTF("snapshot_load_failed: null path");
+    const char *utf = env->GetStringUTFChars(path, nullptr);
+    if (utf == nullptr) return env->NewStringUTF("snapshot_load_failed: null path bytes");
+    const std::string file(utf);
+    env->ReleaseStringUTFChars(path, utf);
+    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+    if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
+        return env->NewStringUTF("session_not_started");
+    if (g_snapshot_finished->load()) return env->NewStringUTF("snapshot_load_failed: session finished");
+    g_snapshot_session->request_stop();
+    if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
+    std::string error;
+    if (!g_snapshot_session->load_snapshot(file, error)) return env->NewStringUTF(error.c_str());
+    GUNGNIR_LOGI("snapshot_loaded path=%s\n", file.c_str());
+    launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    return nullptr;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject) {
+    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+    if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
+        return env->NewStringUTF("session_not_started");
+    // Only join a live worker; a finished session restarts without one.
+    if (!g_snapshot_finished->load()) {
+        g_snapshot_session->request_stop();
+        if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
+    } else if (g_snapshot_thread->joinable()) {
+        g_snapshot_thread->join();
+    }
+    std::string error;
+    if (!g_snapshot_session->restart_to_title(error)) return env->NewStringUTF(error.c_str());
+    if (g_session_rearm) g_session_rearm();
+    GUNGNIR_LOGI("session_reset_to_title\n");
+    launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    return nullptr;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -695,17 +823,28 @@ int main(int, char **) {
                 gungnir::hle::set_ge_frame_sink([&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
                     frame_queue.publish(draws);
                 });
-                session_thread = std::thread([&session, &session_finished] {
-                    session.run();
-                    const gungnir::session::Result &result = session.result();
-                    GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
-                    GUNGNIR_LOGI("session_stop_reason=%s\n", result.stop_reason.c_str());
-                    for (const std::string &import : result.imports_unbound)
-                        GUNGNIR_LOGI("session_unbound=%s\n", import.c_str());
-                    if (!result.ok)
-                        GUNGNIR_LOGE("session_error: %s\n", result.error.c_str());
-                    session_finished.store(true);
-                });
+                {
+                    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+                    g_snapshot_session = &session;
+                    g_snapshot_thread = &session_thread;
+                    g_snapshot_finished = &session_finished;
+                    g_session_rearm = [&frame_queue] {
+                        gungnir::hle::set_ge_frame_sink(
+                            [&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
+                                frame_queue.publish(draws);
+                            });
+                    };
+                }
+                const std::string snapshot_in = intent_string("snapshot_in");
+                if (!snapshot_in.empty()) {
+                    std::string snapshot_error;
+                    if (!session.load_snapshot(snapshot_in, snapshot_error)) {
+                        GUNGNIR_LOGE("session_snapshot_in_failed: %s\n", snapshot_error.c_str());
+                    } else {
+                        GUNGNIR_LOGI("session_snapshot_in=%s\n", snapshot_in.c_str());
+                    }
+                }
+                launch_session_thread(session, session_finished, session_thread);
             }
         }
     } else if (!game_data.ok) {

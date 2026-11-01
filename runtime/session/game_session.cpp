@@ -3,6 +3,7 @@
 #include "hle/hle_media.hpp"
 
 #include "session/diagnostics.hpp"
+#include "session/snapshot.hpp"
 
 #include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
@@ -16,12 +17,15 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
+#include "psprecomp/sha256.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <thread>
 #include <cstdint>
 #include <cstdlib>
@@ -64,6 +68,9 @@ struct GameSession::Impl {
     std::thread watchdog;
     std::mutex diagnostic_mutex;
     std::function<void(std::string_view)> diagnostic_sink;
+    std::optional<std::uint32_t> resume_pc;
+    bool load_failed{false};
+    std::string load_error;
 
     void emit_diagnostic(const std::string &line) {
         std::function<void(std::string_view)> sink;
@@ -178,6 +185,9 @@ bool GameSession::start(const Config &config, gungnir::audio::AudioSink *sink, s
     impl_->dispatches = 0u;
     impl_->unbound.clear();
     impl_->imports_total = 0u;
+    impl_->resume_pc.reset();
+    impl_->load_failed = false;
+    impl_->load_error.clear();
 
     if (!generated_corpus_present()) {
         error = "game_corpus_missing: rebuild with -Pgungnir.gameCorpus=DIR";
@@ -280,6 +290,17 @@ void GameSession::run() {
         impl_->result.error = "session_not_started";
         return;
     }
+    if (impl_->load_failed) {
+        impl_->result.ok = false;
+        impl_->result.error = impl_->load_error;
+        return;
+    }
+    std::uint32_t start_pc = impl_->entry;
+    if (impl_->resume_pc) {
+        start_pc = *impl_->resume_pc;
+        impl_->resume_pc.reset();
+        impl_->emit_diagnostic("session_resume pc=" + psprecomp::hex32(start_pc));
+    }
     impl_->started_at = std::chrono::steady_clock::now();
     g_active = impl_.get();
     std::size_t chain_capacity = 0u;
@@ -324,7 +345,7 @@ void GameSession::run() {
         });
     }
     try {
-        impl_->runtime->run(impl_->entry, impl_->config.max_dispatches);
+        impl_->runtime->run(start_pc, impl_->config.max_dispatches);
         impl_->result.ok = true;
     } catch (const std::exception &failure) {
         impl_->result.ok = false;
@@ -342,6 +363,134 @@ void GameSession::run() {
 
 void GameSession::request_stop() {
     impl_->stop_requested.store(true, std::memory_order_relaxed);
+}
+
+void GameSession::request_resume() {
+    if (impl_->runtime != nullptr) impl_->resume_pc = impl_->runtime->cpu().pc;
+}
+
+bool GameSession::restart_to_title(std::string &error) {
+    // start() shuts the previous run down first and re-arms every bound, so
+    // this is a clean reboot from the ELF entry with identical config.
+    return start(impl_->config, impl_->sink, error);
+}
+
+namespace {
+
+constexpr char kSnapshotToolchain[] = "gungnir-snapshot-toolchain/v1";
+
+bool decode_hex_byte(char high, char low, std::uint8_t &out) {
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    const int hi = nibble(high);
+    const int lo = nibble(low);
+    if (hi < 0 || lo < 0) return false;
+    out = static_cast<std::uint8_t>((hi << 4) | lo);
+    return true;
+}
+
+bool decode_sha256_hex(const std::string &hex, std::array<std::uint8_t, 32> &out) {
+    if (hex.size() != 64u) return false;
+    for (std::size_t i = 0; i < 32u; ++i) {
+        if (!decode_hex_byte(hex[2u * i], hex[2u * i + 1u], out[i])) return false;
+    }
+    return true;
+}
+
+bool snapshot_identities(
+    const Config &config, std::array<std::uint8_t, 32> &corpus, std::array<std::uint8_t, 32> &session, std::string &error) {
+    const std::string elf_hex = psprecomp::sha256_file(config.elf_path);
+    std::array<std::uint8_t, 32> elf_hash{};
+    if (!decode_sha256_hex(elf_hex, elf_hash)) {
+        error = "snapshot_identity_failed: cannot hash " + config.elf_path.string();
+        return false;
+    }
+    std::string bound_hex;
+    bound_hex.reserve(64u + sizeof(kSnapshotToolchain));
+    bound_hex += elf_hex;
+    bound_hex += kSnapshotToolchain;
+    const std::vector<std::uint8_t> bound_bytes(bound_hex.begin(), bound_hex.end());
+    if (!decode_sha256_hex(psprecomp::sha256_bytes(bound_bytes), corpus)) {
+        error = "snapshot_identity_failed: corpus hash malformed";
+        return false;
+    }
+    std::ostringstream config_text;
+    config_text << "load_base=0x" << std::hex << config.load_base << ";boot_path=" << config.boot_path;
+    const std::string config_string = config_text.str();
+    const std::vector<std::uint8_t> config_bytes(config_string.begin(), config_string.end());
+    if (!decode_sha256_hex(psprecomp::sha256_bytes(config_bytes), session)) {
+        error = "snapshot_identity_failed: config hash malformed";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool GameSession::save_snapshot(const std::filesystem::path &path, std::string &error) {
+    if (!impl_->started || impl_->runtime == nullptr) {
+        error = "session_not_started";
+        return false;
+    }
+    if (gungnir::hle::Thread *current = gungnir::hle::kernel().current_thread()) {
+        current->context = impl_->runtime->cpu();
+    }
+    std::array<std::uint8_t, 32> corpus{};
+    std::array<std::uint8_t, 32> session{};
+    if (!snapshot_identities(impl_->config, corpus, session, error)) return false;
+    ClockState clock{gungnir::hle::kernel().now_us(), gungnir::hle::kernel().next_vblank_us(),
+        gungnir::hle::kernel().vblank_count(), gungnir::hle::wall_base_us(),
+        impl_->runtime->dispatch_phase()};
+    SnapshotError snapshot_error;
+    if (!snapshot_save_full(path, corpus, session, impl_->runtime->memory(), impl_->runtime->cpu(), clock,
+            gungnir::hle::kernel(), snapshot_error)) {
+        error = snapshot_error.message;
+        return false;
+    }
+    std::error_code size_error;
+    const std::uint64_t bytes = std::filesystem::file_size(path, size_error);
+    impl_->emit_diagnostic("snapshot_saved path=" + path.string() + " bytes=" +
+        (size_error ? std::string("unknown") : std::to_string(bytes)));
+    const std::size_t pending = gungnir::hle::ge_pending_draw_count();
+    if (pending != 0u)
+        impl_->emit_diagnostic("snapshot_gpu_pending_unsaved=" + std::to_string(pending) +
+            " (derived draws, re-submitted next frame)");
+    return true;
+}
+
+bool GameSession::load_snapshot(const std::filesystem::path &path, std::string &error) {
+    if (!impl_->started || impl_->runtime == nullptr) {
+        error = "session_not_started";
+        return false;
+    }
+    std::array<std::uint8_t, 32> corpus{};
+    std::array<std::uint8_t, 32> session{};
+    if (!snapshot_identities(impl_->config, corpus, session, error)) return false;
+    ClockState clock{};
+    SnapshotError snapshot_error;
+    if (!snapshot_load_full(path, corpus, session, impl_->runtime->memory(), impl_->runtime->cpu(), clock,
+            gungnir::hle::kernel(), snapshot_error)) {
+        impl_->load_failed = true;
+        impl_->load_error = snapshot_error.message;
+        error = snapshot_error.message;
+        return false;
+    }
+    if (impl_->sink != nullptr) impl_->sink->reset();
+    // Restore the saved wall-clock base so guest ticks stay continuous across
+    // a process restart. Legacy files store 0 and keep the current base.
+    if (clock.wall_base_us != 0u) gungnir::hle::set_wall_base_us(clock.wall_base_us);
+    // Restore the starvation-boundary phase so future preemption boundaries
+    // (and the thread interleaving they select) match the continuous run.
+    impl_->runtime->set_dispatch_phase(clock.dispatch_phase);
+    impl_->resume_pc = impl_->runtime->cpu().pc;
+    impl_->emit_diagnostic(
+        "snapshot_loaded path=" + path.string() + " resume_pc=" + psprecomp::hex32(impl_->runtime->cpu().pc));
+    impl_->emit_diagnostic("mixer_reset: derived audio/GPU caches rebuilt from restored guest RAM");
+    return true;
 }
 
 void GameSession::set_diagnostic_sink(std::function<void(std::string_view)> sink) {

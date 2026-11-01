@@ -267,6 +267,7 @@ public:
     // Clock ---------------------------------------------------------------
     [[nodiscard]] std::uint64_t now_us() const noexcept { return now_us_; }
     [[nodiscard]] std::uint64_t vblank_count() const noexcept { return vblank_count_; }
+    [[nodiscard]] std::uint64_t next_vblank_us() const noexcept { return next_vblank_us_; }
     // Emulated time of the latest vblank, at or before now_us().
     [[nodiscard]] std::uint64_t last_vblank_us() const noexcept { return next_vblank_us_ - kVBlankPeriodUs; }
     // Forgets how far emulated time was ahead of or behind real time. Called
@@ -298,6 +299,7 @@ public:
     [[nodiscard]] Thread *find_thread(SceUID uid) noexcept;
     [[nodiscard]] Thread *current_thread() noexcept { return find_thread(current_uid_); }
     [[nodiscard]] SceUID current_uid() const noexcept { return current_uid_; }
+    [[nodiscard]] const std::map<SceUID, std::unique_ptr<Thread>> &threads() const noexcept { return threads_; }
     // Creates the thread that runs module_start and makes it current.
     void start_loader_thread(AllegrexContext &ctx, std::uint32_t entry, std::uint32_t stack_top);
     std::int32_t create_thread(const std::string &name, std::uint32_t entry, std::uint32_t priority,
@@ -394,6 +396,19 @@ public:
 
     // One line per thread: state, what it waits for and where it resumes.
     [[nodiscard]] std::string describe_threads() const;
+
+    // Snapshot export/import (T15b): deterministic sections for threads and
+    // kernel objects. Export fails when unserializable host state is live
+    // (Host/Audio waits, pending interrupts, guest calls, active interrupt).
+    // Import is fail-closed: on error the kernel is untouched.
+    [[nodiscard]] bool export_snapshot_kernel(
+        std::vector<std::vector<std::uint8_t>> &sections_out, std::string &error) const;
+    bool import_snapshot_kernel(
+        const std::map<std::uint32_t, std::vector<std::uint8_t>> &sections, std::string &error);
+    // Restores the virtual clock from a snapshot CLOCK section (absolute
+    // deadlines elsewhere stay valid). Resyncs pacing like after a pause.
+    void restore_clock(
+        std::uint64_t now_us, std::uint64_t next_vblank_us, std::uint64_t vblank_count) noexcept;
 
     // Periodic hook from the runtime's starvation boundary.
     void on_starvation(AllegrexContext &ctx);

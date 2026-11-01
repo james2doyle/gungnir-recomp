@@ -14,7 +14,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace gungnir::hle {
 
@@ -48,5 +50,11 @@ SceUID add_module(Runtime &runtime, std::string name, std::uint32_t base, std::u
 [[nodiscard]] std::size_t module_count();
 
 void register_modulemgr(HleRegistrar &hle);
+
+// Snapshot export/import for the module registry (T15c). Only metadata is
+// saved; corpus installers are host closures that are re-established by the
+// boot path, so imported records carry none.
+[[nodiscard]] bool export_snapshot_modules(std::vector<std::uint8_t> &bytes_out, std::string &error);
+bool import_snapshot_modules(std::span<const std::uint8_t> bytes, std::string &error);
 
 } // namespace gungnir::hle

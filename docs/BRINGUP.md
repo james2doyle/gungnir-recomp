@@ -1179,3 +1179,162 @@ audio channel state at the stall, instead of replaying ten minutes per attempt.
 **Harness caveat.** See the pacing note above: the earlier "super slow" battle
 movie was measured while the driver polled `logcat`/`dumpsys` every two
 seconds; the same build played it smoothly in a quieter run.
+
+## 2026-11-01 — T15d: snapshot surfaces (host CLI + Android menu) land
+
+**Implemented (VERIFIED on host unit tests, real-corpus evidence pending in
+T15d acceptance).** `GameSession::save_snapshot/load_snapshot/request_resume`
+(`runtime/session/game_session.*`): corpus hash binds the guest ELF plus a
+toolchain tag, config hash binds `load_base` + `boot_path`; save flushes the
+live CPU into the current thread; load restores RAM/VRAM/CPU/clock/kernel/HLE,
+resets the mixer sink (logged `mixer_reset`), and `run()` resumes from the
+restored PC (idle stub when no thread is current). A failed load poisons the
+session (`session_load_failed` on the next `run()`); byte-level rejections
+leave it untouched.
+
+`boot_runner --snapshot-out/--snapshot-in` (save after the run, load before
+it; `CountingSink::reset` so post-restore audio stats are clean). Android:
+Save/Load rows in the Menu overlay (`SettingsOverlayView`) through
+`nativeSaveSnapshot/nativeLoadSnapshot` into
+`getExternalFilesDir()/snapshots/snapshot.gsnap`, stop+join+save/resume or
+stop+join+load+restart under `g_snapshot_mutex`, plus a `snapshot_in` intent
+extra. `AudioSink::reset()` (default no-op; `MixerSink` overrides) is the
+named mixer reset point. Format, tag table (23 sections), failure list and
+the adb flow are in `docs/SNAPSHOT.md`.
+
+**Incidental fix (VERIFIED by red test + real-game `test_boot` green).**
+The blocking-audio HLE wrapper finished with the enqueue result even after
+parking: on a same-thread park+resume with no other-thread switch the wake
+result in v0 was clobbered with 0. It now skips the finish when the enqueue
+parked (0 return = parked, wake owns v0).
+
+## 2026-11-01 — T15d evidence: restore-vs-continuous divergence (HYPOTHESIS)
+
+**Status: not proven.** Save/load round trips cleanly at the first battle
+(ADVANCE pad script, 1.5M dispatches, 35.9 MB snapshot) and restored runs
+complete cleanly with valid thread/waiter structure and the same audio
+deadlines. Restore is deterministic across independent restores; fresh runs
+are deterministic across boots. But restored runs diverge slightly from
+continuous runs: identical flips/vblanks, ~2 ms virtual gap, shifted
+scheduler phase, a few hundred scattered bytes growing with window
+(30 B at N=1 → ~330 B at 200k dispatches; N=1 boundary exact for live state).
+
+**Falsified:** host wall-clock nondeterminism (fresh runs minutes apart
+agree; independent restores of one file agree), pad-observer asymmetry
+(restore with pads == restore without), dispatch-count misalignment
+(rechecked with aligned totals), mid-unit stop (loop stops on exact outer-
+dispatch boundaries; N=1 matches).
+
+**Leading hypothesis (unproven):** a guest-visible host timestamp cell
+(3–4 bytes just past `image_end`, plus two 37 B heap records) is read by
+guest code early post-resume; restored runs start with a stale cell and take
+a suspend-age-like branch. Consistent with everything, including C-vs-D
+agreement. Next: identify the reader (candidate: savedata/ATRAC streaming
+timeout logic) or run a tight save→restore loop with a fresh cell.
+
+Per project rules this stays HYPOTHESIS until T15e manual QA signs off;
+nothing about the feature counts as proven before then.
+
+## 2026-11-01 — T15d divergence root-caused: guest wall-clock base not snapshotted (FIXED)
+
+**Symptom.** Restored runs diverged slightly from continuous runs: same flips
+and vblanks, ~2 ms virtual gap, shifted scheduler phase, a few hundred
+scattered bytes growing with window (30 B at N=1 → ~330 B at 200k dispatches).
+
+**Root cause (VERIFIED).** The differing 8-byte cell just past `image_end`
+decoded as two Unix-microsecond timestamps minutes apart — the exact wall
+times of the two runs. Source: `guest_unix_us() = boot_unix_us() +
+kernel().now_us()`, where `boot_unix_us()` was a per-process static. Fresh
+runs agree behaviorally (same boot base within a run; only stored tick values
+differ), but a restore in a new process mixes pre-save ticks (old base) with
+post-restore ticks (new base): the guest sees a minutes-scale time jump and
+branches differently. N=1 boundary was exact because the single dispatch had
+not yet read the clock.
+
+**Fix (VERIFIED by red-first tests + mutation checks).** `ClockState` gains
+`wall_base_us`, the clock section grows 24 → 32 B (24 B legacy files still
+load and keep the current base), `GameSession::save_snapshot` stores
+`hle::wall_base_us()` and `load_snapshot` restores it. Mirrors PPSSPP's
+`rtcBaseTime`/`rtcBaseTicks` + `__RtcDoState` (`Core/HLE/sceRtc.cpp`:
+"a base time that everything is relative to ... so time doesn't move
+strangely with savestates"), behavioral reference only — see
+docs/SOURCE_PROVENANCE.md. Real-corpus restore-vs-continuous equivalence
+re-run is the remaining T15d evidence.
+
+## 2026-11-01 — T15d divergence root cause #2: starvation-boundary phase (FIXED)
+
+**Follow-up to the wall-base fix.** Preserving `wall_base_us` kept guest
+ticks continuous (verified: identical base across restore, virtual time
+advancing) but the restore-vs-continuous gap persisted with the same
+signature (same flips/vblanks, ~2 ms virtual gap, shifted scheduler phase).
+
+**Root cause (VERIFIED by code inspection + pending real-corpus equivalence).**
+Preemption boundaries fire in `Runtime::account_dispatch_work` every
+`GUNGNIR_STARVATION_INTERVAL` (20,000) dispatches via
+`dispatches_since_import_`, which lives in Runtime and was never
+snapshotted. A fresh process restarts the counter at 0 while the continuous
+run holds phase `c`, so every future boundary — and the thread interleaving
+each boundary selects — shifts by `c` dispatches and never reconverges
+(excess is preserved modulo the interval). Fits all evidence: N=1 exact (no
+boundary crossed in one dispatch), onset within the first 50k window,
+vblank/flip-driven state identical, thread phase shifted.
+
+**Fix (red-first + mutation-checked).** Yakumo local patch #8
+(`runtime.hpp`: `dispatch_phase()`/`set_dispatch_phase()`, no behavior
+change, recorded in `third_party/yakumo/PROVENANCE.md`); `ClockState` gains
+`dispatch_phase`, clock section 40 B (24/32 B legacy files still load and
+default absent fields to 0, matching old behavior); save stores
+`runtime->dispatch_phase()`, load restores it. `g_runtime_thread_uid` needs
+no snapshot: match/mismatch outcomes of the execution-context check are
+identical with a stale uid because the hook updates the global before the
+comparison in both runs.
+
+## 2026-11-01 — T15d equivalence proven (real corpus, first battle)
+
+**Result: PROVEN on host.** With both fixes (wall base + dispatch phase),
+restore-vs-continuous is behaviorally identical and restores are deterministic:
+
+- `battleP1.gsnap` (fresh 1.5M, ADVANCE pad script, 35.9 MB, 32→40 B clock)
+  → restore + 200k (`battleP2.gsnap`) vs fresh 1.7M continuous
+  (`battleC2.gsnap`): `dispatches` differ only by construction (200k vs
+  1.7M); `vblanks` 23702/23702, `virtual_us` 395422239/395422239, `flips`
+  7915/7915, `stop_pc` 0x0883AAC0 both, full thread table (incl. audio/delay
+  deadlines) identical.
+- Two independent restores of `battleP1.gsnap` in different host processes
+  (`battleP2` vs `battleP2b`): **byte-identical files**, identical reports.
+- Residual P2-vs-C2 delta is 44/35850059 bytes in 8 clusters, every one
+  attributed to absolute host-boot-base storage, behaviorally inert:
+  the stored `wall_base_us` itself; guest RAM tick copies (tick−base equal:
+  heap tick−base 395387100 both); a guest `ScePspDateTime`-shaped heap struct
+  (seconds 40/34 = base%60 exactly, minutes 30/31 likewise, month 11,
+  year 2026); a parked thread's saved tick register (base-consistent deltas
+  within each run); two single GE-state bytes; trailing hash. Fresh-vs-fresh
+  shows the same signature (earlier C-vs-D: 40 B, reports identical), so
+  restore-vs-continuous now matches fresh-vs-fresh in kind.
+- Legacy 24 B battle snapshot loads clean on the new binary and re-saves as
+  40 B (+8 wall base, +8 phase across the two format steps).
+
+Unit gates: `snapshot_tests` (wall continuity across simulated restart,
+phase round trip, 24 B legacy fallback — each mutation-checked),
+`snapshot_kernel_tests`, `snapshot_hle_tests`, `test_snapshot_surfaces`,
+full python suite, `repository_check` — all green. Per project rules the
+feature still counts as proven only after T15e manual device QA.
+
+## 2026-11-01 — T15e manual device QA sign-off (VERIFIED)
+
+**Status: proven on device.** `docs/qa/2026-11-01-t15e-snapshot.md` records
+the full matrix (M2102K1AC, Android 14, lahaina/Adreno, build
+`4a84003-dirty`, APK sha `26dc3ed…0aab9`). Scripted flow
+(`scripts/android/qa-snapshot.sh`, EXIT=0): adb push of the host battle
+snapshot (md5-verified on device), intent load (`snapshot_loaded`,
+resume at `0x08805DEC`, frames flowing), 60 s restored play (battle stall,
+then the game's own idle return to title — no faults, frames keep flowing),
+Menu save (`snapshot_saved` + toast, session resumes), Menu load (post-load
+frame md5-identical across menu load and both cold boots), 3× cold-boot
+restores, corrupt file → `snapshot_truncated` named error with the session
+stopped. No crashes (only script force-stops in exit-info).
+
+**Incidental fix (device-verified):** the Menu panel overflowed short
+landscape screens leaving Save/Load/Close unlaid-out and unreachable;
+`SettingsOverlayView` now scrolls. This is the class of bug host tests
+cannot catch — the T15e gate doing its job.

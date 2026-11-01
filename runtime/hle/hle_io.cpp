@@ -713,4 +713,206 @@ void register_io(
     });
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot export/import (T15c). Descriptors are reopened against the live
+// disc image and memory-stick directory; sizes must still agree for disc
+// entries and positions must remain valid.
+
+namespace {
+
+void ioput_u32(std::vector<std::uint8_t> &out, std::uint32_t value) {
+    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 8u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 16u) & 0xFFu));
+    out.push_back(static_cast<std::uint8_t>((value >> 24u) & 0xFFu));
+}
+
+void ioput_u64(std::vector<std::uint8_t> &out, std::uint64_t value) {
+    for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::uint8_t>((value >> (i * 8)) & 0xFFu));
+}
+
+void ioput_str(std::vector<std::uint8_t> &out, const std::string &text) {
+    ioput_u32(out, static_cast<std::uint32_t>(text.size()));
+    out.insert(out.end(), text.begin(), text.end());
+}
+
+struct IReader {
+    const std::uint8_t *p{};
+    std::size_t left{};
+    bool ok{true};
+
+    [[nodiscard]] std::uint32_t u32() {
+        if (left < 4u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint32_t v = static_cast<std::uint32_t>(p[0]) | (static_cast<std::uint32_t>(p[1]) << 8u) |
+            (static_cast<std::uint32_t>(p[2]) << 16u) | (static_cast<std::uint32_t>(p[3]) << 24u);
+        p += 4;
+        left -= 4;
+        return v;
+    }
+
+    [[nodiscard]] std::uint64_t u64() {
+        if (left < 8u) {
+            ok = false;
+            return 0u;
+        }
+        std::uint64_t v = 0u;
+        for (int i = 0; i < 8; ++i) v |= static_cast<std::uint64_t>(p[i]) << (i * 8);
+        p += 8;
+        left -= 8;
+        return v;
+    }
+
+    [[nodiscard]] std::uint8_t u8() {
+        if (left < 1u) {
+            ok = false;
+            return 0u;
+        }
+        const std::uint8_t v = *p;
+        ++p;
+        --left;
+        return v;
+    }
+
+    [[nodiscard]] std::string str() {
+        const std::uint32_t len = u32();
+        if (!ok || left < len || len > 1024u) {
+            ok = false;
+            return {};
+        }
+        std::string text(reinterpret_cast<const char *>(p), len);
+        p += len;
+        left -= len;
+        return text;
+    }
+};
+
+} // namespace
+
+bool export_snapshot_io(std::vector<std::uint8_t> &bytes_out, std::string &error) {
+    bytes_out.clear();
+    ioput_u32(bytes_out, io().next_fd);
+    ioput_u32(bytes_out, static_cast<std::uint32_t>(io().files.size()));
+    for (const auto &[fd, file] : io().files) {
+        ioput_u32(bytes_out, fd);
+        ioput_u32(bytes_out, static_cast<std::uint32_t>(file.kind));
+        ioput_str(bytes_out, file.path);
+        ioput_u64(bytes_out, file.disc_offset);
+        ioput_u64(bytes_out, file.size);
+        ioput_u64(bytes_out, file.position);
+        bytes_out.push_back(file.async_active ? 1u : 0u);
+        bytes_out.push_back(file.async_complete ? 1u : 0u);
+        bytes_out.push_back(file.async_close ? 1u : 0u);
+        ioput_u64(bytes_out, static_cast<std::uint64_t>(file.async_result));
+    }
+    error.clear();
+    return true;
+}
+
+bool import_snapshot_io(std::span<const std::uint8_t> bytes, std::string &error) {
+    IReader in{bytes.data(), bytes.size()};
+    const std::uint32_t next_fd = in.u32();
+    const std::uint32_t count = in.u32();
+    if (!in.ok || count > 256u || next_fd < 3u) {
+        error = "snapshot_truncated: io header malformed";
+        return false;
+    }
+    std::map<std::uint32_t, OpenFile> staged;
+    std::uint32_t max_fd = 2u;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const std::uint32_t fd = in.u32();
+        const std::uint32_t kind = in.u32();
+        std::string path = in.str();
+        const std::uint64_t disc_offset = in.u64();
+        const std::uint64_t size = in.u64();
+        const std::uint64_t position = in.u64();
+        const std::uint8_t async_active = in.u8();
+        const std::uint8_t async_complete = in.u8();
+        const std::uint8_t async_close = in.u8();
+        const std::int64_t async_result = static_cast<std::int64_t>(in.u64());
+        if (!in.ok || fd < 3u || kind > 3u || async_active > 1u || async_complete > 1u || async_close > 1u) {
+            error = "snapshot_bad_length: io entry malformed";
+            return false;
+        }
+        if (staged.count(fd) != 0u) {
+            error = "snapshot_duplicate_uid: duplicate fd=" + std::to_string(fd);
+            return false;
+        }
+        max_fd = std::max(max_fd, fd);
+        OpenFile file;
+        file.path = path;
+        file.kind = static_cast<OpenFile::Kind>(kind);
+        file.disc_offset = disc_offset;
+        file.size = size;
+        file.position = position;
+        file.async_active = async_active != 0u;
+        file.async_complete = async_complete != 0u;
+        file.async_close = async_close != 0u;
+        file.async_result = async_result;
+        if (file.kind == OpenFile::Kind::Disc) {
+            OpenFile reopened;
+            if (prepare_open(path, 0u, reopened) < 0) {
+                error = "snapshot_open_failed: disc path no longer resolves: " + path;
+                return false;
+            }
+            if (reopened.size != size) {
+                error = "snapshot_bad_config: disc entry size changed: " + path;
+                return false;
+            }
+            file.disc_offset = reopened.disc_offset;
+            if (position > size) {
+                error = "snapshot_bad_length: disc position past end: " + path;
+                return false;
+            }
+        } else if (file.kind == OpenFile::Kind::Host) {
+            OpenFile reopened;
+            if (prepare_open(path, kOpenWrite, reopened) < 0 || reopened.host == nullptr) {
+                error = "snapshot_open_failed: host path no longer resolves: " + path;
+                return false;
+            }
+            std::error_code ec;
+            const std::uint64_t current =
+                std::filesystem::exists(host_path(split_path(path).path), ec)
+                ? std::filesystem::file_size(host_path(split_path(path).path), ec)
+                : 0u;
+            if (position > current) {
+                error = "snapshot_bad_length: host position past end: " + path;
+                return false;
+            }
+            file.host = std::move(reopened.host);
+            file.size = current;
+        } else if (file.kind == OpenFile::Kind::Directory) {
+            const SplitPath split = split_path(path);
+            bool exists = false;
+            if (split.device == Device::Disc && io().disc) {
+                const auto entry = io().disc->find(split.path);
+                exists = split.path.empty() || (entry && entry->directory);
+            } else if (split.device == Device::MemoryStick) {
+                std::error_code ec;
+                exists = std::filesystem::is_directory(host_path(split.path), ec);
+            }
+            if (!exists) {
+                error = "snapshot_open_failed: directory no longer resolves: " + path;
+                return false;
+            }
+        }
+        staged.emplace(fd, std::move(file));
+    }
+    if (!in.ok || in.left != 0u) {
+        error = "snapshot_truncated: trailing bytes in io section";
+        return false;
+    }
+    if (next_fd <= max_fd) {
+        error = "snapshot_duplicate_uid: next fd reuses live fd";
+        return false;
+    }
+    io().files.clear();
+    for (auto &[fd, file] : staged) io().files.emplace(fd, std::move(file));
+    io().next_fd = next_fd;
+    error.clear();
+    return true;
+}
+
 } // namespace gungnir::hle

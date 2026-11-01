@@ -13,6 +13,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace gungnir::hle {
@@ -48,5 +50,16 @@ void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &
 [[nodiscard]] std::uint64_t ge_gap_count();
 
 void register_media(HleRegistrar &hle);
+
+// Snapshot export/import (T15c). Saves display state, GE callbacks/lists
+// (list runners are rebuilt from guest RAM on import), the GE state machine
+// registers, input-latch state and frame counters. Completed draws awaiting
+// presentation are derived: export fails with snapshot_busy when any are
+// pending (flush GPU drawing before saving). Texture caches and gap-log
+// dedup are dropped on import; sinks and observers are preserved. Import is
+// fail-closed and needs the running Runtime to rebuild list runners.
+[[nodiscard]] bool export_snapshot_media(std::vector<std::uint8_t> &bytes_out, std::string &error);
+bool import_snapshot_media(
+    std::span<const std::uint8_t> bytes, psprecomp::Runtime &runtime, std::string &error);
 
 } // namespace gungnir::hle

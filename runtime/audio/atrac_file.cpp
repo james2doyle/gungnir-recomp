@@ -129,6 +129,11 @@ const AtracTrackInfo &AtracTrack::info() const noexcept {
     return impl_->info;
 }
 
+std::span<const std::uint8_t> AtracTrack::file_bytes() const noexcept {
+    if (!impl_) return {};
+    return std::span<const std::uint8_t>(impl_->file.data(), impl_->file.size());
+}
+
 std::uint32_t AtracTrack::frames() const noexcept {
     return impl_->info.frames();
 }

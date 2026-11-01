@@ -21,13 +21,17 @@ namespace gungnir::hle {
 namespace {
 
 // Epoch the virtual PSP clock starts at, so guest wall time advances with it.
-std::uint64_t boot_unix_us() {
-    static const std::uint64_t value = [] {
-        return static_cast<std::uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch())
-                .count());
-    }();
+// Settable so snapshots can restore it: a restore in a new host process must
+// keep the saved base, or every guest tick shifts by the inter-process gap.
+std::uint64_t &wall_base_storage() {
+    static std::uint64_t value = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
     return value;
+}
+
+std::uint64_t boot_unix_us() {
+    return wall_base_storage();
 }
 
 std::uint64_t guest_unix_us() {
@@ -192,6 +196,14 @@ void register_system(HleRegistrar &hle) {
     register_interrupts(hle);
     register_platform(hle);
     register_utility(hle);
+}
+
+std::uint64_t wall_base_us() {
+    return wall_base_storage();
+}
+
+void set_wall_base_us(std::uint64_t base_us) {
+    wall_base_storage() = base_us;
 }
 
 } // namespace gungnir::hle

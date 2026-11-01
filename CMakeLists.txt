@@ -82,6 +82,7 @@ add_library(gungnir_hle STATIC
     runtime/session/game_session.cpp
     runtime/session/diagnostics.cpp
     runtime/session/session_report.cpp
+    runtime/session/snapshot.cpp
     runtime/session/corpus_present.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
 target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge gungnir_input atrac3p)
@@ -114,6 +115,23 @@ set_target_properties(savedata_tests PROPERTIES
 add_executable(session_report_tests tests/session/session_report_tests.cpp)
 target_link_libraries(session_report_tests PRIVATE gungnir_hle)
 set_target_properties(session_report_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
+add_executable(snapshot_tests tests/session/snapshot_tests.cpp)
+target_link_libraries(snapshot_tests PRIVATE gungnir_hle)
+set_target_properties(snapshot_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
+add_executable(snapshot_kernel_tests tests/session/snapshot_kernel_tests.cpp)
+target_link_libraries(snapshot_kernel_tests PRIVATE gungnir_hle)
+set_target_properties(snapshot_kernel_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
+add_executable(snapshot_hle_tests tests/session/snapshot_hle_tests.cpp)
+target_link_libraries(snapshot_hle_tests PRIVATE gungnir_hle)
+target_compile_definitions(snapshot_hle_tests PRIVATE
+    GUNGNIR_SNAPSHOT_NIDS_CSV="${CMAKE_SOURCE_DIR}/configs/nids.csv")
+set_target_properties(snapshot_hle_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
 
 # --- GE command stream (T7a) ----------------------------------------------

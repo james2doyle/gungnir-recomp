@@ -37,6 +37,12 @@ public:
         return true;
     }
 
+    void reset() override {
+        buffers = 0u;
+        frames = 0u;
+        peak = 0;
+    }
+
     std::uint64_t buffers{};
     std::uint64_t frames{};
     int peak{};
@@ -88,6 +94,7 @@ bool parse_pad_press(const std::string &text, PadPress &press) {
                  "                   [--wall-seconds N] [--stall-seconds N] [--boot-path TEXT]\n"
                  "                   [--trace-out FILE] [--frame-json FILE] [--frame-at N] [--frame-ppm FILE]\n"
                  "                   [--texture-ppm FILE] [--draw-only N]\n"
+                 "                   [--snapshot-out FILE] [--snapshot-in FILE]\n"
                  "                   [--no-stop-at-flip]\n";
     std::exit(2);
 }
@@ -104,6 +111,8 @@ int main(int argc, char **argv) {
     std::string frame_path;
     std::string ppm_path;
     std::string texture_path;
+    std::string snapshot_out;
+    std::string snapshot_in;
     std::size_t draw_only = std::numeric_limits<std::size_t>::max();
     std::uint64_t frame_at = 60u;
     std::vector<PadPress> pad_presses;
@@ -128,6 +137,8 @@ int main(int argc, char **argv) {
         else if (arg == "--frame-ppm") ppm_path = next("--frame-ppm");
         else if (arg == "--texture-ppm") texture_path = next("--texture-ppm");
         else if (arg == "--draw-only") draw_only = std::stoull(next("--draw-only"));
+        else if (arg == "--snapshot-out") snapshot_out = next("--snapshot-out");
+        else if (arg == "--snapshot-in") snapshot_in = next("--snapshot-in");
         else if (arg == "--pad-press") {
             PadPress press;
             if (!parse_pad_press(next("--pad-press"), press)) usage("bad --pad-press");
@@ -166,8 +177,16 @@ int main(int argc, char **argv) {
                 if (gungnir::hle::ge_frame_count() == frame_at && !draws.empty()) first_frame = draws;
             });
         }
+        if (!snapshot_in.empty() && !session.load_snapshot(snapshot_in, error)) {
+            std::cerr << "boot_runner: " << error << "\n";
+            return 1;
+        }
         session.run();
         session.runtime().report_hle_histogram(25u);
+        if (!snapshot_out.empty() && !session.save_snapshot(snapshot_out, error)) {
+            std::cerr << "boot_runner: " << error << "\n";
+            return 1;
+        }
 
         const gungnir::session::Result &result = session.result();
         if (!result.error.empty()) {

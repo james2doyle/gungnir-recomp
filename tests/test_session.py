@@ -48,6 +48,7 @@ class TestAndroidRuntimeWiring(unittest.TestCase):
             "runtime/session/game_session.cpp",
             "runtime/session/diagnostics.cpp",
             "runtime/session/session_report.cpp",
+            "runtime/session/snapshot.cpp",
             "runtime/hle/hle_common.cpp",
             "runtime/hle/kernel.cpp",
             "runtime/hle/hle_io.cpp",

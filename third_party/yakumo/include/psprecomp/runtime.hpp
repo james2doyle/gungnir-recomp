@@ -249,6 +249,12 @@ public:
     void register_generated_unit(std::uint32_t unit_index, std::uint32_t unit_address, std::uint32_t unit_span,
         RecompiledFunction function, RecompiledEntryFunction entry_function = nullptr);
     [[nodiscard]] std::uint64_t dispatch_work_count() const noexcept { return dispatch_work_count_; }
+    // Starvation-boundary phase (T15d local patch): boundaries fire every
+    // starvation interval dispatches, so the phase selects all future thread
+    // interleavings. Snapshotted by the host so a restore keeps the same
+    // boundary schedule as the continuous run.
+    [[nodiscard]] std::uint64_t dispatch_phase() const noexcept { return dispatches_since_import_; }
+    void set_dispatch_phase(std::uint64_t phase) noexcept { dispatches_since_import_ = phase; }
 
     AllegrexContext &cpu() noexcept;
     const AllegrexContext &cpu() const noexcept;

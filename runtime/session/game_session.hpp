@@ -53,13 +53,29 @@ public:
     // Loads the ELF, registers the generated corpus and the HLE boot set, and
     // arms the bounds. Returns false with a named error; nothing runs.
     bool start(const Config &config, gungnir::audio::AudioSink *sink, std::string &error);
-
     // Blocking. Call from a worker thread on Android. A stop request is
-    // observed by the runtime heartbeat on the guest thread.
+    // observed by the runtime heartbeat on the guest thread. Starts at the
+    // loader entry, or resumes from a loaded snapshot when one is pending.
     void run();
 
     void request_stop();
     void shutdown();
+
+    // Host save states (T15d). Save requires a started session and flushes
+    // the live CPU into the current thread first; quiesce violations fail
+    // with named snapshot errors. Load replaces RAM/VRAM/CPU/clock/kernel/HLE
+    // state, resets the mixer sink, and arms run() to resume from the
+    // restored point. Both are fail-closed with a named error.
+    bool save_snapshot(const std::filesystem::path &path, std::string &error);
+    bool load_snapshot(const std::filesystem::path &path, std::string &error);
+    // Continues a stopped session from its live CPU without loading: used
+    // after a stop+save cycle to keep playing from the same point.
+    void request_resume();
+    // System-restart equivalent: stops the worker (caller joins it first),
+    // then reboots the session from the ELF entry with the same config, as if
+    // the game returned to its title. Clears any pending resume point and any
+    // poisoned load state. Fail-closed with a named error.
+    bool restart_to_title(std::string &error);
 
     [[nodiscard]] const Result &result() const;
     [[nodiscard]] bool started() const;

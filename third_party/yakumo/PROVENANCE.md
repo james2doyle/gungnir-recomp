@@ -6,7 +6,7 @@
 | Commit | `b61852aef10870400320b96d92a14136ac17b051` |
 | License | MIT (repo root `LICENSE`, copied here verbatim) |
 | Imported | 2026-10-30 (framework core + tooling added with T4) |
-| Disposition | **byte-identical except seven recorded local patches** (see “Local patches”) |
+| Disposition | **byte-identical except eight recorded local patches** (see “Local patches”) |
 
 ## Files
 
@@ -168,3 +168,13 @@ Re-vendoring = copy the listed paths at a new pinned commit, re-run the
 game-content audit (grep for title/serial/address constants), diff against
 this tree, update the commit row above, and record the delta in the
 importing task's notes.
+
+8. `include/psprecomp/runtime.hpp` — **starvation-phase accessors**
+   (`dispatch_phase()` / `set_dispatch_phase()` over the existing
+   `dispatches_since_import_` counter, no behavior change). The host
+   save-state needs the preemption-boundary phase: boundaries fire every
+   starvation-interval dispatches, so the phase selects all future thread
+   interleavings and must be snapshotted for a restore to match the
+   continuous run. Regression: `snapshot_tests` phased round trip +
+   `snapshot_hle_tests` (unchanged); real-corpus restore-vs-continuous
+   equivalence at the first battle.

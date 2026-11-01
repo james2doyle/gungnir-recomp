@@ -26,6 +26,9 @@ public:
     // Returns false when the backend cannot accept the buffer. The caller
     // stops with a named error rather than pretending it played.
     virtual bool submit(const AudioBuffer &buffer) = 0;
+    // Drops buffered-but-unplayed state. Snapshot load calls this (logged as
+    // a named mixer reset) because the mixer timeline is derived, not saved.
+    virtual void reset() {}
 };
 
 void set_audio_sink(AudioSink *sink);

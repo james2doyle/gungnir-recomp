@@ -634,4 +634,29 @@ std::string format_trace(const DisplayList &list) {
     return format_trace(list.trace());
 }
 
+std::vector<std::pair<std::uint32_t, std::uint32_t>> DisplayList::call_stack() const {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> out;
+    out.reserve(call_stack_.size());
+    for (const CallFrame &frame : call_stack_) out.emplace_back(frame.return_pc, frame.offset);
+    return out;
+}
+
+void DisplayList::restore_execution(std::uint32_t pc, std::uint32_t stall, std::uint32_t base,
+    std::uint32_t offset, const std::vector<std::pair<std::uint32_t, std::uint32_t>> &calls,
+    std::uint64_t executed, bool done) {
+    pc_ = pc & 0x0FFFFFFFu;
+    stall_ = stall & 0x0FFFFFFFu;
+    base_ = base;
+    offset_ = offset;
+    error_word_ = 0u;
+    call_stack_.clear();
+    for (const auto &[return_pc, call_offset] : calls)
+        call_stack_.push_back(CallFrame{return_pc & 0x0FFFFFFFu, call_offset});
+    trace_.clear();
+    executed_ = executed;
+    status_ = done ? RunStatus::Completed : RunStatus::Stalled;
+    done_ = done;
+    bounding_box_visible_ = true;
+}
+
 } // namespace gungnir::ge
