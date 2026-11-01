@@ -28,6 +28,10 @@ public final class SettingsOverlayView extends FrameLayout {
     private final LinearLayout panel;
     private final TextView layoutRow;
     private final TextView statusRow;
+    private final java.util.List<TextView> navigationRows = new java.util.ArrayList<>();
+    private final java.util.List<Runnable> navigationActions = new java.util.ArrayList<>();
+    private final android.widget.ScrollView scroll;
+    private int selection;
 
     public SettingsOverlayView(Context context, Listener listener) {
         super(context);
@@ -48,7 +52,7 @@ public final class SettingsOverlayView extends FrameLayout {
         // The row list grows with every feature (now 8 rows); on short
         // landscape screens it overflows the panel and the bottom rows are
         // never laid out. A ScrollView keeps every row reachable (T15e).
-        android.widget.ScrollView scroll = new android.widget.ScrollView(context);
+        scroll = new android.widget.ScrollView(context);
         scroll.setFillViewport(true);
         FrameLayout.LayoutParams scrollParams = new FrameLayout.LayoutParams(
                 dp(380), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER);
@@ -97,6 +101,8 @@ public final class SettingsOverlayView extends FrameLayout {
         view.setFocusable(true);
         view.setOnClickListener(ignored -> action.run());
         panel.addView(view);
+        navigationRows.add(view);
+        navigationActions.add(action);
 
         View divider = new View(getContext());
         divider.setBackgroundColor(0x22FFFFFF);
@@ -118,6 +124,26 @@ public final class SettingsOverlayView extends FrameLayout {
 
     public void hide() {
         setVisibility(GONE);
+    }
+
+    public int rowCount() {
+        return navigationRows.size();
+    }
+
+    public void setSelection(int index) {
+        if (navigationRows.isEmpty()) return;
+        selection = Math.max(0, Math.min(index, navigationRows.size() - 1));
+        for (int i = 0; i < navigationRows.size(); ++i) {
+            navigationRows.get(i).setBackgroundColor(i == selection ? 0xFF333333 : 0x00000000);
+        }
+        final TextView row = navigationRows.get(selection);
+        row.requestRectangleOnScreen(
+                new android.graphics.Rect(0, 0, row.getWidth(), row.getHeight()), false);
+    }
+
+    public void activateSelection() {
+        if (selection < 0 || selection >= navigationActions.size()) return;
+        navigationActions.get(selection).run();
     }
 
     public void setStatus(String status) {

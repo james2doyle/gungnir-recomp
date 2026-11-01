@@ -158,6 +158,28 @@ vibrator or absent sink is a no-op.
 Gamepad rumble, `sceRumble` and battle haptics are not driven by T11; they
 remain T13/M5.
 
+## Menu navigation
+
+The settings overlay is operable from a paired pad (T11f). Back or Guide
+toggles it; d-pad up/down moves the highlighted row and South/Cross activates
+it through the same Listener path as a tap. The selection clamps at the first
+and last row (it does not wrap), so "Reset to title" and "Close" cannot be
+reached by overshooting.
+
+`runtime/input/menu_navigation.{hpp,cpp}` owns the state machine and is
+SDL/Java-free: SDL button-down edges in `sdl_gamepad.cpp` call `press()`, and
+the UI thread drains `take()` through `nativeMenuPoll()` on a frame callback
+while the activity is resumed. `nativeMenuBegin(row_count)` on show and
+`nativeMenuEnd()` on hide reset the selection to the first row. No native
+callback into Java is needed. The poll drains every queued press, so a fast
+d-pad roll is not thinned out.
+
+Back/Guide are reserved for the menu: they never reach the guest, so a profile
+that binds Select to either will not deliver Select. D-pad up/down and
+South/Cross are withheld from the guest while the overlay is open, and gameplay
+input returns as soon as it closes. This matches the touch overlay, which is
+also suppressed while the settings are open.
+
 ## Tests
 
 ```sh
@@ -166,6 +188,7 @@ python3 -m unittest tests.test_touch_overlay -v
 python3 -m unittest tests.test_touch_haptics -v
 python3 -m unittest tests.test_gamepad -v
 python3 -m unittest tests.test_sdl_gamepad -v
+python3 -m unittest tests.test_menu_navigation -v
 python3 -m unittest tests.test_input_suite -v
 ```
 
@@ -186,3 +209,10 @@ device remains the arm64 phone; see
   path; no-vibrator behavior is covered by the absent-sink host contract and
   `performHapticFeedback` returning false.
 - Gamepad rumble and battle haptics are T13/M5.
+- Menu navigation is one action per press: a held d-pad does not repeat.
+  Every queued press is applied on the next frame; the queue holds eight, so a
+  UI stall longer than about eight presses can still drop the oldest.
+- Back/Guide are the menu buttons and are never forwarded to the guest, so
+  Select cannot be bound to either in gameplay (the remap wizard still captures
+  them, because the wizard runs with the overlay closed). Binding Select to
+  another button works.

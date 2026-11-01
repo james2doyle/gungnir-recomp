@@ -34,12 +34,16 @@ import java.util.List;
 public final class GungnirActivity extends SDLActivity {
     private static final int PICK_GAME_DATA = 0x6771;
     private static final int PICK_DRIVER = 0x6772;
+    private static final int MENU_ACTION_TOGGLE = 1;
+    private static final int MENU_ACTION_MOVE = 2;
+    private static final int MENU_ACTION_ACTIVATE = 3;
 
     private Button settingsButton;
     private SettingsOverlayView settingsOverlay;
     private TouchOverlayView touchOverlay;
     private DriverStore driverStore;
     private boolean customDriversSupported;
+    private boolean menuPolling;
 
     private static native boolean nativeGameDataImported(String path);
 
@@ -56,6 +60,12 @@ public final class GungnirActivity extends SDLActivity {
     private static native String nativeLoadSnapshot(String path);
 
     private static native String nativeResetToTitle();
+
+    private static native void nativeMenuBegin(int rows);
+
+    private static native void nativeMenuEnd();
+
+    private static native int nativeMenuPoll();
 
     @Override
     protected String[] getLibraries() {
@@ -213,6 +223,8 @@ public final class GungnirActivity extends SDLActivity {
         }
         settingsButton.setVisibility(View.GONE);
         settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
+        settingsOverlay.setSelection(0);
+        nativeMenuBegin(settingsOverlay.rowCount());
     }
 
     private void closeSettings() {
@@ -220,12 +232,11 @@ public final class GungnirActivity extends SDLActivity {
         settingsOverlay.hide();
         if (touchOverlay != null) touchOverlay.setSuppressed(false);
         if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
+        nativeMenuEnd();
     }
 
     private void showGamepadDialog() {
-        if (settingsOverlay != null) settingsOverlay.hide();
-        if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
-        if (touchOverlay != null) touchOverlay.setSuppressed(false);
+        closeSettings();
         String info = GamepadBridge.info();
         if (info == null || info.startsWith("No gamepad")) {
             new AlertDialog.Builder(this)
@@ -329,7 +340,37 @@ public final class GungnirActivity extends SDLActivity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        menuPolling = true;
+        pollMenu();
+    }
+
+    private void pollMenu() {
+        if (!menuPolling) return;
+        // Drain everything this frame produced: one action per animation frame
+        // made a fast d-pad roll look like dropped presses.
+        while (menuPolling) {
+            final int packed = nativeMenuPoll();
+            if (packed == 0) break;
+            final int action = packed & 0xFF;
+            final int index = (packed >>> 8) & 0xFF;
+            if (action == MENU_ACTION_TOGGLE) {
+                if (settingsOverlay != null && settingsOverlay.isOpen()) closeSettings();
+                else showSettings();
+            } else if (action == MENU_ACTION_MOVE || action == MENU_ACTION_ACTIVATE) {
+                if (settingsOverlay != null && settingsOverlay.isOpen()) {
+                    settingsOverlay.setSelection(index);
+                    if (action == MENU_ACTION_ACTIVATE) settingsOverlay.activateSelection();
+                }
+            }
+        }
+        if (menuPolling) getWindow().getDecorView().postOnAnimation(this::pollMenu);
+    }
+
+    @Override
     protected void onPause() {
+        menuPolling = false;
         GamepadBridge.cancelRemap();
         if (touchOverlay != null) {
             touchOverlay.releaseAll();

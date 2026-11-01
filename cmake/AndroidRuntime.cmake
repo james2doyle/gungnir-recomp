@@ -142,6 +142,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/input/gamepad_state.cpp"
         "${ARG_ROOT}/runtime/input/input_state.cpp"
         "${ARG_ROOT}/runtime/input/keyboard_map.cpp"
+        "${ARG_ROOT}/runtime/input/menu_navigation.cpp"
         "${ARG_ROOT}/runtime/input/sdl_input.cpp"
         "${ARG_ROOT}/runtime/input/touch_haptics.cpp"
         "${ARG_ROOT}/runtime/input/touch_layout_store.cpp"

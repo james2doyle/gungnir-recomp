@@ -34,6 +34,7 @@ add_library(gungnir_input STATIC
     runtime/input/gamepad_state.cpp
     runtime/input/input_state.cpp
     runtime/input/keyboard_map.cpp
+    runtime/input/menu_navigation.cpp
     runtime/input/touch_haptics.cpp
     runtime/input/touch_layout_store.cpp
     runtime/input/touch_overlay.cpp)
@@ -58,6 +59,11 @@ set_target_properties(touch_haptics_tests PROPERTIES
 add_executable(gamepad_tests tests/input/gamepad_tests.cpp)
 target_link_libraries(gamepad_tests PRIVATE gungnir_input)
 set_target_properties(gamepad_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
+add_executable(menu_navigation_tests tests/input/menu_navigation_tests.cpp)
+target_link_libraries(menu_navigation_tests PRIVATE gungnir_input)
+set_target_properties(menu_navigation_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 
 # --- HLE runtime (T6) -------------------------------------------------------

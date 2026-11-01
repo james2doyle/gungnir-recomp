@@ -3,6 +3,7 @@
 #if defined(GUNGNIR_HAVE_SDL3)
 
 #include "input/input_state.hpp"
+#include "input/menu_navigation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,7 @@ static_assert(SDL_GAMEPAD_BUTTON_EAST == 1);
 static_assert(SDL_GAMEPAD_BUTTON_WEST == 2);
 static_assert(SDL_GAMEPAD_BUTTON_NORTH == 3);
 static_assert(SDL_GAMEPAD_BUTTON_BACK == 4);
+static_assert(SDL_GAMEPAD_BUTTON_GUIDE == 5);
 static_assert(SDL_GAMEPAD_BUTTON_START == 6);
 static_assert(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER == 9);
 static_assert(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER == 10);
@@ -30,6 +32,23 @@ std::string guid_string(SDL_JoystickID id) {
     char text[33]{};
     SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), text, sizeof(text));
     return text;
+}
+
+std::optional<gungnir::input::MenuButton> menu_button(Uint8 button) {
+    switch (button) {
+    case SDL_GAMEPAD_BUTTON_BACK:
+        return gungnir::input::MenuButton::Back;
+    case SDL_GAMEPAD_BUTTON_GUIDE:
+        return gungnir::input::MenuButton::Guide;
+    case SDL_GAMEPAD_BUTTON_DPAD_UP:
+        return gungnir::input::MenuButton::Up;
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN:
+        return gungnir::input::MenuButton::Down;
+    case SDL_GAMEPAD_BUTTON_SOUTH:
+        return gungnir::input::MenuButton::South;
+    default:
+        return std::nullopt;
+    }
 }
 
 } // namespace
@@ -53,6 +72,21 @@ bool SdlGamepad::handle_event(const SDL_Event &event) {
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
         if (pad_ == nullptr || event.gbutton.which != id_) return true;
+        if (!remap_.active()) {
+            if (const auto menu = menu_button(event.gbutton.button)) {
+                if (event.gbutton.down) gungnir::input::menu_navigation().press(*menu);
+                // Back/Guide are the menu button, and the other menu controls
+                // belong to the overlay while it is open. Keep them out of the
+                // guest so navigating the menu does not also play the game.
+                const bool toggle = *menu == gungnir::input::MenuButton::Back ||
+                    *menu == gungnir::input::MenuButton::Guide;
+                if (toggle || gungnir::input::menu_navigation().open()) {
+                    state_.button_up(event.gbutton.button);
+                    publish();
+                    return true;
+                }
+            }
+        }
         if (remap_.active()) {
             if (event.gbutton.down) remap_.button(event.gbutton.button);
         } else if (event.gbutton.down) {

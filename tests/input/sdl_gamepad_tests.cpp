@@ -2,6 +2,7 @@
 // axis/removed events, mapping through the profile, remap save and release.
 
 #include "input/input_state.hpp"
+#include "input/menu_navigation.hpp"
 #include "input/touch_overlay.hpp"
 #include "platform/sdl_gamepad.hpp"
 
@@ -93,6 +94,40 @@ void gamepad_contracts() {
     gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, false));
     check((gungnir::input::state().buttons() & gungnir::input::kCrossBit) == 0u,
           "release clears Cross");
+
+    auto &menu = gungnir::input::menu_navigation();
+    menu.end();
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_BACK, true));
+    const auto toggle = menu.take();
+    check(toggle && toggle->action == gungnir::input::MenuAction::Toggle,
+          "Back requests the overlay while closed");
+    check((gungnir::input::state().buttons() & gungnir::input::kSelectBit) == 0u,
+          "Back is reserved for the menu and does not press Select");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_BACK, false));
+
+    menu.begin(3);
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_DPAD_DOWN, true));
+    const auto move = menu.take();
+    check(move && move->action == gungnir::input::MenuAction::Move && move->index == 1,
+          "D-pad down moves the open selection");
+    check((gungnir::input::state().buttons() & gungnir::input::kDownBit) == 0u,
+          "the d-pad is withheld from the guest while the overlay is open");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_DPAD_DOWN, false));
+
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    const auto activate = menu.take();
+    check(activate && activate->action == gungnir::input::MenuAction::Activate &&
+              activate->index == 1,
+          "South activates the open selection");
+    check((gungnir::input::state().buttons() & gungnir::input::kCrossBit) == 0u,
+          "Cross is withheld from the guest while the overlay is open");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, false));
+    menu.end();
+
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    check((gungnir::input::state().buttons() & gungnir::input::kCrossBit) != 0u,
+          "gamepad control returns after the menu closes");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, false));
 
     gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_LEFTX, 16384));
     check(gungnir::input::state().analog().x > 0.4f, "left x reaches the state");

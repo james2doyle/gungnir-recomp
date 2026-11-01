@@ -10,6 +10,7 @@
 
 #include "audio/audio_mixer.hpp"
 #include "input/input_state.hpp"
+#include "input/menu_navigation.hpp"
 #include "input/sdl_input.hpp"
 #include "input/touch_haptics.hpp"
 #include "input/touch_layout_store.hpp"
@@ -606,6 +607,26 @@ Java_com_gungnir_recomp_input_TouchOverlayView_nativeResetLayout(JNIEnv *, jclas
     auto &overlay = gungnir::input::touch_overlay();
     overlay.reset_layout();
     overlay.publish();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeMenuBegin(JNIEnv *, jobject, jint rows) {
+    gungnir::input::menu_navigation().begin(static_cast<int>(rows));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeMenuEnd(JNIEnv *, jobject) {
+    gungnir::input::menu_navigation().end();
+}
+
+// Packed for the Java poll loop: action in the low byte, index in the next one.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_gungnir_recomp_GungnirActivity_nativeMenuPoll(JNIEnv *, jobject) {
+    const std::optional<gungnir::input::MenuEvent> event =
+        gungnir::input::menu_navigation().take();
+    if (!event) return 0;
+    GUNGNIR_LOGI("menu_action=%d index=%d\n", static_cast<int>(event->action), event->index);
+    return static_cast<jint>(event->action) | (static_cast<jint>(event->index) << 8);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

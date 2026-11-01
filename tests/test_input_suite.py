@@ -21,6 +21,7 @@ MODULES = (
     "tests.test_touch_haptics",
     "tests.test_gamepad",
     "tests.test_sdl_gamepad",
+    "tests.test_menu_navigation",
 )
 
 
