@@ -34,6 +34,7 @@ constexpr std::uint32_t kAllDataDecoded = 0x80630024u;
 constexpr std::uint32_t kRemainOnMemory = 0xFFFFFFFFu;
 constexpr std::size_t kMaxTracks = 6u;
 
+
 struct Slot {
     bool used{};
     std::uint32_t codec{};
@@ -365,6 +366,22 @@ void reset_play_position(AllegrexContext &ctx) {
     finish(ctx, 0u);
 }
 
+// The media engine decodes one frame before the call returns; the thread waits
+// for it, which is also what paces a decode loop. Timings are the PPSSPP
+// hardware fit for the same codec and frame size. The wait applies to every
+// decode attempt, including an empty buffer: the caller needs the scheduling
+// point or a high-priority decode loop starves the thread that refills it.
+std::uint32_t decode_time_us(const audio::AtracTrackInfo &info) {
+    const std::uint32_t bytes = info.block_align;
+    if (info.codec == audio::AtracCodec::Atrac3Plus)
+        return info.channels == 1 ? 1500u + bytes * 84u / 100u : 1815u + bytes * 158u / 100u;
+    return info.channels == 1 ? 685u : 970u + bytes * 44u / 100u;
+}
+
+void finish_decode(AllegrexContext &ctx, std::uint32_t result, const audio::AtracTrackInfo &info) {
+    kernel().delay_current(ctx, decode_time_us(info), result);
+}
+
 void decode_data(AllegrexContext &ctx) {
     Slot *target = slot(arg(ctx, 0));
     if (target == nullptr || target->track == nullptr) {
@@ -380,7 +397,7 @@ void decode_data(AllegrexContext &ctx) {
     };
     if (target->position > target->end_sample) {
         write(0u, true);
-        finish(ctx, kAllDataDecoded);
+        finish_decode(ctx, kAllDataDecoded, target->track->info());
         return;
     }
     const auto &info = target->track->info();
@@ -393,12 +410,12 @@ void decode_data(AllegrexContext &ctx) {
     const std::uint32_t frame_index = raw / frame_samples;
     if (frame_index >= target->track->frames()) {
         write(0u, true);
-        finish(ctx, kAllDataDecoded);
+        finish_decode(ctx, kAllDataDecoded, info);
         return;
     }
     if (frame_index >= info.available_frames()) {
         write(0u, false);
-        finish(ctx, kBufferEmpty);
+        finish_decode(ctx, kBufferEmpty, info);
         return;
     }
     const bool looping = target->has_loop && target->loops_left != 0 && target->position <= target->loop_end;
@@ -407,7 +424,7 @@ void decode_data(AllegrexContext &ctx) {
     std::vector<std::int16_t> pcm;
     std::string error;
     if (!target->track->decode_frame(frame_index, pcm, error)) {
-        finish(ctx, kUnknownFormat);
+        finish_decode(ctx, kUnknownFormat, info);
         return;
     }
     if (output != 0u) {
@@ -439,7 +456,7 @@ void decode_data(AllegrexContext &ctx) {
         if (target->loops_left > 0) --target->loops_left;
     }
     write(count, target->position > target->end_sample);
-    finish(ctx, 0u);
+    finish_decode(ctx, 0u, info);
 }
 
 void get_stream_data_info(AllegrexContext &ctx) {

@@ -645,3 +645,98 @@ PCM, fix the source, then re-check peak/underrun/xrun at the title and menu.
 **Regression.** `tests/ge/state_machine_tests.cpp`,
 `tests/ge/vulkan_tests.cpp`, `tests/hle/kernel_tests.cpp`,
 `tests/test_boot.py`; device evidence in the T13b task and the audio log.
+
+## 2026-11-01 — T13b: audio "garbled" and the 16 s device stop
+
+**Symptom.** The title music was choppy and pitch-wrong ("came through a bit,
+not unrecognizable"), and device sessions ended about 16 s after launch with
+`session_stop cause=guest_stop`, before the title. The mixer reported
+`peak=0` for those runs, which hid the cause: the game only starts its music
+channel around the 16 s mark.
+
+**Root cause.** `MixerSink` kept one FIFO for every `sceAudio` channel: a
+submitted buffer was appended behind the previous one instead of being summed.
+The title feeds two channels at once (channel 4 silent, channel 5 music) at
+44.1 kHz each, so the FIFO gained about 59 k frames per second. After roughly
+a second of overlap the ring filled and `submit()` returned false; the HLE
+turns that into `audio sink rejected a buffer` and stops the session. The
+serialized channels are audible as music alternating with silence — garbled
+but recognizable.
+
+**Fix.** `MixerSink` is now a timeline mixer: each channel owns a cursor, a
+submitted buffer is summed into a 32-bit ring at that cursor, and the device
+pull clamps once. Channels start 2048 frames (46 ms) ahead of the read
+cursor. A channel more than 64 frames behind restarts ahead of the device
+(`resyncs`), and a timeline that outgrows the ring restarts from empty
+(`overruns`); neither rejects the submission or stops the guest. `peak` now
+describes the mixed output. Volume, mono duplication and the final clamp are
+unchanged.
+
+**Evidence.** `tests/audio/mixer_tests.cpp` adds the two-channel sum, overflow
+restart and late-channel resync contracts. Against the HEAD (FIFO) mixer the
+new contract fails for exactly those two reasons (`two channels are summed`,
+`overflow does not reject the submission`); with the timeline mixer all four
+groups pass. Device run after the fix: no `audio sink rejected`, the session
+continues past the title, and `peak` is nonzero once music starts.
+
+**Counted gaps.** `underrun_frames` can now include silent timeline gaps
+(a zeroed ring entry is indistinguishable from written silence once the write
+head has passed it); the device's AAudio xrun count remains the authoritative
+stall signal.
+
+## 2026-11-01 — T13b: title stalls on descriptor-pool exhaustion
+
+**Symptom.** About 16 s after launch the screen froze on the last frame and
+the log filled with `render_failed: texture descriptor failed
+(-1000069000)` (`VK_ERROR_OUT_OF_POOL_MEMORY`) plus repeated
+`lifecycle_resumed`; the process was alive but could not draw again.
+
+**Root cause.** The GE backend created its texture descriptor pool with 64
+sets and without `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`, so the
+`vkFreeDescriptorSets` in `destroy_texture` was invalid usage and never
+returned capacity. The title uploads more than 63 distinct textures (plus the
+white fallback), and the first allocation past the limit failed.
+
+**Fix.** The pool now has 4096 sets and the free flag: destroyed textures
+return their sets. `ge_vulkan_tests.many_textures` uploads 96 distinct
+textures in one headless backend and renders with each. Against the old pool
+it fails at texture 63; with the fix the test passes.
+
+**Follow-up.** The render loop keeps trying to recreate the surface when a
+draw fails, so a persistent resource error freezes the picture without
+exiting. After three consecutive failures it should stop with the named error;
+this is logged for the next cleanup pass.
+
+## 2026-11-01 — T13b: title music stalled at the end of the first 128 KiB
+
+**Symptom.** With the mixer fixed the title music played, then the picture
+froze at about frame 420 while the session stayed alive. The session thread
+held 100% CPU; `[session] heartbeat` showed `SOUND thread(UMD)` (priority 16)
+running at `0x0883AAC0` and `user_main` (priority 32) merely ready. Dispatches
+ran at ~6 M/s while virtual time advanced only 0.6 s per 2 s.
+
+**Root cause.** `SOUND thread(UMD)` calls `sceAtracDecodeData` in a tight
+loop. Our handler returned immediately on both success and
+`SCE_ATRAC_BUFFER_IS_EMPTY`, so the priority-16 thread never yielded. The
+track was opened with `sceAtracSetData` and a 128 KiB buffer (`data_size`
+959016, `data_available` 130976 = 176 frames); after those frames the decode
+returned BUFFER_IS_EMPTY forever and starved the thread that would have fed
+more data. Real hardware spends media-engine time per decode attempt, which
+is the scheduling point.
+
+**Fix.** `sceAtracDecodeData` now waits for the media engine on every attempt,
+including an empty buffer: `1815 + bytes * 158 / 100` µs for stereo ATRAC3+
+and `970 + bytes * 44 / 100` for stereo ATRAC3 (the PPSSPP hardware fit).
+After the fix the thread table shows `user_main` running and all sound threads
+waiting on audio/delay, frames advance past the title, and the mixer reports
+increasing `peak` with no underruns after startup.
+
+**Regression.** `an empty decode still accounts for the media-engine frame
+time` (and the successful-decode variant) in `tests/hle/kernel_tests.cpp`;
+both fail when the delay is removed.
+
+**Next gap.** The title menu and difficulty screen work (`NEW GAME` ->
+`BASIC`/`ADVANCE`). Confirming a difficulty faults in guest code at
+`0x088FFF64` (`Guest memory access outside PSP RAM/EDRAM at 0x20`, a0=0): a
+getter at `0x088040A4` returns a null object and the caller dereferences
+`this+0x20`. That belongs to the new-game initialisation path.

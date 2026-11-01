@@ -383,6 +383,44 @@ void windowed_swapchain() {
 
 } // namespace
 
+void many_textures() {
+    std::string reason;
+    if (!VulkanBackend::available(reason)) {
+        std::cout << "SKIP: " << reason << "\n";
+        std::exit(77);
+    }
+    VulkanBackend backend;
+    VulkanBackend::Config config;
+    config.width = 32;
+    config.height = 32;
+    config.headless = true;
+    std::string error;
+    check(backend.initialize(config, error), error.c_str());
+
+    const Quad quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                 rgba8(255, 255, 255)},
+                                0.5f, true);
+    std::vector<TextureImage> images;
+    images.reserve(96u);
+    for (int i = 0; i < 96; ++i) {
+        TextureImage image;
+        image.width = 2;
+        image.height = 2;
+        image.pixels.assign(4u, rgba8(static_cast<std::uint32_t>(i * 2), 64, 128));
+        images.push_back(std::move(image));
+    }
+    VulkanFrame frame;
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        VulkanDrawState state;
+        state.texture = &images[i];
+        state.texture_key = 0x1000u + i;
+        const std::string contract = "the texture descriptor pool holds " +
+            std::to_string(images.size()) + " live textures (failed at " + std::to_string(i) + ")";
+        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error), contract.c_str());
+    }
+    backend.shutdown();
+}
+
 int main() {
     try {
         shader_validation();
@@ -390,6 +428,7 @@ int main() {
         scissor_scaling();
         headless_triangle();
         parity_tests();
+        many_textures();
 #if defined(GUNGNIR_HAVE_SDL3)
         windowed_swapchain();
 #endif

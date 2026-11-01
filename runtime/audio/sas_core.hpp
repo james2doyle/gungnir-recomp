@@ -24,6 +24,7 @@ struct SasVoice {
     std::uint32_t size{};
     bool looping{};
     bool pcm{}; // raw 16-bit PCM instead of VAG
+    bool noise{};
     std::uint32_t pitch{0x1000u};
     std::int32_t left{0x1000};
     std::int32_t right{0x1000};
@@ -82,6 +83,25 @@ public:
     void set_pitch(std::uint32_t voice, std::uint32_t pitch);
     void set_volume(std::uint32_t voice, std::int32_t left, std::int32_t right);
     void set_simple_adsr(std::uint32_t voice, std::uint32_t adsr1, std::uint32_t adsr2);
+    void set_adsr(std::uint32_t voice, std::uint32_t flag, std::int32_t attack, std::int32_t decay,
+        std::int32_t sustain, std::int32_t release);
+    void set_adsr_mode(std::uint32_t voice, std::uint32_t flag, std::int32_t attack, std::int32_t decay,
+        std::int32_t sustain, std::int32_t release);
+    void set_sustain_level(std::uint32_t voice, std::int32_t level);
+    void set_noise(std::uint32_t voice, std::int32_t frequency);
+    void set_reverb_type(std::int32_t type) noexcept { reverb_.type = type; }
+    void set_reverb_params(std::int32_t delay, std::int32_t feedback) noexcept {
+        reverb_.delay = delay;
+        reverb_.feedback = feedback;
+    }
+    void set_reverb_volume(std::int32_t left, std::int32_t right) noexcept {
+        reverb_.left = left;
+        reverb_.right = right;
+    }
+    void set_reverb_send(bool dry, bool wet) noexcept {
+        reverb_.dry = dry;
+        reverb_.wet = wet;
+    }
     void set_pause(std::uint32_t mask, bool paused);
     void key_on(std::uint32_t voice);
     void key_off(std::uint32_t voice);
@@ -97,9 +117,21 @@ private:
     void decode_block(const psprecomp::GuestMemory &memory, SasVoice &voice);
     void step_envelope(SasVoice &voice);
 
+    // Reverb is not modelled; the settings are kept so guest state round-trips.
+    struct ReverbState {
+        std::int32_t type{-1};
+        std::int32_t delay{};
+        std::int32_t feedback{};
+        std::int32_t left{0x1000};
+        std::int32_t right{0x1000};
+        bool dry{true};
+        bool wet{};
+    };
+
     std::uint32_t grain_{256u};
     std::uint32_t max_voices_{kSasMaxVoices};
     std::uint32_t output_mode_{};
+    ReverbState reverb_{};
     std::array<SasVoice, kSasMaxVoices> voices_{};
 };
 

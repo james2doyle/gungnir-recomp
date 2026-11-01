@@ -17,15 +17,26 @@ volume and virtual start time. The sink seam is `audio/audio_sink.hpp`; a
 missing sink stops the run with `no audio sink registered` rather than
 dropping PCM.
 
-`MixerSink` (T12a) turns submissions into one stereo 44.1 kHz ring:
+`MixerSink` (T12a, rewritten in T13b) mixes every channel onto one stereo
+44.1 kHz timeline:
 
-- volumes are `0..0x8000` per channel, applied with saturation;
-- mono buffers are duplicated with their left/right volumes;
+- every `sceAudio` channel keeps its own cursor; a submitted buffer is summed
+  into the timeline at that cursor, so concurrent channels overlap instead of
+  playing one after another;
+- volumes are `0..0x8000` per channel, applied per sample with saturation at
+  the final clamp;
+- mono buffers feed both sides with their left/right volumes;
+- the first buffer of a channel starts `lead_frames` (default 2048, 46 ms)
+  ahead of the device read cursor; a channel that falls more than 64 frames
+  behind restarts ahead of the device and increments `resyncs`;
 - `pull()` serves exactly the device request; missing input is silence and
   increments `underrun_frames`;
-- a full ring rejects the submission (`overruns`), it never drops audio
-  silently;
-- `reset()` clears the queue and counters.
+- a timeline that outgrows the ring restarts from empty and increments
+  `overruns`; it never rejects the submission, because pacing pressure is not
+  a bad buffer (a malformed buffer increments `rejected_buffers` and still
+  stops the run loudly);
+- `peak` is the largest magnitude actually sent to the device;
+- `reset()` clears the timeline and counters.
 
 The device layer asks for a fixed block (typically 256-1024 frames), so the
 underrun count is the real-time health signal for TC-12.2. The boot runner
@@ -38,9 +49,15 @@ stream through AAudio on Android.
 
 `runtime/audio/sas_core.*` is adapted from the MIT Yakumo core at the pinned
 commit. It implements 32 voices, VAG/ADPCM decode, pitch, ADSR envelopes and
-looping at 44.1 kHz. Reverb is not modelled: effect sends are accepted and
-ignored. `sceSasCore`/`sceSasCoreWithMix` render into a guest buffer; the
-game then submits that buffer through `sceAudio`.
+looping at 44.1 kHz. Both ADSR APIs are bound: the simple `ADSREnv1/2` form
+and the long `SetADSR`/`SetADSRmode`/`SetSL` form, with the PSP validation and
+error codes. The long rates are folded into the simple envelope encoding and
+curve modes select the linear/exponential steps; the simple encoding has no
+distinct linear or instant decay, so decay is always exponential. Noise voices
+are accepted and play silence (the reference emulator does not synthesise
+noise either). Reverb settings are validated and stored but not mixed.
+`sceSasCore`/`sceSasCoreWithMix` render into a guest buffer; the game then
+submits that buffer through `sceAudio`.
 
 T6g/T6m cover init, voice setup, key on/off, pitch, ADSR, noise and reverb
 controls. TC-12.1 host tests cover ADPCM decode, pitch and envelope shapes.
@@ -110,6 +127,11 @@ python3 -m unittest tests.test_hle -v          # sceAudio + SAS contracts
 
 - `sceMp3` is not implemented; it is absent from the title's import table, so
   no call is expected. Game-loop 59.94 Hz pacing is T13.
+- SAS noise voices are silent and reverb is stored but not mixed; both are
+  accepted with the hardware validation so a title can keep running.
+- `sceAtracDecodeData` charges the media-engine frame time on every attempt
+  (success, empty buffer and end of track); this is the scheduling point that
+  keeps the priority-16 sound thread from starving the game thread.
 - The 60 s AAudio soak is clean, but it runs on the audio clock rather than
   the 59.94 Hz guest loop; that pacing and game audio are T13 work.
 - The VAG fixture is synthetic (constant nibble), so it proves the

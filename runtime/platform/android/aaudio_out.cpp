@@ -72,6 +72,11 @@ std::unique_ptr<AAudioOut> AAudioOut::open(MixerSink &mixer, std::string &error)
         error = "aaudio_open_failed: " + describe(result);
         return nullptr;
     }
+    __android_log_print(ANDROID_LOG_INFO, "gungnir",
+        "aaudio_stream rate=%d channels=%d burst=%d capacity=%d frames=%d perf=%d",
+        AAudioStream_getSampleRate(impl->stream), AAudioStream_getChannelCount(impl->stream),
+        AAudioStream_getFramesPerBurst(impl->stream), AAudioStream_getBufferCapacityInFrames(impl->stream),
+        AAudioStream_getBufferSizeInFrames(impl->stream), AAudioStream_getPerformanceMode(impl->stream));
     result = AAudioStream_requestStart(impl->stream);
     if (result != AAUDIO_OK) {
         error = "aaudio_start_failed: " + describe(result);

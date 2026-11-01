@@ -110,7 +110,7 @@ Two 200,000-dispatch runs produce identical reports (TC-6.4). A 30-second
 unpaced run reaches 1,810,000 dispatches and 7,394 flips without a missing
 import.
 
-The remaining 23 imports are **counted gaps**, not stubs: any that executes
+The remaining 15 imports are **counted gaps**, not stubs: any that executes
 still stops with `Missing HLE import …`. They are grouped as follows.
 
 | Group | Imports | Disposition |
@@ -118,7 +118,15 @@ still stops with `Missing HLE import …`. They are grouped as follows.
 | IoFileMgr `sceIoDread`/`sceIoIoctl` | 2 | implement with the first directory-scan/device-control use |
 | Kernel/ThreadMan/Utils small calls | 4 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI |
 | sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5) |
-| SAS controls | 8 | ADSR/noise/reverb; wait for the first non-default control use |
+
+The eight SAS controls (`__sceSasSetADSR`, `SetADSRmode`, `SetSL`, `SetNoise`,
+`RevType`, `RevParam`, `RevEVOL`, `RevVON`) are now bound with the PSP
+validation and error codes. Long ADSR rates and curve modes feed the existing
+envelope; decay is always exponential because the simple envelope encoding has
+no linear/instant decay, which is recorded as a limitation. Noise voices play
+silence (the reference emulator does not synthesise noise either) and reverb
+settings are stored but not mixed. The first NEW GAME transition executed
+`__sceSasSetADSRmode`, which used to stop the session.
 
 The UMD medium/wait calls (`sceUmdCheckMedium`, `sceUmdWaitDriveStat(CB)`,
 `sceUmdCancelWaitDriveStat`) are now bound: the drive is reported present and
@@ -130,6 +138,15 @@ to explicit errors (`SCE_MPEG_ERROR_NO_RAPI` from `sceMpegInit`,
 `NOT_INITIALIZE` afterwards, cleanup success) and log one
 `[hle] gap: sceMpeg::…` line. The guest therefore skips the opening movie and
 reaches the title; actual PMF playback remains decision-gated for M5/T12.
+
+`sceAtracDecodeData` waits for the media engine on every decode attempt,
+including an empty buffer: `1815 + bytes * 158 / 100` µs for stereo ATRAC3+
+and `970 + bytes * 44 / 100` for stereo ATRAC3 (the PPSSPP hardware fit).
+Without that wait the priority-16 sound thread spun on `BUFFER_IS_EMPTY`
+after its first 128 KiB of streamed data and starved `user_main`, so the feed
+thread never ran and the title stopped presenting frames. The contract is
+`an empty decode still accounts for the media-engine frame time` in
+`tests/hle/kernel_tests.cpp`.
 
 `sceKernelCheckCallback` with no queued callbacks yields for 50 µs. Without
 that idle yield the post-movie worker (priority 31) busy-polled

@@ -189,7 +189,13 @@ constexpr std::uint32_t kSasInvalidAdsrCurve = 0x80420013u;
 constexpr std::uint32_t kSasInvalidParameter = 0x80420014u;
 constexpr std::uint32_t kSasInvalidLoop = 0x80420015u;
 constexpr std::uint32_t kSasVoicePaused = 0x80420016u;
+constexpr std::uint32_t kSasInvalidNoiseFreq = 0x80420011u;
 constexpr std::uint32_t kSasInvalidVolume = 0x80420018u;
+constexpr std::uint32_t kSasInvalidAdsrRate = 0x80420019u;
+constexpr std::uint32_t kSasRevInvalidType = 0x80420020u;
+constexpr std::uint32_t kSasRevInvalidFeedback = 0x80420021u;
+constexpr std::uint32_t kSasRevInvalidDelay = 0x80420022u;
+constexpr std::uint32_t kSasRevInvalidVolume = 0x80420023u;
 
 std::vector<std::int16_t> g_sas_staging;
 
@@ -329,6 +335,109 @@ void register_sas(HleRegistrar &hle) {
             return;
         }
         audio::sas_core(arg(ctx, 0)).set_simple_adsr(voice, arg(ctx, 2), envelope2);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetADSR", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::uint32_t flag = arg(ctx, 2);
+        const std::int32_t attack = static_cast<std::int32_t>(arg(ctx, 3));
+        const std::int32_t decay = static_cast<std::int32_t>(arg(ctx, 4));
+        const std::int32_t sustain = static_cast<std::int32_t>(arg(ctx, 5));
+        const std::int32_t release = static_cast<std::int32_t>(arg(ctx, 6));
+        const std::uint32_t invalid = (attack < 0 ? 0x1u : 0u) | (decay < 0 ? 0x2u : 0u) |
+            (sustain < 0 ? 0x4u : 0u) | (release < 0 ? 0x8u : 0u);
+        if ((invalid & flag) != 0u) {
+            finish(ctx, kSasInvalidAdsrRate);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_adsr(voice, flag, attack, decay, sustain, release);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetADSRmode", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::uint32_t flag = arg(ctx, 2);
+        const std::int32_t attack = static_cast<std::int32_t>(arg(ctx, 3) & 0x7FFFFFFFu);
+        const std::int32_t decay = static_cast<std::int32_t>(arg(ctx, 4) & 0x7FFFFFFFu);
+        const std::int32_t sustain = static_cast<std::int32_t>(arg(ctx, 5) & 0x7FFFFFFFu);
+        const std::int32_t release = static_cast<std::int32_t>(arg(ctx, 6) & 0x7FFFFFFFu);
+        std::uint32_t invalid = 0u;
+        if (attack > 5 || (attack & 1) != 0) invalid |= 0x1u;
+        if (decay > 5 || (decay & 1) != 1) invalid |= 0x2u;
+        if (sustain > 5) invalid |= 0x4u;
+        if (release > 5 || (release & 1) != 1) invalid |= 0x8u;
+        if ((invalid & flag) != 0u) {
+            finish(ctx, kSasInvalidAdsrCurve);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_adsr_mode(voice, flag, attack, decay, sustain, release);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetSL", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_sustain_level(voice, static_cast<std::int32_t>(arg(ctx, 2)));
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasSetNoise", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t voice = arg(ctx, 1);
+        if (!valid_voice(voice)) {
+            finish(ctx, kSasInvalidVoice);
+            return;
+        }
+        const std::int32_t frequency = static_cast<std::int32_t>(arg(ctx, 2));
+        if (frequency < 0 || frequency >= 64) {
+            finish(ctx, kSasInvalidNoiseFreq);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_noise(voice, frequency);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasRevType", [](Runtime &, AllegrexContext &ctx) {
+        const std::int32_t type = static_cast<std::int32_t>(arg(ctx, 1));
+        if (type < -1 || type > 8) {
+            finish(ctx, kSasRevInvalidType);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_reverb_type(type);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasRevParam", [](Runtime &, AllegrexContext &ctx) {
+        const std::int32_t delay = static_cast<std::int32_t>(arg(ctx, 1));
+        const std::int32_t feedback = static_cast<std::int32_t>(arg(ctx, 2));
+        if (delay < 0 || delay >= 128) {
+            finish(ctx, kSasRevInvalidDelay);
+            return;
+        }
+        if (feedback < 0 || feedback >= 128) {
+            finish(ctx, kSasRevInvalidFeedback);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_reverb_params(delay, feedback);
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasRevEVOL", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t left = arg(ctx, 1);
+        const std::uint32_t right = arg(ctx, 2);
+        if (left > 0x1000u || right > 0x1000u) {
+            finish(ctx, kSasRevInvalidVolume);
+            return;
+        }
+        audio::sas_core(arg(ctx, 0)).set_reverb_volume(static_cast<std::int32_t>(left), static_cast<std::int32_t>(right));
+        finish(ctx, 0u);
+    });
+    hle.add("sceSasCore", "__sceSasRevVON", [](Runtime &, AllegrexContext &ctx) {
+        audio::sas_core(arg(ctx, 0)).set_reverb_send(arg(ctx, 1) != 0u, arg(ctx, 2) != 0u);
         finish(ctx, 0u);
     });
     hle.add("sceSasCore", "__sceSasSetKeyOn", [](Runtime &, AllegrexContext &ctx) {

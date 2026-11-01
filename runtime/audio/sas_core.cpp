@@ -67,6 +67,7 @@ void SasCore::set_voice(std::uint32_t voice, std::uint32_t address, std::uint32_
     v.size = size & ~0xFu;
     v.looping = looping;
     v.pcm = false;
+    v.noise = false;
     v.loop_block = 0u;
     v.source_ended = address == 0u || v.size < 16u;
 }
@@ -78,6 +79,7 @@ void SasCore::set_voice_pcm(std::uint32_t voice, std::uint32_t address, std::uin
     v.size = size;
     v.looping = loop >= 0;
     v.pcm = true;
+    v.noise = false;
     v.loop_block = 0u;
     v.source_ended = address == 0u || size < 2u;
 }
@@ -100,6 +102,61 @@ void SasCore::set_simple_adsr(std::uint32_t voice, std::uint32_t adsr1, std::uin
     voices_[voice].have_adsr = true;
 }
 
+void SasCore::set_adsr(std::uint32_t voice, std::uint32_t flag, std::int32_t attack, std::int32_t decay,
+    std::int32_t sustain, std::int32_t release) {
+    if (voice >= kSasMaxVoices) return;
+    SasVoice &v = voices_[voice];
+    if ((flag & 0x1u) != 0u) v.adsr1 = (v.adsr1 & ~0x7F00u) | ((static_cast<std::uint32_t>(attack) & 0x7Fu) << 8u);
+    if ((flag & 0x2u) != 0u) v.adsr1 = (v.adsr1 & ~0x00F0u) | ((static_cast<std::uint32_t>(decay) & 0xFu) << 4u);
+    if ((flag & 0x4u) != 0u) v.adsr2 = (v.adsr2 & ~0x1FC0u) | ((static_cast<std::uint32_t>(sustain) & 0x7Fu) << 6u);
+    if ((flag & 0x8u) != 0u) v.adsr2 = (v.adsr2 & ~0x001Fu) | (static_cast<std::uint32_t>(release) & 0x1Fu);
+    v.have_adsr = true;
+}
+
+void SasCore::set_adsr_mode(std::uint32_t voice, std::uint32_t flag, std::int32_t attack, std::int32_t decay,
+    std::int32_t sustain, std::int32_t release) {
+    if (voice >= kSasMaxVoices) return;
+    (void)decay;
+    SasVoice &v = voices_[voice];
+    if ((flag & 0x1u) != 0u) {
+        if (attack == 2 || attack == 4)
+            v.adsr1 |= 0x8000u;
+        else
+            v.adsr1 &= ~0x8000u;
+    }
+    if ((flag & 0x4u) != 0u) {
+        v.adsr2 &= ~0xC000u;
+        switch (sustain) {
+        case 1:
+        case 5: v.adsr2 |= 0x4000u; break;
+        case 2:
+        case 4: v.adsr2 |= 0x8000u; break;
+        case 3: v.adsr2 |= 0xC000u; break;
+        default: break;
+        }
+    }
+    if ((flag & 0x8u) != 0u) {
+        if (release == 3)
+            v.adsr2 |= 0x20u;
+        else
+            v.adsr2 &= ~0x20u;
+    }
+    v.have_adsr = true;
+}
+
+void SasCore::set_sustain_level(std::uint32_t voice, std::int32_t level) {
+    if (voice >= kSasMaxVoices) return;
+    voices_[voice].adsr1 = (voices_[voice].adsr1 & ~0xFu) | (static_cast<std::uint32_t>(level) & 0xFu);
+}
+
+void SasCore::set_noise(std::uint32_t voice, std::int32_t frequency) {
+    if (voice >= kSasMaxVoices) return;
+    SasVoice &v = voices_[voice];
+    v.noise = true;
+    v.source_ended = false;
+    (void)frequency;
+}
+
 void SasCore::set_pause(std::uint32_t mask, bool paused) {
     for (std::uint32_t voice = 0; voice < kSasMaxVoices; ++voice)
         if ((mask & (1u << voice)) != 0u) voices_[voice].paused = paused;
@@ -116,7 +173,7 @@ void SasCore::key_on(std::uint32_t voice) {
     v.history2 = 0;
     v.previous = 0;
     v.current = 0;
-    v.source_ended = v.address == 0u || v.size < (v.pcm ? 2u : 16u);
+    v.source_ended = !v.noise && (v.address == 0u || v.size < (v.pcm ? 2u : 16u));
     v.primed = false;
     v.paused = false;
     v.playing = !v.source_ended;
@@ -203,6 +260,10 @@ void SasCore::decode_block(const psprecomp::GuestMemory &memory, SasVoice &voice
 
 void SasCore::advance_source(const psprecomp::GuestMemory &memory, SasVoice &voice) {
     voice.previous = voice.current;
+    if (voice.noise) {
+        voice.current = 0;
+        return;
+    }
     if (voice.pcm) {
         const std::uint32_t offset = voice.block;
         if (offset + 2u > voice.size) {

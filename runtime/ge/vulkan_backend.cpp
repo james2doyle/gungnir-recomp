@@ -679,10 +679,11 @@ struct VulkanBackend::Impl {
         if (!result_ok(vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &draw_descriptor_layout),
                        "descriptor layout", error))
             return false;
-        VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64};
+        VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096u};
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool_info.maxSets = 64;
+        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        pool_info.maxSets = 4096u;
         pool_info.poolSizeCount = 1;
         pool_info.pPoolSizes = &pool_size;
         if (!result_ok(vkCreateDescriptorPool(device, &pool_info, nullptr, &draw_descriptor_pool), "descriptor pool",

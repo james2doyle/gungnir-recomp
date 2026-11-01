@@ -687,6 +687,25 @@ void sas_contracts() {
     check(sas("__sceSasSetPitch", {core, 0u, 0u}) == 0x80420012u, "zero pitch rejected");
     check(sas("__sceSasSetPitch", {core, 0u, 0x4001u}) == 0x80420012u, "pitch above maximum rejected");
     check(sas("__sceSasSetVolume", {core, 0u, 0x1001u, 0u, 0u, 0u}) == 0x80420018u, "volume above maximum rejected");
+    check(sas("__sceSasSetADSR", {core, 1u, 0xFu, 0x40u, 0x8u, 0x20u, 0x10u}) == 0u,
+        "ADSR rates accepted");
+    check(sas("__sceSasSetADSR", {core, 1u, 0x1u, 0xFFFFFFFFu, 0u, 0u, 0u}) == 0x80420019u,
+        "negative attack rate rejected");
+    check(sas("__sceSasSetADSRmode", {core, 1u, 0xFu, 0u, 1u, 0u, 1u}) == 0u,
+        "linear ADSR curve modes accepted");
+    check(sas("__sceSasSetADSRmode", {core, 1u, 0x1u, 1u, 1u, 0u, 1u}) == 0x80420013u,
+        "odd attack curve mode rejected");
+    check(sas("__sceSasSetSL", {core, 1u, 0x8u}) == 0u, "sustain level accepted");
+    check(sas("__sceSasSetNoise", {core, 1u, 64u}) == 0x80420011u, "noise frequency above range rejected");
+    check(sas("__sceSasSetNoise", {core, 1u, 32u}) == 0u, "noise frequency accepted");
+    check(sas("__sceSasRevType", {core, 9u}) == 0x80420020u, "reverb type above range rejected");
+    check(sas("__sceSasRevType", {core, 4u}) == 0u, "reverb type accepted");
+    check(sas("__sceSasRevParam", {core, 128u, 0u}) == 0x80420022u, "reverb delay rejected");
+    check(sas("__sceSasRevParam", {core, 64u, 128u}) == 0x80420021u, "reverb feedback rejected");
+    check(sas("__sceSasRevParam", {core, 64u, 64u}) == 0u, "reverb parameters accepted");
+    check(sas("__sceSasRevEVOL", {core, 0x1001u, 0u}) == 0x80420023u, "reverb volume rejected");
+    check(sas("__sceSasRevEVOL", {core, 0x1000u, 0x1000u}) == 0u, "reverb volume accepted");
+    check(sas("__sceSasRevVON", {core, 1u, 1u}) == 0u, "reverb send accepted");
     check(sas("__sceSasSetVoice", {core, 0u, vag, 32u, 0u}) == 0u, "VAG voice set");
     check(sas("__sceSasSetPitch", {core, 0u, 0x1000u}) == 0u, "unity pitch set");
     check(sas("__sceSasSetVolume", {core, 0u, 0x1000u, 0x1000u, 0u, 0u}) == 0u, "unity volume set");
@@ -803,14 +822,26 @@ void atrac_contracts() {
     check(mem.load32(kValue + 4u) == 0xFFFFFFFFu && mem.load32(kValue + 8u) == 0xFFFFFFFFu,
         "ATRAC reports no loop");
     constexpr std::uint32_t kPcm = Fixture::kOutput + 0x400u;
+    const auto info = gungnir::audio::parse_atrac_riff(riff);
+    check(info.has_value(), "ATRAC RIFF parses for the decode-time contract");
+    const std::uint64_t decode_us = info->codec == gungnir::audio::AtracCodec::Atrac3Plus
+        ? (info->channels == 1 ? 1500u + info->block_align * 84u / 100u
+                               : 1815u + info->block_align * 158u / 100u)
+        : (info->channels == 1 ? 685u : 970u + info->block_align * 44u / 100u);
+    const std::uint64_t before_decode = f.k.now_us();
     check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u,
         "ATRAC frame decodes");
+    check(f.k.now_us() - before_decode == decode_us,
+        "decode data accounts for the media-engine frame time");
     check(mem.load32(kValue) == 2048u, "ATRAC writes 2048 samples");
     check(mem.load32(kValue + 4u) == 1u, "ATRAC marks the stream end");
     check(mem.load32(kValue + 8u) == 0xFFFFFFFFu, "ATRAC reports in-memory data");
     check(mem.load16(kPcm) == 0u, "ATRAC terminator frame is silent");
+    const std::uint64_t before_empty = f.k.now_us();
     check(atrac("sceAtracDecodeData", {id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0x80630024u,
         "ATRAC reports all data decoded");
+    check(f.k.now_us() - before_empty == decode_us,
+        "an empty decode still accounts for the media-engine frame time");
     check(mem.load32(kValue) == 0u && mem.load32(kValue + 4u) == 1u,
         "ATRAC end writes zero samples");
     check(atrac("sceAtracGetSecondBufferInfo", {id, kValue, kValue + 4u}) == 0x80630022u,
