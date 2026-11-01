@@ -102,3 +102,20 @@ Actual: pass.
   binding Select to another button works.
 - The pending queue holds eight presses; a UI stall longer than that drops the
   oldest.
+
+## Superseded (later on 2026-11-01)
+
+The Back/Guide reservation above was reversed after device use: Guide (Home)
+is now the only menu button and Select is a normal, remappable guest button.
+`docs/INPUT.md` describes the current rule.
+
+Follow-up QA on the same M2102K1AC and 8BitDo Lite 2:
+
+- With the pad connected the on-screen MENU ring is hidden, which confirms SDL
+  reports a Guide button; the ring is kept only for pads without one.
+- Guide toggles the overlay. Select presses log no `menu_action`, and the user
+  confirmed the actual Select action in game.
+- While the overlay is open, the remaining pad buttons (face, shoulder, Start)
+  no longer reach the guest; gameplay input returns on close.
+- Gates: `menu_navigation_tests`, `sdl_gamepad_tests`, the source contract test,
+  17 host tests and `repository_check` PASS.

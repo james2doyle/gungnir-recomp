@@ -36,8 +36,6 @@ std::string guid_string(SDL_JoystickID id) {
 
 std::optional<gungnir::input::MenuButton> menu_button(Uint8 button) {
     switch (button) {
-    case SDL_GAMEPAD_BUTTON_BACK:
-        return gungnir::input::MenuButton::Back;
     case SDL_GAMEPAD_BUTTON_GUIDE:
         return gungnir::input::MenuButton::Guide;
     case SDL_GAMEPAD_BUTTON_DPAD_UP:
@@ -75,16 +73,21 @@ bool SdlGamepad::handle_event(const SDL_Event &event) {
         if (!remap_.active()) {
             if (const auto menu = menu_button(event.gbutton.button)) {
                 if (event.gbutton.down) gungnir::input::menu_navigation().press(*menu);
-                // Back/Guide are the menu button, and the other menu controls
-                // belong to the overlay while it is open. Keep them out of the
-                // guest so navigating the menu does not also play the game.
-                const bool toggle = *menu == gungnir::input::MenuButton::Back ||
-                    *menu == gungnir::input::MenuButton::Guide;
+                // Guide toggles the overlay; the d-pad and South navigate it.
+                // None of them reaches the guest, and while the overlay is
+                // open no pad button plays the game behind it.
+                const bool toggle = *menu == gungnir::input::MenuButton::Guide;
                 if (toggle || gungnir::input::menu_navigation().open()) {
                     state_.button_up(event.gbutton.button);
                     publish();
                     return true;
                 }
+            } else if (gungnir::input::menu_navigation().open()) {
+                // The overlay is modal: Select, Start, face and shoulder
+                // buttons must not act on the game behind it.
+                state_.button_up(event.gbutton.button);
+                publish();
+                return true;
             }
         }
         if (remap_.active()) {
@@ -185,6 +188,11 @@ bool SdlGamepad::connected() const {
 bool SdlGamepad::active() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return connected_;
+}
+
+bool SdlGamepad::guide_available() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return connected_ && pad_ != nullptr && SDL_GamepadHasButton(pad_, SDL_GAMEPAD_BUTTON_GUIDE);
 }
 
 std::string SdlGamepad::info() const {

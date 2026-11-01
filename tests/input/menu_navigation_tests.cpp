@@ -39,10 +39,6 @@ void closed_gate() {
     menu.press(MenuButton::South);
     check(!menu.take().has_value(), "movement and activation are ignored while closed");
 
-    menu.press(MenuButton::Back);
-    const MenuEvent back = next(menu, "Back opens from the closed state");
-    check(back.action == MenuAction::Toggle, "Back reports a toggle while closed");
-
     menu.press(MenuButton::Guide);
     const MenuEvent guide = next(menu, "Guide opens from the closed state");
     check(guide.action == MenuAction::Toggle, "Guide reports a toggle while closed");
@@ -96,10 +92,6 @@ void activate_uses_selection() {
 void toggle_while_open() {
     MenuNavigation menu;
     menu.begin(2);
-    menu.press(MenuButton::Back);
-    const MenuEvent back = next(menu, "Back closes from the open state");
-    check(back.action == MenuAction::Toggle, "Back reports a toggle while open");
-
     menu.press(MenuButton::Guide);
     const MenuEvent guide = next(menu, "Guide closes from the open state");
     check(guide.action == MenuAction::Toggle, "Guide reports a toggle while open");

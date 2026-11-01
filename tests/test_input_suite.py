@@ -68,6 +68,12 @@ class TestInputHostGate(unittest.TestCase):
         self.assertIn("0.65f", button, "four-character captions use the overlay scale")
         self.assertIn("GamepadBridge.active()", button,
                       "the Menu button follows the same pad-visibility rule as the overlay")
+        self.assertIn("GamepadBridge.guideAvailable()", button,
+                      "the ring stays reachable on a pad without a Guide button")
+        bridge = (root / "input" / "GamepadBridge.java").read_text()
+        native = (REPO / "android" / "app" / "src" / "main" / "cpp" / "main.cpp").read_text()
+        self.assertIn("guideAvailable", bridge)
+        self.assertIn("GamepadBridge_guideAvailable", native)
         self.assertIn("setSuppressed(boolean", button)
         self.assertIn("settingsButton.setSuppressed(true)", activity,
                       "settings hide the Menu button through the shared suppression path")

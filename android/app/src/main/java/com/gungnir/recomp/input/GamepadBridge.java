@@ -8,6 +8,10 @@ public final class GamepadBridge {
 
     public static native boolean active();
 
+    /** True when the connected pad reports a Guide/Home button, which is what
+     *  opens the settings overlay from a controller. */
+    public static native boolean guideAvailable();
+
     public static native boolean needsRemap();
 
     public static native String info();

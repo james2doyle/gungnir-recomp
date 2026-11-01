@@ -19,8 +19,8 @@ enum class MenuAction {
     Activate = 3,
 };
 
+// Back/Select is deliberately absent: it stays the guest's Select button.
 enum class MenuButton {
-    Back,
     Guide,
     Up,
     Down,

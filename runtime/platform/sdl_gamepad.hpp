@@ -29,6 +29,9 @@ public:
 
     [[nodiscard]] bool connected() const;
     [[nodiscard]] bool active() const;
+    // Whether the connected pad exposes the Guide/Home button that opens the
+    // settings overlay; pads without one keep the on-screen Menu button.
+    [[nodiscard]] bool guide_available() const;
     [[nodiscard]] std::string info() const;
 
     void release_all();

@@ -64,7 +64,8 @@ void gamepad_contracts() {
     description.button_mask = (1u << SDL_GAMEPAD_BUTTON_SOUTH) |
         (1u << SDL_GAMEPAD_BUTTON_EAST) | (1u << SDL_GAMEPAD_BUTTON_WEST) |
         (1u << SDL_GAMEPAD_BUTTON_NORTH) | (1u << SDL_GAMEPAD_BUTTON_BACK) |
-        (1u << SDL_GAMEPAD_BUTTON_START) | (1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) |
+        (1u << SDL_GAMEPAD_BUTTON_GUIDE) | (1u << SDL_GAMEPAD_BUTTON_START) |
+        (1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) |
         (1u << SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) | (1u << SDL_GAMEPAD_BUTTON_DPAD_UP) |
         (1u << SDL_GAMEPAD_BUTTON_DPAD_DOWN) | (1u << SDL_GAMEPAD_BUTTON_DPAD_LEFT) |
         (1u << SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
@@ -79,7 +80,7 @@ void gamepad_contracts() {
     SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), guid_text, sizeof(guid_text));
     check(guid_text[0] != '\0', "virtual joystick has a GUID");
     const std::string mapping = std::string(guid_text) +
-        ",Gungnir Test Pad,a:b0,b:b1,x:b2,y:b3,back:b4,start:b6,leftshoulder:b9,"
+        ",Gungnir Test Pad,a:b0,b:b1,x:b2,y:b3,back:b4,guide:b5,start:b6,leftshoulder:b9,"
         "rightshoulder:b10,dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,leftx:a0,lefty:a1,";
     check(SDL_AddGamepadMapping(mapping.c_str()) >= 0, "virtual mapping accepted");
 
@@ -98,12 +99,21 @@ void gamepad_contracts() {
     auto &menu = gungnir::input::menu_navigation();
     menu.end();
     gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_BACK, true));
+    check((gungnir::input::state().buttons() & gungnir::input::kSelectBit) != 0u,
+          "Back presses Select");
+    check(!menu.take().has_value(), "Back no longer opens the menu");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_BACK, false));
+    check((gungnir::input::state().buttons() & gungnir::input::kSelectBit) == 0u,
+          "releasing Back clears Select");
+
+    check(gamepad.guide_available(), "the pad reports a Guide button");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_GUIDE, true));
     const auto toggle = menu.take();
     check(toggle && toggle->action == gungnir::input::MenuAction::Toggle,
-          "Back requests the overlay while closed");
+          "Guide requests the overlay while closed");
     check((gungnir::input::state().buttons() & gungnir::input::kSelectBit) == 0u,
-          "Back is reserved for the menu and does not press Select");
-    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_BACK, false));
+          "Guide is not the guest's Select");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_GUIDE, false));
 
     menu.begin(3);
     gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_DPAD_DOWN, true));
@@ -122,6 +132,11 @@ void gamepad_contracts() {
     check((gungnir::input::state().buttons() & gungnir::input::kCrossBit) == 0u,
           "Cross is withheld from the guest while the overlay is open");
     gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, false));
+
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_EAST, true));
+    check((gungnir::input::state().buttons() & gungnir::input::kCircleBit) == 0u,
+          "other pad buttons do not play the game while the overlay is open");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_EAST, false));
     menu.end();
 
     gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_SOUTH, true));

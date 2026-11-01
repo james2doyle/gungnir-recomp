@@ -52,9 +52,11 @@ L/R, START/SELECT.
 
 `MenuButtonView` is the on-screen `MENU` ring that opens Settings. It is
 painted like START/SEL (same stroke, radius and caption colours) and hides
-with the rest of the touch chrome while a gamepad is active; Back/Guide
-opens the same surface from the pad. While Settings is open the ring is
-`GONE`, and closing it restores whichever state the gamepad poll reports.
+with the rest of the touch chrome while a gamepad with a Guide button is
+active; Guide opens the same surface from the pad. A pad without a Guide
+button keeps the ring, since nothing else opens Settings from it. While
+Settings is open the ring is `GONE`, and closing it restores whichever state
+the gamepad poll reports.
 
 ### Editing
 
@@ -180,11 +182,14 @@ while the activity is resumed. `nativeMenuBegin(row_count)` on show and
 callback into Java is needed. The poll drains every queued press, so a fast
 d-pad roll is not thinned out.
 
-Back/Guide are reserved for the menu: they never reach the guest, so a profile
-that binds Select to either will not deliver Select. D-pad up/down and
-South/Cross are withheld from the guest while the overlay is open, and gameplay
-input returns as soon as it closes. This matches the touch overlay, which is
-also suppressed while the settings are open.
+Guide (SDL `GUIDE`, Home) is the menu button and never reaches the guest.
+Select (SDL `BACK`) is a normal guest button and stays remappable; the remap
+wizard captures it because the wizard runs with the overlay closed. While the
+overlay is open no pad button reaches the guest: Guide toggles it, d-pad
+up/down move the selection, South activates, and the remaining face, shoulder,
+Start and Select buttons are withheld, so navigating the menu never plays the
+game. Gameplay input returns as soon as it closes. This matches the touch
+overlay, which is also suppressed while the settings are open.
 
 ## Tests
 
@@ -218,7 +223,7 @@ device remains the arm64 phone; see
 - Menu navigation is one action per press: a held d-pad does not repeat.
   Every queued press is applied on the next frame; the queue holds eight, so a
   UI stall longer than about eight presses can still drop the oldest.
-- Back/Guide are the menu buttons and are never forwarded to the guest, so
-  Select cannot be bound to either in gameplay (the remap wizard still captures
-  them, because the wizard runs with the overlay closed). Binding Select to
-  another button works.
+- Guide is the menu button and is never forwarded to the guest, so a profile
+  that wants a guest action on SDL's `GUIDE` index cannot have it. Select
+  (`BACK`) is a normal, remappable guest button. A pad without a Guide button
+  keeps the on-screen Menu ring, because nothing else opens Settings from it.

@@ -38,7 +38,6 @@ int MenuNavigation::index() const {
 void MenuNavigation::press(MenuButton button) {
     std::lock_guard lock(mutex_);
     switch (button) {
-    case MenuButton::Back:
     case MenuButton::Guide:
         // Toggle is valid in both states: the UI decides open vs close.
         enqueue(MenuAction::Toggle, index_);

@@ -642,6 +642,12 @@ Java_com_gungnir_recomp_input_GamepadBridge_active(JNIEnv *, jclass) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_input_GamepadBridge_guideAvailable(JNIEnv *, jclass) {
+    auto *gamepad = g_gamepad.load();
+    return gamepad != nullptr && gamepad->guide_available() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_gungnir_recomp_input_GamepadBridge_needsRemap(JNIEnv *, jclass) {
     auto *gamepad = g_gamepad.load();
     return gamepad != nullptr && gamepad->needs_remap() ? JNI_TRUE : JNI_FALSE;

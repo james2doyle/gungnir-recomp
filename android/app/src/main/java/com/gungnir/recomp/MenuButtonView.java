@@ -24,18 +24,22 @@ public final class MenuButtonView extends View {
     private final Paint label = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private boolean suppressed;
-    /** Same rule as TouchOverlayView: a connected pad replaces the touch
-     *  chrome, and Back/Guide still open the menu. */
+    /** Same rule as TouchOverlayView, except that the ring stays reachable on
+     *  a pad without a Guide/Home button: Guide is the only menu button now. */
     private final Runnable gamepadPoll = new Runnable() {
         @Override
         public void run() {
             if (!suppressed) {
-                int desired = GamepadBridge.active() ? INVISIBLE : VISIBLE;
+                int desired = hideForPad() ? INVISIBLE : VISIBLE;
                 if (getVisibility() != desired) setVisibility(desired);
             }
             if (isAttachedToWindow()) postDelayed(this, 400);
         }
     };
+
+    private static boolean hideForPad() {
+        return GamepadBridge.active() && GamepadBridge.guideAvailable();
+    }
 
     public MenuButtonView(Context context) {
         super(context);
@@ -60,7 +64,7 @@ public final class MenuButtonView extends View {
     /** Settings own the screen while open (GONE); otherwise the pad decides. */
     public void setSuppressed(boolean value) {
         suppressed = value;
-        setVisibility(value ? GONE : (GamepadBridge.active() ? INVISIBLE : VISIBLE));
+        setVisibility(value ? GONE : (hideForPad() ? INVISIBLE : VISIBLE));
     }
 
     @Override
