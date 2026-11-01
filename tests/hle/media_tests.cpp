@@ -8,11 +8,14 @@
 #include "hle/kernel.hpp"
 #include "input/input_state.hpp"
 
+#include "ge/display_list.hpp"
+
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/runtime.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -257,6 +260,49 @@ void ge_contracts() {
     check(f.ge("sceGeUnsetCallback", {callback}) == 0u, "GE callback removed");
 }
 
+void draw_retention_contracts() {
+    Fixture f(test_nids_path());
+    auto &mem = f.runtime.memory();
+    const std::uint32_t vertices = 0x08830000u;
+    const std::uint32_t vertex_type = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u);
+    const gungnir::ge::VertexLayout layout = gungnir::ge::decode_vertex_layout(vertex_type);
+    check(layout.through, "fixture vertex type is through-mode");
+    for (int i = 0; i < 3; ++i) {
+        const std::uint32_t at = vertices + static_cast<std::uint32_t>(i) * layout.stride;
+        for (int component = 0; component < 3; ++component) {
+            std::uint32_t bits = 0;
+            const float value = component == 0 ? 10.0f + static_cast<float>(i) * 20.0f : 20.0f;
+            std::memcpy(&bits, &value, sizeof bits);
+            mem.store32(at + layout.position_offset + static_cast<std::uint32_t>(component) * 4u, bits);
+        }
+        mem.store32(at + layout.color_offset, 0xFF00FF00u);
+    }
+    // BASE carries the address above the 24-bit command word: 0x08800000 is
+    // encoded as 0x00088000, so VADDR only has to name the low half.
+    mem.store32(Fixture::kText, 0x10088000u);
+    mem.store32(Fixture::kText + 4u, 0x12000000u | vertex_type);
+    mem.store32(Fixture::kText + 8u, 0x01000000u | (vertices & 0xFFFFu));
+    mem.store32(Fixture::kText + 12u, 0x04000000u | ((3u << 16u) | 3u));
+    mem.store32(Fixture::kText + 16u, 0x0C000000u);
+    (void)f.ge("sceGeListEnQueue", {Fixture::kText, Fixture::kText + 20u, 0xFFFFFFFFu, 0u});
+    check(gungnir::hle::ge_pending_draw_count() == 1u, "the list translates one draw");
+
+    // No frame sink: the flip must drop the draws rather than keep them alive
+    // (the Linux boot runner sets no sink, so retained draws grow per frame).
+    check(f.display("sceDisplaySetFrameBuf", {0x04088000u, 512u, 3u}) == 0u, "flip accepted");
+    check(gungnir::hle::ge_pending_draw_count() == 0u, "a flip without a sink drops the pending draws");
+
+    std::size_t delivered = 0u;
+    gungnir::hle::set_ge_frame_sink([&delivered](const std::vector<gungnir::ge::Draw> &draws) {
+        delivered += draws.size();
+    });
+    (void)f.ge("sceGeListEnQueue", {Fixture::kText, Fixture::kText + 20u, 0xFFFFFFFFu, 0u});
+    check(f.display("sceDisplaySetFrameBuf", {0x04088000u, 512u, 3u}) == 0u, "second flip accepted");
+    check(delivered == 1u, "the sink receives the draw");
+    check(gungnir::hle::ge_pending_draw_count() == 0u, "delivery clears the pending draws");
+    gungnir::hle::set_ge_frame_sink(nullptr);
+}
+
 void rtc_contracts() {
     Fixture f(test_nids_path());
     check(f.call("sceRtc", "sceRtcGetCurrentTick", {Fixture::kOutput}) == 0u, "RTC tick succeeds");
@@ -283,6 +329,7 @@ int main(int argc, char **argv) {
         display_contracts();
         controller_contracts();
         ge_contracts();
+        draw_retention_contracts();
         rtc_contracts();
         std::cout << "hle_media_tests: OK\n";
         return 0;

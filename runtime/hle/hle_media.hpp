@@ -40,6 +40,10 @@ void set_display_flip_observer(std::function<void()> observer);
 // Receives the draws accumulated since the previous real flip. The callback
 // runs on the guest thread and must not block.
 void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &)> sink);
+
+// Draws translated since the last presentable flip. A flip hands them to the
+// frame sink or drops them; this must not grow across flips.
+[[nodiscard]] std::size_t ge_pending_draw_count();
 [[nodiscard]] std::uint64_t ge_frame_count();
 [[nodiscard]] std::uint64_t ge_gap_count();
 

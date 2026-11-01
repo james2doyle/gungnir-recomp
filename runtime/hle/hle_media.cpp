@@ -223,11 +223,9 @@ void register_display(HleRegistrar &hle) {
         // boot; only a real buffer is a presentable flip.
         if (display.buffer_width != 0u) {
             ++media().ge_frames;
-            if (media().frame_sink) {
-                std::vector<gungnir::ge::Draw> draws = std::move(media().pending_draws);
-                media().pending_draws.clear();
-                media().frame_sink(draws);
-            }
+            std::vector<gungnir::ge::Draw> draws;
+            draws.swap(media().pending_draws);
+            if (media().frame_sink) media().frame_sink(draws);
             if (media().flip_observer) media().flip_observer();
         }
         kernel().finish(ctx, 0u);
@@ -390,6 +388,10 @@ void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &
 
 std::uint64_t ge_frame_count() {
     return media().ge_frames;
+}
+
+std::size_t ge_pending_draw_count() {
+    return media().pending_draws.size();
 }
 
 std::uint64_t ge_gap_count() {
