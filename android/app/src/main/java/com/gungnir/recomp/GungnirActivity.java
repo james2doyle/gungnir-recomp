@@ -11,7 +11,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -38,7 +37,7 @@ public final class GungnirActivity extends SDLActivity {
     private static final int MENU_ACTION_MOVE = 2;
     private static final int MENU_ACTION_ACTIVATE = 3;
 
-    private Button settingsButton;
+    private MenuButtonView settingsButton;
     private SettingsOverlayView settingsOverlay;
     private TouchOverlayView touchOverlay;
     private DriverStore driverStore;
@@ -149,8 +148,7 @@ public final class GungnirActivity extends SDLActivity {
         addContentView(settingsOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        settingsButton = new Button(this);
-        settingsButton.setText("Menu");
+        settingsButton = new MenuButtonView(this);
         settingsButton.setOnClickListener(view -> {
             if (settingsOverlay.isOpen()) closeSettings();
             else showSettings();
@@ -158,8 +156,9 @@ public final class GungnirActivity extends SDLActivity {
         FrameLayout.LayoutParams settingsParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         settingsParams.gravity = Gravity.BOTTOM | Gravity.END;
-        settingsParams.bottomMargin = 16;
-        settingsParams.rightMargin = 16;
+        int settingsMargin = Math.round(16 * getResources().getDisplayMetrics().density);
+        settingsParams.bottomMargin = settingsMargin;
+        settingsParams.rightMargin = settingsMargin;
         addContentView(settingsButton, settingsParams);
 
         SharedPreferences preferences = getSharedPreferences("gungnir", MODE_PRIVATE);
@@ -221,7 +220,7 @@ public final class GungnirActivity extends SDLActivity {
             touchOverlay.releaseAll();
             touchOverlay.setSuppressed(true);
         }
-        settingsButton.setVisibility(View.GONE);
+        settingsButton.setSuppressed(true);
         settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
         settingsOverlay.setSelection(0);
         nativeMenuBegin(settingsOverlay.rowCount());
@@ -231,7 +230,7 @@ public final class GungnirActivity extends SDLActivity {
         if (settingsOverlay == null) return;
         settingsOverlay.hide();
         if (touchOverlay != null) touchOverlay.setSuppressed(false);
-        if (settingsButton != null) settingsButton.setVisibility(View.VISIBLE);
+        if (settingsButton != null) settingsButton.setSuppressed(false);
         nativeMenuEnd();
     }
 

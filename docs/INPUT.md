@@ -50,6 +50,12 @@ L/R, START/SELECT.
 - Positions are normalized to the safe content box; radius scales with the
   shorter content dimension. The View receives system-bar/cutout insets.
 
+`MenuButtonView` is the on-screen `MENU` ring that opens Settings. It is
+painted like START/SEL (same stroke, radius and caption colours) and hides
+with the rest of the touch chrome while a gamepad is active; Back/Guide
+opens the same surface from the pad. While Settings is open the ring is
+`GONE`, and closing it restores whichever state the gamepad poll reports.
+
 ### Editing
 
 `Menu > Edit touch layout` enters edit mode; the same row becomes

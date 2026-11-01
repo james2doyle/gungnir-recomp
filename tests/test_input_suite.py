@@ -51,6 +51,28 @@ class TestInputHostGate(unittest.TestCase):
         self.assertIn("gamecontrollerdb", DOC.read_text().lower(),
                       "docs explain the SDL-mapping gap behind the toast")
 
+    def test_menu_button_matches_the_touch_controls(self):
+        root = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir"
+                / "recomp")
+        activity = (root / "GungnirActivity.java").read_text()
+        button = (root / "MenuButtonView.java").read_text()
+        defaults = (REPO / "runtime" / "input" / "touch_overlay.cpp").read_text()
+        self.assertNotIn("new Button(this)", activity,
+                         "the Menu button is not a default Android Button")
+        self.assertIn("new MenuButtonView(this)", activity,
+                      "the Menu button uses the overlay's control style")
+        self.assertIn('"MENU"', button, "the caption matches START/SEL")
+        self.assertIn('"START"', (root / "input" / "TouchOverlayView.java").read_text())
+        self.assertIn("0.038f", defaults, "START/SEL radius in the touch model")
+        self.assertIn("0.038f", button, "the Menu button shares that radius")
+        self.assertIn("0.65f", button, "four-character captions use the overlay scale")
+        self.assertIn("GamepadBridge.active()", button,
+                      "the Menu button follows the same pad-visibility rule as the overlay")
+        self.assertIn("setSuppressed(boolean", button)
+        self.assertIn("settingsButton.setSuppressed(true)", activity,
+                      "settings hide the Menu button through the shared suppression path")
+        self.assertIn("settingsButton.setSuppressed(false)", activity)
+
     def test_docs_cover_the_input_path(self):
         self.assertTrue(DOC.is_file(), "docs/INPUT.md exists")
         text = DOC.read_text()
