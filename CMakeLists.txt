@@ -80,6 +80,7 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_module.cpp
     runtime/savedata/save_store.cpp
     runtime/session/game_session.cpp
+    runtime/session/diagnostics.cpp
     runtime/session/session_report.cpp
     runtime/session/corpus_present.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)

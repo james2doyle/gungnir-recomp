@@ -3,10 +3,12 @@
 // Usage: session_report_tests
 // Exit 0 on the asserted contract, 1 on a failed contract.
 
+#include "session/diagnostics.hpp"
 #include "session/session_report.hpp"
 
 #include <cstdint>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -113,6 +115,47 @@ int main() {
     check(gungnir::session::summary_line(missing).find("module_init_complete=false") !=
               std::string::npos,
         "summary reports the cleared module-init gate");
+
+    gungnir::session::configure_chain_ring(4u);
+    gungnir::session::chain_ring_enter(0x1111u, 0u, 0xAAAAu, 1u, 2u, 3u, 4u, "user_main");
+    gungnir::session::chain_ring_leave(0x1111u, 0u, 0x99u, 0x88u);
+    std::ostringstream chain;
+    gungnir::session::dump_chain_ring(chain);
+    check(chain.str().find("target=0x00001111") != std::string::npos,
+        "chain ring records the target");
+    check(chain.str().find("thread=user_main") != std::string::npos,
+        "chain ring records the thread");
+    check(chain.str().find("ra=0x0000AAAA") != std::string::npos,
+        "chain ring records the return PC");
+    check(chain.str().find("v0=0x00000099") != std::string::npos,
+        "chain ring records the return value");
+
+    gungnir::session::chain_ring_enter(0x2222u, 0u, 0xBBBBu, 0u, 0u, 0u, 0u, "user_main");
+    gungnir::session::chain_ring_enter(0x3333u, 1u, 0xCCCCu, 0u, 0u, 0u, 0u, "user_main");
+    std::ostringstream nested;
+    gungnir::session::dump_chain_ring(nested);
+    check(nested.str().find("target=0x00003333") != std::string::npos &&
+            nested.str().find("inflight=1") != std::string::npos,
+        "chain ring reports in-flight frames");
+    gungnir::session::chain_ring_leave(0x3333u, 1u, 0u, 0u);
+    gungnir::session::chain_ring_leave(0x2222u, 0u, 0u, 0u);
+
+    gungnir::session::configure_chain_ring(2u);
+    for (std::uint32_t target : {0x4444u, 0x5555u, 0x6666u}) {
+        gungnir::session::chain_ring_enter(target, 0u, 0u, 0u, 0u, 0u, 0u, "user_main");
+        gungnir::session::chain_ring_leave(target, 0u, 0u, 0u);
+    }
+    std::ostringstream capped;
+    gungnir::session::dump_chain_ring(capped);
+    check(capped.str().find("target=0x00004444") == std::string::npos,
+        "chain ring drops the oldest entry at capacity");
+    check(capped.str().find("target=0x00006666") != std::string::npos,
+        "chain ring keeps the newest entry at capacity");
+
+    gungnir::session::configure_chain_ring(0u);
+    std::ostringstream disabled;
+    gungnir::session::dump_chain_ring(disabled);
+    check(disabled.str().empty(), "disabled chain ring dumps nothing");
 
     if (failures != 0) {
         std::cerr << "session_report_tests: " << failures << " failure(s)\n";

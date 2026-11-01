@@ -46,6 +46,7 @@ class TestAndroidRuntimeWiring(unittest.TestCase):
         text = ANDROID_CMAKE.read_text()
         for source in (
             "runtime/session/game_session.cpp",
+            "runtime/session/diagnostics.cpp",
             "runtime/session/session_report.cpp",
             "runtime/hle/hle_common.cpp",
             "runtime/hle/kernel.cpp",

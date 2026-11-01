@@ -1,5 +1,7 @@
 #include "session/game_session.hpp"
 
+#include "session/diagnostics.hpp"
+
 #include "hle/hle_atrac.hpp"
 #include "hle/hle_audio.hpp"
 #include "hle/hle_common.hpp"
@@ -101,6 +103,15 @@ void count_dispatch(Runtime &, AllegrexContext &, std::uint32_t, std::int32_t) {
     if (g_active != nullptr) ++g_active->dispatches;
 }
 
+void chain_pre(Runtime &, AllegrexContext &ctx, std::uint32_t target, std::uint32_t depth) {
+    gungnir::session::chain_ring_enter(target, depth, ctx.gpr[31], ctx.gpr[4], ctx.gpr[5], ctx.gpr[6],
+        ctx.gpr[7], psprecomp::runtime_thread_name());
+}
+
+void chain_post(Runtime &, AllegrexContext &ctx, std::uint32_t target, std::uint32_t depth) {
+    gungnir::session::chain_ring_leave(target, depth, ctx.gpr[2], ctx.gpr[3]);
+}
+
 void heartbeat(std::uint64_t, std::uint32_t) {
     if (g_active == nullptr || g_active->runtime == nullptr) return;
     if (g_active->stop_requested.load(std::memory_order_relaxed)) {
@@ -127,6 +138,8 @@ std::uint32_t image_end(const Elf32Image &elf, std::uint32_t load_base) {
 void clear_hooks() {
     psprecomp::set_runtime_heartbeat_hook(nullptr, 0u);
     psprecomp::set_runtime_pre_dispatch_hook(nullptr);
+    psprecomp::set_runtime_pre_chained_call_hook(nullptr);
+    psprecomp::set_runtime_post_chained_call_hook(nullptr);
 }
 
 } // namespace
@@ -251,7 +264,19 @@ void GameSession::run() {
     }
     impl_->started_at = std::chrono::steady_clock::now();
     g_active = impl_.get();
+    std::size_t chain_capacity = 0u;
+    if (const char *text = std::getenv("GUNGNIR_CHAIN_RING")) {
+        if (*text != '\0') {
+            const unsigned long value = std::strtoul(text, nullptr, 10);
+            chain_capacity = value != 0ul ? static_cast<std::size_t>(value) : std::size_t{64};
+        }
+    }
+    gungnir::session::configure_chain_ring(chain_capacity);
     psprecomp::set_runtime_pre_dispatch_hook(&count_dispatch);
+    if (chain_capacity != 0u) {
+        psprecomp::set_runtime_pre_chained_call_hook(&chain_pre);
+        psprecomp::set_runtime_post_chained_call_hook(&chain_post);
+    }
     psprecomp::set_runtime_heartbeat_hook(&heartbeat, 10'000u);
     try {
         impl_->runtime->run(impl_->entry, impl_->config.max_dispatches);
@@ -259,6 +284,7 @@ void GameSession::run() {
     } catch (const std::exception &failure) {
         impl_->result.ok = false;
         impl_->result.error = "session_run_failed: " + std::string(failure.what());
+        gungnir::session::dump_chain_ring(std::cerr);
         gungnir::hle::dump_hle_ring(std::cerr);
     }
     clear_hooks();
