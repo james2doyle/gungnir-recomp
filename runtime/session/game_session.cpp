@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -258,6 +259,7 @@ void GameSession::run() {
     } catch (const std::exception &failure) {
         impl_->result.ok = false;
         impl_->result.error = "session_run_failed: " + std::string(failure.what());
+        gungnir::hle::dump_hle_ring(std::cerr);
     }
     clear_hooks();
     g_active = nullptr;

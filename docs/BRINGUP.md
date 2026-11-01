@@ -740,3 +740,154 @@ both fail when the delay is removed.
 `0x088FFF64` (`Guest memory access outside PSP RAM/EDRAM at 0x20`, a0=0): a
 getter at `0x088040A4` returns a null object and the caller dereferences
 `this+0x20`. That belongs to the new-game initialisation path.
+
+## 2026-11-01 — T13i: new-game confirm faults in guest initialisation
+
+**Reproduction.** The boot runner can now drive menu paths on the host with
+`--pad-press FLIP[:BUTTON[:HOLD]]` (a display-flip observer publishes the
+mask). Cross at flip 460 opens the new-game path; confirming BASIC at 720
+faults at `0x0880A8F8` (`Guest memory access outside PSP RAM/EDRAM at 0x0`,
+a0=0). Selecting ADVANCE first stops at the unbound
+`sceUtility::sceUtilityMsgDialogInitStart` instead.
+
+**BASIC path.** The caller at `0x0880A8F0` asks the guest allocator
+(`0x08985BE8`) for 104 bytes. The allocator returns 0, the caller branches to
+`0x0880A914` and dereferences the null pointer at `gpr17+0`. Allocations
+normally land in the guest `UserSbrk` block (`0x08B38000`, 0x19000 bytes);
+`PSPRECOMP_TRACE_PC=0x0880A8F8` shows ~1,900 successful returns before the
+single zero, so the block is not simply exhausted. The guest prints
+`POLL SEMA` immediately before the failure. Our `sceKernelTryAllocateFpl`
+contract matches PPSSPP (success writes the pointer and returns 0, failure
+returns `NO_MEMORY`), so the failing path is the game's own heap/free list.
+
+**Savedata.** The boot calls savedata mode 11 (LIST) for the SYSTEM, STORY*
+and CLEAR* save names; the handler still returns `0x80110300`. The game's
+save-slot list is therefore uninitialised before the new-game path, which is
+the leading candidate for the missing object.
+
+**References.** PPSSPP `sceKernelMemory.cpp` (FPL contract), `sceUtility.cpp`
+and `PSPMsgDialog.cpp`/`PSPDialog.cpp` (dialog state machine); the
+`snuri00/psp-web-recomp` message-dialog HLE (headless auto-accept writes
+result 0 and `buttonPressed = YES`); JPCSP `sceUtility.java`; PSPSDK
+`psputility_msgdialog.h`/`psputility_savedata.h` (LIST = 11).
+
+**Next.** Implement the four message-dialog imports and savedata LIST, then
+rerun both pad scripts. Both are already named gaps.
+
+## 2026-11-01 — T13i: message-dialog HLE and savedata LIST
+
+**Change.** The four `sceUtilityMsgDialog*` imports now run the PSP status
+machine with a documented headless auto-accept: once visible the dialog
+completes with result 0 and `buttonPressed = 1` (YES), the V1/V2/V3 parameter
+sizes are accepted and anything else fails closed. Savedata mode 11 (LIST)
+fills `SceUtilitySavedataIdListInfo` from the save directories matching
+`gameName + saveName`, honours `*`/`?` wildcards, sorts entries, strips the
+game prefix and reports `0x80110328` for a missing or invalid `idList`.
+
+**Evidence.** Red-first `utility_dialog_contracts` and the LIST block failed
+before the handlers were bound (missing imports / named mode-11 gap). They
+now cover the status sequence, the auto-accept result, V1/V2/V3 sizing,
+exact/wildcard/limited/empty lists and the rejected `idList`.
+
+**ADVANCE path.** With `--pad-press 460:cross:12 --pad-press 700:down:8
+--pad-press 720:cross:12` the run no longer stops at
+`sceUtilityMsgDialogInitStart`; it reaches 2,000,000 dispatches, 9,199 flips
+and the dispatch limit at `0x08805DEC`. The game now calls savedata mode 4
+(LISTLOAD) 613 times: `sceUtilitySavedataInitStart` and `SavedataGetStatus`
+dominate the tail histogram, i.e. the title is retrying a UI-less load menu.
+LISTLOAD is the next named gap.
+
+**BASIC path.** Confirming BASIC (`--pad-press 460:cross:12 --pad-press
+720:cross:12`) still faults at `0x0880A8F8` with the same 104-byte allocator
+request returning 0. The dialog gap was not the cause of that failure.
+
+**References.** The same PPSSPP/JPCSP/PSPSDK set as above, plus PSPSDK
+`psputility_savedata.h` for `SceUtilitySavedataIdListInfo`/`Entry` and
+PPSSPP `SavedataParam::GetList` for the wildcard search string.
+
+### LISTLOAD research (mode 4)
+
+The title passes `saveNameList = GUN9THSTORY00..31`, `idList` non-null but
+unused, `fileName = STORY` and `focus = 3` (LATEST). Reference semantics:
+
+- **Candidate list.** PPSSPP `SavedataParam::SetPspParam` reads the
+  zero-terminated 20-byte `saveNameList` and keeps only names whose save
+  directory exists (`listEmptyFile = false` for LISTLOAD/LISTDELETE); a
+  `"<>"` entry expands to every directory with the game prefix. Without a
+  usable list it falls back to the single `gameName + saveName`. JPCSP's
+  `MODE_LISTLOAD` does the same over `saveNameList` with `isPresent()`.
+- **No candidates.** PPSSPP `PSPSaveDialog` shows `DS_LOAD_NODATA`; the only
+  action is cancel, which sets `common.result =
+  SCE_UTILITY_SAVEDATA_ERROR_LOAD_NO_DATA` (0x80110307) and finishes.
+  JPCSP uses the same code (`ERROR_SAVEDATA_LOAD_NO_DATA`).
+- **Selection.** `focus` maps to `SavedataParam::GetFirstListSave` /
+  `GetLastListSave` / `GetLatestSave` / `GetOldestSave` / `GetFirstDataSave`
+  / `GetLastDataSave`; unknown and FIRSTLIST select index 0. LATEST/OLDEST
+  compare the save's `PARAM.SFO` mtime and skip zero-size entries.
+- **Load.** The selected name is used as `saveName`; PPSSPP's
+  `LoadSaveData` writes it back to the request (when `fileName` is
+  non-empty), then the normal LOAD path sets `bind = 1021`, `dataSize`,
+  SFO fields and icons. Missing directory → 0x80110307; missing data file →
+  0x80110309; broken SFO → 0x80110306.
+- **PSPSDK sample** (`src/samples/savedata/utility/main.c`) drives the same
+  status loop: VISIBLE → Update, QUIT → ShutdownStart, FINISHED/NONE → done,
+  with `saveNameList` populated before `sceUtilitySavedataInitStart`.
+
+Headless policy to implement: empty list auto-cancels with 0x80110307;
+a non-empty list auto-selects the `focus` entry and performs the LOAD, with
+the selected name written back. Recorded here before implementation.
+
+### LISTLOAD implemented and the next fault
+
+Mode 4 now follows the reference policy: candidates from the zero-terminated
+`saveNameList` (existing directories only, `"<>"` expansion, single-save
+fallback), `focus` selection, `0x80110307` for an empty list, selected name
+written back, then the normal LOAD path. Red-first
+`savedata_listload_contracts` covers first/last/latest/oldest selection,
+missing-entry skipping, `"<>"`, the single-name fallback and the empty list;
+it now passes.
+
+Host ADVANCE (`--pad-press 460:cross:12 --pad-press 700:down:8 --pad-press
+720:cross:12`) no longer retries mode 4. It passes the save probe and reaches
+the new-game setup, then faults on an indirect call whose target is 0
+(reported at dispatch `0x08806034`; the call at `0x0880602C` sets
+`ctx.pc = gpr6`, and `gpr6 = [gpr7 + 4]` is zero). BASIC still faults at
+`0x0880A8F8` when a 104-byte allocator request returns 0. Neither path has an
+unbound HLE import; both look like the same missing or null guest object.
+
+### Null-object trace (2026-11-01)
+
+**BASIC allocator.** With an allocation-site diagnostic the 104-byte request
+fails deterministically at call 1969 on a fresh memory stick, `self` is
+`0x08B38D20`, and the heap descriptor is `0x08ACF3A8`. The same 112-byte
+chunk is handed out about 1,006 times before that, and the last successful
+chunks reach `0x08B40030` inside the 0x19000 `UserSbrk` block
+(`0x08B38000`..`0x08B51000`), i.e. roughly 69 KB is still unused when the
+allocator gives up. The call chain is guest code
+`0x08985BE8` -> `0x08973094` -> `0x08977F4C`; no HLE allocator is involved.
+This points at corruption or fragmentation of the game's own free list, not
+at an HLE allocation contract mismatch.
+
+**ADVANCE null read.** A gdb catch on C++ throws identified the fatal path
+as `GuestMemory::load8` <- `GuestMemory::aot_load32_slow` <-
+`recomp_unit_0101_entry`, i.e. translated code at guest `0x0899B3F0`. That
+routine copies four 4x4 VFPU matrices from a source pointer and the caller
+passes `a1 = 0`. There is no missing import and no HLE handler in the throw.
+The savedata trace shows no request after LISTLOAD returns `NO_DATA`; the
+last I/O before the fault is the story `data.dar` reads and an async open of
+`bgm/bgm01.at3`. The fault is therefore guest state (a null matrix source),
+not an unbound HLE call.
+
+### HLE call ring
+
+`GUNGNIR_HLE_RING=N` now records the last N HLE import calls (`a0`-`a3`,
+`v0`/`v1`, return PC, thread) and the session prints them when a run stops on
+a fault. In the ADVANCE window the calls immediately before the matrix-copy
+fault are ordinary: `sceRtcGetCurrentTick`, four
+`sceKernelDcacheWritebackRange` calls with size 0, `sceKernelCheckCallback`
+(returns 0, no queued callback) and `sceAudioOutputPannedBlocking` (channel
+4, returns 0). In BASIC the allocator's
+`sceKernelCpuSuspendIntr`/`ResumeIntr` bracket the heap and the last call is
+again `sceAudioOutputPannedBlocking` before the failed 104-byte request. No
+HLE return looks wrong, so the divergence is in guest state rather than a
+bad import result.

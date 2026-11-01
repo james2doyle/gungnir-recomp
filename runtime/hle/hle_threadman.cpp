@@ -268,6 +268,10 @@ void register_semaphores(HleRegistrar &hle) {
             found->second.count -= wanted;
             kernel().finish(ctx, 0u);
         } else {
+            if (trace_sync())
+                log_sync("PollSema busy uid=" + std::to_string(as_signed(arg(ctx, 0))) +
+                    " count=" + std::to_string(found->second.count) +
+                    " waiters=" + std::to_string(found->second.waiters.size()));
             kernel().finish(ctx, error::kSemaZero);
         }
     });

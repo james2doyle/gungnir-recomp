@@ -3,11 +3,56 @@
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <unordered_set>
 
 namespace gungnir::hle {
+namespace {
+
+struct HleRingEntry {
+    std::string key;
+    std::string thread;
+    std::array<std::uint32_t, 4> args{};
+    std::uint32_t v0{};
+    std::uint32_t v1{};
+    std::uint32_t pc{};
+    std::uint64_t sequence{};
+};
+
+std::deque<HleRingEntry> g_hle_ring;
+std::uint64_t g_hle_ring_sequence = 0u;
+
+std::size_t hle_ring_capacity() {
+    static const std::size_t capacity = [] {
+        const char *text = std::getenv("GUNGNIR_HLE_RING");
+        if (text == nullptr) return std::size_t{0};
+        const unsigned long value = std::strtoul(text, nullptr, 10);
+        return value != 0ul ? static_cast<std::size_t>(value) : std::size_t{64};
+    }();
+    return capacity;
+}
+
+void record_hle_call(std::string key, const std::array<std::uint32_t, 4> &args,
+    const AllegrexContext &ctx) {
+    const std::size_t capacity = hle_ring_capacity();
+    if (capacity == 0u) return;
+    if (g_hle_ring.size() >= capacity) g_hle_ring.pop_front();
+    HleRingEntry entry;
+    entry.key = std::move(key);
+    const Thread *thread = kernel().current_thread();
+    entry.thread = thread != nullptr ? thread->name : "interrupt";
+    entry.args = args;
+    entry.v0 = ctx.gpr[2];
+    entry.v1 = ctx.gpr[3];
+    entry.pc = ctx.pc;
+    entry.sequence = ++g_hle_ring_sequence;
+    g_hle_ring.push_back(std::move(entry));
+}
+
+} // namespace
 
 std::string read_cstring(const psprecomp::GuestMemory &memory, std::uint32_t address, std::size_t max_length) {
     std::string text;
@@ -72,6 +117,15 @@ bool HleRegistrar::try_add(std::string_view library, std::string_view name, HleF
         }
         nid = first;
     }
+    if (hle_ring_capacity() != 0u) {
+        const std::string key = std::string(library) + "::" + std::string(name);
+        function = [key, handler = std::move(function)](
+                       Runtime &rt, AllegrexContext &ctx) {
+            const std::array<std::uint32_t, 4> args{ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]};
+            handler(rt, ctx);
+            record_hle_call(key, args, ctx);
+        };
+    }
     runtime_.register_hle(std::string(library), nid, std::move(function));
     bound_.insert({std::string(library), nid});
     return true;
@@ -105,6 +159,19 @@ void log_sync(const std::string &message) {
 void log_once(const std::string &key, const std::string &message) {
     static std::unordered_set<std::string> seen;
     if (seen.insert(key).second) std::cerr << message << "\n";
+}
+
+void dump_hle_ring(std::ostream &out) {
+    if (g_hle_ring.empty()) return;
+    out << "[hle-ring] last " << g_hle_ring.size() << " calls\n";
+    for (const HleRingEntry &entry : g_hle_ring) {
+        out << "[hle-ring] #" << entry.sequence << " " << entry.thread << " " << entry.key
+            << " a0=" << psprecomp::hex32(entry.args[0]) << " a1=" << psprecomp::hex32(entry.args[1])
+            << " a2=" << psprecomp::hex32(entry.args[2]) << " a3=" << psprecomp::hex32(entry.args[3])
+            << " v0=" << psprecomp::hex32(entry.v0) << " v1=" << psprecomp::hex32(entry.v1)
+            << " pc=" << psprecomp::hex32(entry.pc) << "\n";
+    }
+    g_hle_ring.clear();
 }
 
 bool HleRegistrar::bound(const std::string &library, std::uint32_t nid) const {

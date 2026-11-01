@@ -11,6 +11,7 @@
 #include "audio/audio_sink.hpp"
 #include "ge/software.hpp"
 #include "hle/hle_media.hpp"
+#include "input/input_state.hpp"
 #include "session/game_session.hpp"
 
 #include <cstdint>
@@ -20,6 +21,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -39,6 +41,45 @@ public:
     std::uint64_t frames{};
     int peak{};
 };
+
+struct PadPress {
+    std::uint64_t start{};
+    std::uint64_t hold{};
+    gungnir::input::ButtonMask mask{};
+};
+
+bool button_from_name(const std::string &name, gungnir::input::ButtonMask &mask) {
+    using gungnir::input::Button;
+    static const std::pair<const char *, Button> names[] = {
+        {"cross", Button::Cross}, {"circle", Button::Circle}, {"square", Button::Square},
+        {"triangle", Button::Triangle}, {"start", Button::Start}, {"select", Button::Select},
+        {"up", Button::Up}, {"down", Button::Down}, {"left", Button::Left}, {"right", Button::Right},
+        {"l", Button::L}, {"r", Button::R},
+    };
+    for (const auto &[text, button] : names) {
+        if (name == text) {
+            mask |= gungnir::input::button_mask(button);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool parse_pad_press(const std::string &text, PadPress &press) {
+    const std::size_t first = text.find(':');
+    const std::size_t second = first == std::string::npos ? std::string::npos : text.find(':', first + 1);
+    try {
+        press.start = std::stoull(text.substr(0, first));
+        press.hold = second == std::string::npos ? 8u : std::stoull(text.substr(second + 1));
+    } catch (const std::exception &) {
+        return false;
+    }
+    const std::string button = first == std::string::npos
+        ? std::string("cross")
+        : text.substr(first + 1, second == std::string::npos ? std::string::npos : second - first - 1);
+    press.mask = 0u;
+    return button_from_name(button, press.mask) && press.hold != 0u;
+}
 
 [[noreturn]] void usage(const char *message) {
     std::cerr << "boot_runner: " << message << "\n"
@@ -65,6 +106,7 @@ int main(int argc, char **argv) {
     std::string texture_path;
     std::size_t draw_only = std::numeric_limits<std::size_t>::max();
     std::uint64_t frame_at = 60u;
+    std::vector<PadPress> pad_presses;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&](const char *name) -> std::string {
@@ -85,6 +127,11 @@ int main(int argc, char **argv) {
         else if (arg == "--frame-ppm") ppm_path = next("--frame-ppm");
         else if (arg == "--texture-ppm") texture_path = next("--texture-ppm");
         else if (arg == "--draw-only") draw_only = std::stoull(next("--draw-only"));
+        else if (arg == "--pad-press") {
+            PadPress press;
+            if (!parse_pad_press(next("--pad-press"), press)) usage("bad --pad-press");
+            pad_presses.push_back(press);
+        }
         else if (arg == "--no-stop-at-flip") config.stop_at_flip = false;
         else usage(("unknown argument: " + arg).c_str());
     }
@@ -99,6 +146,15 @@ int main(int argc, char **argv) {
         if (!session.start(config, &audio_sink, error)) {
             std::cerr << "boot_runner: " << error << "\n";
             return 1;
+        }
+        if (!pad_presses.empty()) {
+            gungnir::hle::set_display_flip_observer([&pad_presses] {
+                const std::uint64_t flip = gungnir::hle::display_state().flips;
+                gungnir::input::ButtonMask mask = 0u;
+                for (const PadPress &press : pad_presses)
+                    if (flip >= press.start && flip < press.start + press.hold) mask |= press.mask;
+                gungnir::input::state().set_buttons(gungnir::input::Source::Keyboard, 0, 0, mask);
+            });
         }
         std::vector<gungnir::ge::Draw> first_frame;
         if (!frame_path.empty()) {

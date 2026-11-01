@@ -55,12 +55,16 @@ validates `size`, mode, game/save/file names and the parameter range.
 |---|---|
 | 2 `LOAD` | Reads `PARAM.SFO`, restores title/savedata-title/detail/parental, sets `bind=1021`, copies the data file into `dataBuf` and sets `dataSize`; copies icon buffers when the guest supplies them |
 | 3 `SAVE` | Writes the data file (`dataSize`, clamped to `dataBufSize`), supplied icons/picture/sound and a fresh `PARAM.SFO` |
+| 4 `LISTLOAD` | Headless save picker: candidates are the existing save directories named by the zero-terminated 20-byte `saveNameList` (`"<>"` expands to every save of the game; an absent/empty list falls back to `gameName + saveName`). `focus` selects FIRSTLIST/LASTLIST/LATEST/OLDEST/FIRSTDATA/LASTDATA (unknown and FIRSTLIST select index 0; LATEST/OLDEST compare the `PARAM.SFO` mtime). An empty list completes with `0x80110307`; otherwise the selected name is written back and the LOAD path runs |
 | 8 `SIZES` | Existing T6k path: msFree/msData/utilityData from the real save directory |
+| 11 `LIST` | Fills the guest `idList` (`maxCount`, `resultCount`, `entries`) with save directory names matching `gameName + saveName`; `*` and `?` wildcards are honoured, entries are sorted, and the name drops the game prefix |
 | others | Named counted gap (`savedata mode N is not implemented yet`), result `0x80110300` |
 
 Load errors: `0x80110306` broken SFO, `0x80110307` missing save directory,
 `0x80110308` bad parameter/buffer, `0x80110309` missing data file. Save
 failures return `0x80110383` (no space) or `0x80110388` (bad parameter).
+`LIST` returns `0x80110328` when `idList` or its entries are missing or
+invalid; an empty match is a successful request with `resultCount = 0`.
 Nothing is silently created or zero-filled on a failed load.
 
 ## PPSSPP interchange
@@ -85,8 +89,16 @@ parsed here; a reimplementation would need explicit sign-off.
 - KIRK/secure save encryption and `SAVEDATA_PARAMS` hashes are deferred.
   Unencrypted saves may not load on real PSP hardware or PPSSPP in secure
   mode; they do load through this HLE.
-- List/delete/auto modes, `SAVEDATA_FILE_LIST` updates beyond one data file
-  and the save-picker UI are not implemented.
+- Delete/auto/secure modes, `FILES`/`GETSIZE`, `SAVEDATA_FILE_LIST`
+  updates beyond one data file and the save-picker UI are not implemented.
+- There is no save-picker UI. `LISTLOAD` auto-cancels an empty list with
+  `0x80110307` and auto-selects the `focus` entry when saves exist; a real
+  picker would need the missing renderer path.
+- The save-picker modes `LISTSAVE` (5), `LISTDELETE` (6) and
+  `LISTALLDELETE` (7) are not implemented. The title executes LISTLOAD on
+  the new-game path with a 32-slot `saveNameList`.
+- `LIST` entry timestamps come from the save's `PARAM.SFO` mtime (the
+  directory when the SFO is missing) through the host filesystem clock.
 - On device the memory-stick root is supplied by the future Android wiring;
   the desktop runner takes `--ms`. Only host/PPSSPP interchange is verified
   today.

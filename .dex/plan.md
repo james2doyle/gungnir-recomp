@@ -107,7 +107,7 @@ gungnir-recomp/
 └── build/                       # GITIGNORED: game tree, generated code, outputs
 ```
 
-**Pipeline:** `game.chd` → [T3 intake] → `build/game/` (verified ISO, decrypted ELF, manifest) → [T5 analyze+codegen] → `build/generated/` (chunked C++ TUs) → [T6/T7 runtime] → Linux desktop boot → [T9/T10/T11 Android] → adb device → [T13] title screen.
+**Pipeline:** `game.chd` → [T3 intake] → `build/game/` (verified ISO, decrypted ELF, manifest) → [T5 analyze+codegen] → `build/generated/` (chunked C++ TUs) → [T6/T7 runtime] → Linux desktop boot → [T9/T10/T11 Android] → adb device → [T13] title screen → [T14] device sign-off.
 
 ## 5. Tasks
 
@@ -285,18 +285,31 @@ records what it used.
 
 ### T13 — Milestone integration: title screen on device + CI/release hygiene
 **Depends on:** T5, T6, T7, T8, T9, T10, T11, T12
-**Tracking:** decomposed in dex into T13a–T13h (Android runtime session + AOT/HLE/audio/savedata wiring; title screen and menu at 1x with 59.94 Hz pacing and both input paths; BUILDING/ANDROID docs; CI build matrix with fail-closed private inputs; hygiene gates incl. dummy-artifact block, secrets, license/notice and SPDX/REUSE; manual QA matrix with suspend/resume and 30-minute soak; rumble usage audit; milestone ledger, release checklist, AGENTS ratification and closure). Each subtask starts with the repository code-search/issue-search reference step and records what it used.
-**Work:** Wire the full chain: intake → AOT → APK → `adb install`/push → boot to Gungnir title screen with textures/text rendering (replacement path at 1x), touch + gamepad navigating the title menu, bounded-run logs clean of unknown NIDs, screenshot captured via `scripts/android/screenshot.sh`, hashed into a **gitignored** local milestone report (public `data/milestones.json` carries counts/criteria only — no game screenshots in-repo). CI: GitHub Actions building Linux runtime + Android cross-compile (synthetic fixtures only), `repository_check` + secret scan + license/notice gate + SPDX/REUSE lint, actions SHA-pinned, `exit 77` fail-closed skips for private-input tests. **Manual QA campaign (§8.3):** write `docs/QA.md` (standard + Gungnir-specific scripts), run the device matrix (≥1 Adreno + ≥1 non-Adreno/handheld + emulator), file dated reports under `docs/qa/`, and fix every finding red-first (reproducing test where host-testable). `docs/BUILDING.md` (from-scratch user workflow), `docs/ANDROID.md` finalized, `AGENTS.md` ratified.
+**Tracking:** decomposed in dex into T13a–T13e, T13h and T13i (Android runtime session + AOT/HLE/audio/savedata wiring; title screen and menu at 1x with 59.94 Hz pacing and both input paths; BUILDING/ANDROID docs; CI build matrix with fail-closed private inputs; hygiene gates incl. dummy-artifact block, secrets, license/notice and SPDX/REUSE; milestone ledger, release checklist, AGENTS ratification and closure; one tracked new-game defect). The manual QA campaign, rumble audit and release sign-off live in T14. Each subtask starts with the repository code-search/issue-search reference step and records what it used.
+**Work:** Wire the full chain: intake → AOT → APK → `adb install`/push → boot to Gungnir title screen with textures/text rendering (replacement path at 1x), touch + gamepad navigating the title menu, bounded-run logs clean of unknown NIDs, screenshot captured via `scripts/android/screenshot.sh`, hashed into a **gitignored** local milestone report (public `data/milestones.json` carries counts/criteria only — no game screenshots in-repo). CI: GitHub Actions building Linux runtime + Android cross-compile (synthetic fixtures only), `repository_check` + secret scan + license/notice gate + SPDX/REUSE lint, actions SHA-pinned, `exit 77` fail-closed skips for private-input tests. `docs/BUILDING.md` (from-scratch user workflow), `docs/ANDROID.md` finalized, `AGENTS.md` ratified. **The manual QA campaign, device matrix, soak, rumble audit and release sign-off are T14**, not this task.
 **Test cases:**
-- TC-13.1 From-scratch run of the documented pipeline on this machine reaches the title screen on the adb device (the milestone definition).
-- TC-13.2 CI green on a clean clone with zero game artifacts present (and `repository_check` proves it).
-- TC-13.3 Deliberate dummy-ELF/ISO commit attempt blocked locally and in CI.
-- TC-13.4 Milestone ledger updated: M4 recorded with measure + evidence pointers; regression drops are visible (never lowered silently).
-- TC-13.5 Manual QA matrix complete and signed off (§8.3): every device cell has a dated `docs/qa/` report; three consecutive cold boots pass per device; every QA finding has either a red-first regression test or a tracked open defect.
-- TC-13.6 Suspend/resume and 30-minute soak run clean on at least one physical device per session (recording hash evidence, no game frames in-repo).
-**Docs checkpoint:** `docs/BUILDING.md`, `docs/ANDROID.md`, `docs/QA.md` + `docs/qa/` session reports, `docs/PROGRESS.md` (public status — counts and criteria only), release checklist in `docs/RELEASE.md`.
+- TC-13.1 CI green on a clean clone with zero game artifacts present (and `repository_check` proves it).
+- TC-13.2 Deliberate dummy-ELF/ISO commit attempt blocked locally and in CI.
+- TC-13.3 The documented build/deploy flow matches the scripts and gates (`tests.test_docs_building`).
+- TC-13.4 Milestone ledger and public status recorded with measures and evidence pointers; a figure drop stays visible (never lowered silently).
+**Docs checkpoint:** `docs/BUILDING.md`, `docs/ANDROID.md`, `docs/PROGRESS.md` (public status — counts and criteria only), release checklist in `docs/RELEASE.md`. The QA script and session reports are T14.
 **Refs:** nakagawa (CI fail-closed + hygiene matrix), hst-decomp (milestones ratchet), azazel6 (evidence labels), Yakumo (nightly/release automation), ff7ccrecomp (frontend, recordings/replays, regression-script shape — MIT).
 **Gotchas:** §7A.4 (public claims vs tree), §7E.1.
+
+### T14 — Manual device validation and release sign-off
+**Depends on:** T13a–T13e (engineering, docs and CI) and T13i where the first gameplay transition is required.
+**Tracking:** decomposed in dex into T14a (manual QA campaign), T14b (rumble/actuator audit and M5 decision) and T14c (milestone and release sign-off). Each subtask starts with the repository code-search/issue-search reference step and records what it used.
+**Work:** Write `docs/QA.md` (standard + Gungnir-specific script: title → menu → first gameplay transition). Run the device matrix: x86_64 emulator (SwiftShader) plus at least one physical Adreno arm64 phone and one non-Adreno/handheld where available; ask the user for device access and interaction; use adb and `scripts/android/*`. Execute the documented from-scratch pipeline from `docs/BUILDING.md` and reach the title screen plus menu input on the device. File one dated `docs/qa/<date>-<device>.md` per session (model, Android version, GPU/driver and version, build SHA, tester, steps, expected/actual, pass/fail counts, screenshot SHA-256; images stay in gitignored `build/qa/`). Run three consecutive cold boots per device, suspend/resume cycles and a 30-minute soak on at least one physical device (crash/thermal/audio counters, recording hash, no frames). Fix findings red-first where host-testable, otherwise track an owned defect. Audit `sceRumble`/`sceCtrlSetActuator` usage and either implement it with tests or record an explicit M5 deferral. Finally, accept the QA evidence and the release checklist against the signed build and hand the pointers to T13h. The emulator never closes a cell.
+**Test cases:**
+- TC-14.1 From-scratch run of the documented pipeline on this machine reaches the title screen and menu input on the adb device (the M4 definition).
+- TC-14.2 Manual QA matrix complete and signed off (§8.3): every device cell has a dated report; three consecutive cold boots pass per device; every finding has a red-first regression test or a tracked open defect.
+- TC-14.3 Suspend/resume and the 30-minute soak run clean on at least one physical device per session (hash evidence, no game frames in-repo).
+- TC-14.4 Rumble/actuator audit resolved: implemented with tests and device observation, or a named M5 deferral with evidence.
+- TC-14.5 Release checklist accepted against the signed build (clean clone, deps, notices, repository_check, CI, APK contents, no game/generated content, signing policy).
+- TC-14.6 QA evidence set internally consistent and accepted as the M4/M5 evidence source (build SHA, device, counters, sign-off).
+**Docs checkpoint:** `docs/QA.md`, dated `docs/qa/` session reports, the accepted release checklist in `docs/RELEASE.md`.
+**Refs:** plan §8.3, hst-decomp (evidence labels and milestone ratchet), azazel6 (evidence labels); the device scripts and QA templates already in `docs/qa/`.
+**Gotchas:** §7A.4 (public claims vs tree), §7E.1 (Android platform variance).
 
 ## 6. Milestones
 
@@ -306,8 +319,8 @@ records what it used.
 | **M1** | Pipeline dry-run on synthetic fixtures | M0 | T4 done: synthetic fixtures trace-equal interpreter vs AOT on Linux; VFPU fuzz clean | `ARCHITECTURE.md`, `TESTING.md` |
 | **M2** | Game analyzed, AOT generated | M1 + T3 intake gates pass on the local disc | T5 done: census gates pass, chunked TUs compile, dispatch-coverage report clean | `ANALYSIS.md`, `BRINGUP.md` opened |
 | **M3** | Linux desktop bounded boot | M2 | T6+T7 done: bounded boot passes module init + first frame on Linux; GE fixtures pass on Vulkan | `HLE.md`, `RENDERER.md`, `SHADERS.md` |
-| **M4** | **Title screen on adb device (first milestone)** | M3 + T9–T12 done | TC-13.1: documented pipeline reaches title screen + menu input (touch + gamepad) on device; audio/saves may be stubbed; logs itemize all gaps; **manual QA report accepted for every device in the matrix (§8.3), incl. one Adreno device** | `BUILDING.md`, `ANDROID.md`, `INPUT.md`, `PROGRESS.md`, `QA.md` + `qa/` session reports |
-| **M5** | Hardening (post-milestone) | M4 | Audio complete (ATRAC/SAS), saves, perf ≥ full speed on target handheld, texture replacement + text upscaling polished, driver picker, shader presets shipped; **manual QA accepted incl. custom-driver session, rumble, suspend/resume, 30-min soak** | `AUDIO.md`, `SAVEDATA.md`, `TEXTURE_REPLACEMENT.md`, `ANDROID_DRIVERS.md`, `qa/` reports |
+| **M4** | **Title screen on adb device (first milestone)** | M3 + T9–T12 done | TC-14.1: documented pipeline reaches title screen + menu input (touch + gamepad) on device; audio/saves may be stubbed; logs itemize all gaps; **manual QA report accepted for every device in the matrix (§8.3), incl. one Adreno device (TC-14.2)** | `BUILDING.md`, `ANDROID.md`, `INPUT.md`, `PROGRESS.md`, `QA.md` + `qa/` session reports |
+| **M5** | Hardening (post-milestone) | M4 | Audio complete (ATRAC/SAS), saves, perf ≥ full speed on target handheld, texture replacement + text upscaling polished, driver picker, shader presets shipped; **manual QA accepted incl. custom-driver session, rumble, suspend/resume, 30-min soak (T14)** | `AUDIO.md`, `SAVEDATA.md`, `TEXTURE_REPLACEMENT.md`, `ANDROID_DRIVERS.md`, `qa/` reports |
 
 Milestone discipline (hst-decomp ratchet): every milestone is *measured*, recorded in `data/milestones.json` with criterion + evidence, and a drop in any figure is **visible, never quietly lowered**. Additionally, **no device-facing milestone closes on automation alone** — the §8.3 QA matrix must be complete and signed off, and all red-first evidence (bug → reproducing test → fix) must be present for every defect found during the milestone.
 
@@ -396,7 +409,7 @@ Automated tests never close a device-facing milestone. Manual QA is a structured
 
 - **QA matrix per device-facing milestone (M4/M5):** at minimum one **Adreno** device (for driver-loader validation) and one **non-Adreno or handheld** device (Ayn/Ayaneo-class where possible) + the x86_64 emulator. Each cell records: device model, Android version, GPU/driver (system or custom zip + version), build ID (git SHA), date, tester.
 - **Emulator vs device:** emulators are fine during initial feature bring-up and fast iteration, but never close a device-facing feature sprint. Physical-device manual QA is required at sprint end; emulator evidence supplements it. Start the reproducible x86_64 emulator with `scripts/android/emulator.sh` (AVD `gungnir`, port 5554, headless SwiftShader, `-no-snapshot -wipe-data -no-audio -no-boot-anim -netdelay none -netspeed full`); `-wipe-data` resets the AVD, so re-push user data.
-- **Standard QA script** (`docs/QA.md`, kept current): cold boot to title; menu navigation via touch; menu navigation via gamepad (paired + built-in handheld controller); overlay hide-on-pad; suspend/resume (background/foreground) rendering recovery; rotation ignored; save/load if enabled; touch-control haptic tick on the phone and no-op on the emulator; battle/game rumble if enabled later; audio smoke; 30-minute soak for crashes/thermal. T13 adds the Gungnir-specific script: title → menu → first gameplay transition.
+- **Standard QA script** (`docs/QA.md`, kept current): cold boot to title; menu navigation via touch; menu navigation via gamepad (paired + built-in handheld controller); overlay hide-on-pad; suspend/resume (background/foreground) rendering recovery; rotation ignored; save/load if enabled; touch-control haptic tick on the phone and no-op on the emulator; battle/game rumble if enabled later; audio smoke; 30-minute soak for crashes/thermal. T14 adds the Gungnir-specific script: title → menu → first gameplay transition.
 - **Red-first applies to QA findings too:** a device bug becomes a reproducible case (steps, build, device) and, wherever host-testable, a red test before the fix.
 - **Evidence:** QA reports live in `docs/qa/` (markdown, one file per session, dated) with **counts and pass/fail only** — no game screenshots in-repo; screenshot hashes recorded instead (images stay in gitignored `build/qa/`).
 - **Sign-off:** M4 and M5 close only with an accepted QA report per device in the matrix. "Works on my machine once" is not evidence; "CI is green" is not evidence; three consecutive cold boots on each device are.
@@ -415,7 +428,7 @@ Automated tests never close a device-facing milestone. Manual QA is a structured
 | With assets (T8) | `docs/formats/{TPL,DAR}.md`, `docs/TEXTURE_REPLACEMENT.md` |
 | With Android (T9–T11) | `docs/ANDROID.md`, `docs/ANDROID_DRIVERS.md`, `docs/INPUT.md` |
 | With audio/saves (T12) | `docs/AUDIO.md`, `docs/SAVEDATA.md` |
-| At milestone (T13) | `docs/BUILDING.md`, `docs/QA.md` + `docs/qa/<date>-<device>.md` session reports, `docs/PROGRESS.md`, `docs/RELEASE.md` |
+| At milestone (T13/T14) | `docs/BUILDING.md`, `docs/QA.md` + `docs/qa/<date>-<device>.md` session reports, `docs/PROGRESS.md`, `docs/RELEASE.md` |
 
 Every document obeys §0: format facts and RE addresses yes; game content, dump hashes, and screenshots no.
 

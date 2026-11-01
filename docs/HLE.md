@@ -49,7 +49,8 @@ cross-library alias path, and a bound handler invocation.
 | sceSasCore (T6g boot discoveries) | VERIFIED | MIT Yakumo VAG/ADPCM software mixer (32 voices, pitch, volume, simple ADSR, pause, grain/output mode, end flag, envelope heights); init validation and hand-computed VAG grain contract; reverb/ATRAC3/noise voices remain unbound and stop loudly |
 | sceAtrac3plus (T6h boot discoveries) | VERIFIED (ID lifecycle) | GetAtracID/Release with AT3 (0x1001) and AT3+ (0x1000) codec types; the FFmpeg n4.4 ATRAC3/3+ decoder subset is vendored with a public 4,149-check self-test. Track parse/decode handlers are added only as the title executes them; no decode call has run at this depth |
 | Async IoFileMgr (T6i boot discoveries) | VERIFIED | Open/read/write/lseek/close async variants plus poll, wait, waitCB and getAsyncStat; host I/O completes synchronously but the result is staged per descriptor and delivered only by Wait/Poll/GetAsyncStat, with one outstanding operation and kernel error codes. `sceIoLseek32Async` is covered too |
-| sceUtility savedata (T6k boot discoveries) | VERIFIED (SIZES) | InitStart/Update/GetStatus/ShutdownStart state machine; SIZES fills the guest `msFree`/`msData`/`utilityData` blocks from the virtual memory-stick directory and reports `NO_DATA` for a missing save. MsgDialog, GamedataInstall and the other savedata modes remain unbound/unsupported and are counted gaps |
+| sceUtility savedata (T6k boot discoveries) | VERIFIED (SIZES, LIST, LISTLOAD) | InitStart/Update/GetStatus/ShutdownStart state machine; SIZES fills the guest `msFree`/`msData`/`utilityData` blocks from the virtual memory-stick directory and reports `NO_DATA` for a missing save. LIST fills `SceUtilitySavedataIdListInfo` from the save directories matching `gameName + saveName` (`*`/`?` wildcards, sorted, game prefix stripped). LISTLOAD (mode 4, executed by the new-game path with a 32-slot `saveNameList`) resolves candidates from the list or the single save name, applies the `focus` policy (LATEST/OLDEST use the `PARAM.SFO` mtime), auto-cancels an empty list with `NO_DATA`, and otherwise writes the selected name back and runs the LOAD path. LISTSAVE/LISTDELETE, GamedataInstall and the remaining savedata modes are counted gaps |
+| sceUtility message dialog | VERIFIED (headless) | The same status machine with a documented headless auto-accept: once the dialog is visible it completes immediately with result 0 and `buttonPressed = YES`, so a title that expects a player acknowledgement continues without a renderer. The V1/V2/V3 parameter sizes are accepted; anything else fails closed |
 | LoadExecForUser / StdioForUser / scePower | VERIFIED (T6b) | exit callback, stdin/stdout/stderr, power callback + clock |
 | Display / Ctrl | VERIFIED (T6c) | mode, frame buffer, vblank waits (incl. multi/CB), vcount, 59.94 Hz; pad reads block on the next vblank |
 | sceGe_user | VERIFIED seam | EDRAM address/size/translation, callbacks, enqueue/sync/stall/draw-sync, break/continue |
@@ -238,3 +239,13 @@ two runs see identical virtual time; interactive boots keep 59.94 Hz pacing.
 ```sh
 python3 -m unittest tests.test_nids tests.test_hle -v
 ```
+
+### Diagnostics
+
+`GUNGNIR_TRACE_SYNC=1` logs kernel synchronization activity;
+`GUNGNIR_TRACE_IO=1` logs disc/memory-stick I/O; `GUNGNIR_TRACE_SAVEDATA=1`
+logs savedata init/status/list operations (limit with
+`GUNGNIR_TRACE_SAVEDATA_LIMIT=N`). `GUNGNIR_HLE_RING=N` keeps the last N HLE
+import calls with `a0`-`a3`, `v0`/`v1` and the return PC, and the session
+prints them when a run stops on a fault. All are opt-in and add no work when
+unset.

@@ -16,6 +16,7 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -105,6 +107,19 @@ public:
     std::map<std::pair<std::string, std::string>, std::uint32_t> nids_by_name;
     static constexpr std::uint32_t kReturnAddress = 0x08822000u;
 };
+
+void hle_ring_contracts() {
+    setenv("GUNGNIR_HLE_RING", "4", 1);
+    Fixture f(test_nids_path(), {}, {});
+    (void)f.thread("sceKernelGetSystemTimeLow");
+    std::ostringstream out;
+    gungnir::hle::dump_hle_ring(out);
+    const std::string text = out.str();
+    check(text.find("ThreadManForUser::sceKernelGetSystemTimeLow") != std::string::npos,
+        "hle ring records the call");
+    check(text.find("v0=") != std::string::npos, "hle ring records the return registers");
+    unsetenv("GUNGNIR_HLE_RING");
+}
 
 void memory_contracts() {
     // No loader thread here: its module_start stack would occupy the top of
@@ -930,10 +945,74 @@ void io_contracts(const std::filesystem::path &iso, const std::filesystem::path 
 }
 
 
+void utility_dialog_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &mem = f.runtime.memory();
+    constexpr std::uint32_t kParam = 0x08840000u;
+    constexpr std::uint32_t kDialogSizeV1 = 572u;
+    constexpr std::uint32_t kDialogSizeV2 = 580u;
+    constexpr std::uint32_t kDialogSizeV3 = 708u;
+    const auto zero = [&mem](std::uint32_t address, std::uint32_t size) {
+        for (std::uint32_t i = 0; i < size; ++i) mem.store8(address + i, 0u);
+    };
+    const auto param = [&](std::uint32_t size) {
+        zero(kParam, 0x2C4u);
+        mem.store32(kParam + 0x00u, size);
+        mem.store32(kParam + 0x34u, 1u);  // TEXT
+        mem.store32(kParam + 0x23Cu, 0u); // options
+        mem.store32(kParam + 0x240u, 0u); // buttonPressed
+    };
+    const auto util = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceUtility", name, args);
+    };
+
+    check(util("sceUtilityMsgDialogGetStatus") == 0x80110005u, "msgdialog status before init is wrong type");
+    check(util("sceUtilityMsgDialogUpdate", {1u}) == 0x80110005u, "msgdialog update before init is wrong type");
+    check(util("sceUtilityMsgDialogShutdownStart") == 0x80110005u,
+          "msgdialog shutdown before init is wrong type");
+
+    param(kDialogSizeV2);
+    check(util("sceUtilityMsgDialogInitStart", {kParam}) == 0u, "msgdialog V2 init accepted");
+    check(util("sceUtilityMsgDialogInitStart", {kParam}) == 0x80110001u,
+          "second msgdialog init rejected while active");
+    check(util("sceUtilityMsgDialogGetStatus") == 2u, "msgdialog becomes visible");
+    check(util("sceUtilityMsgDialogGetStatus") == 3u, "msgdialog finishes without input");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "msgdialog writes a zero common result");
+    check(mem.load32(kParam + 0x30u) == 0u, "msgdialog writes a zero dialog result");
+    check(mem.load32(kParam + 0x240u) == 1u, "msgdialog auto-accepts YES");
+    check(util("sceUtilityMsgDialogShutdownStart") == 0u, "msgdialog shutdown accepted");
+    check(util("sceUtilityMsgDialogGetStatus") == 4u, "msgdialog reaches shutdown");
+    check(util("sceUtilityMsgDialogGetStatus") == 0u, "msgdialog status clears after shutdown");
+
+    gungnir::hle::reset_utility_state();
+    param(kDialogSizeV1);
+    check(util("sceUtilityMsgDialogInitStart", {kParam}) == 0u, "msgdialog V1 init accepted");
+    check(util("sceUtilityMsgDialogUpdate", {1u}) == 0u, "msgdialog V1 update accepted");
+    check(util("sceUtilityMsgDialogUpdate", {1u}) == 0u, "msgdialog V1 finishes on update");
+    check(util("sceUtilityMsgDialogGetStatus") == 3u, "msgdialog V1 reports finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "msgdialog V1 writes a zero result");
+
+    gungnir::hle::reset_utility_state();
+    param(kDialogSizeV3);
+    check(util("sceUtilityMsgDialogInitStart", {kParam}) == 0u, "msgdialog V3 init accepted");
+    check(util("sceUtilityMsgDialogGetStatus") == 2u, "msgdialog V3 becomes visible");
+    check(util("sceUtilityMsgDialogGetStatus") == 3u, "msgdialog V3 finishes without input");
+    check(mem.load32(kParam + 0x240u) == 1u, "msgdialog V3 auto-accepts YES");
+
+    gungnir::hle::reset_utility_state();
+    param(0x100u);
+    check(util("sceUtilityMsgDialogInitStart", {kParam}) == 0x80110004u, "msgdialog bad size rejected");
+    gungnir::hle::reset_utility_state();
+    param(kDialogSizeV2);
+    check(util("sceUtilityMsgDialogInitStart", {0u}) == 0x80110002u, "msgdialog null param rejected");
+}
+
 void savedata_contracts(const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), {}, memory_stick);
     auto &mem = f.runtime.memory();
     constexpr std::uint32_t kParam = 0x08830000u;
+    constexpr std::uint32_t kIdList = 0x08831500u;
+    constexpr std::uint32_t kEntries = 0x08831600u;
     constexpr std::uint32_t kMsFree = 0x08831000u;
     constexpr std::uint32_t kMsData = 0x08831100u;
     constexpr std::uint32_t kUtility = 0x08831200u;
@@ -1010,6 +1089,77 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
     gungnir::hle::reset_utility_state();
     param("..");
     check(util("sceUtilitySavedataInitStart", {kParam}) == 0x80110004u, "path traversal rejected");
+
+    for (const char *name : {"ULUS10592GUN9THSTORY00", "ULUS10592GUN9THSTORY01",
+             "ULUS10592GUN9THCLEAR00", "ULUS10592OTHER"}) {
+        const std::filesystem::path directory = memory_stick / "PSP" / "SAVEDATA" / name;
+        std::filesystem::create_directories(directory);
+        std::ofstream sfo(directory / "PARAM.SFO", std::ios::binary);
+        sfo << std::string(64u, 'p');
+    }
+    const auto list_param = [&](std::string_view save_name, std::uint32_t max_count) {
+        zero(kParam, 0x600u);
+        mem.store32(kParam + 0x00u, 0x600u);
+        mem.store32(kParam + 0x30u, 11u);
+        text(kParam, 0x3Cu, 13u, "ULUS10592");
+        text(kParam, 0x4Cu, 20u, save_name);
+        mem.store32(kParam + 0x5F4u, kIdList);
+        zero(kIdList, 0x0Cu);
+        mem.store32(kIdList + 0x00u, max_count);
+        mem.store32(kIdList + 0x04u, 0xDEADBEEFu);
+        mem.store32(kIdList + 0x08u, kEntries);
+        zero(kEntries, 0x300u);
+    };
+    const auto list_entry_name = [&](std::uint32_t index) {
+        std::string name;
+        for (std::uint32_t i = 0; i < 20u; ++i) {
+            const char value = static_cast<char>(mem.load8(kEntries + index * 0x48u + 0x34u + i));
+            if (value == '\0') break;
+            name.push_back(value);
+        }
+        return name;
+    };
+    const auto run_list = [&](std::string_view save_name, std::uint32_t max_count) {
+        list_param(save_name, max_count);
+        check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "list init accepted");
+        check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "list update accepted");
+        check(util("sceUtilitySavedataGetStatus") == 3u, "list reaches finished");
+        return mem.load32(kParam + 0x1Cu);
+    };
+
+    gungnir::hle::reset_utility_state();
+    check(run_list("GUN9THSYS", 8u) == 0u, "list reports success");
+    check(mem.load32(kIdList + 0x04u) == 1u, "list counts the exact save");
+    check(list_entry_name(0u) == "GUN9THSYS", "list entry drops the game prefix");
+    check(mem.load32(kEntries) == 0x11FFu, "list entry has the PSP file mode");
+    check(mem.load16(kEntries + 0x04u) >= 2000u, "list entry carries a creation year");
+
+    gungnir::hle::reset_utility_state();
+    check(run_list("GUN9THSTORY*", 8u) == 0u, "wildcard list reports success");
+    check(mem.load32(kIdList + 0x04u) == 2u, "wildcard list counts both story saves");
+    check(list_entry_name(0u) == "GUN9THSTORY00", "wildcard list sorts the first entry");
+    check(list_entry_name(1u) == "GUN9THSTORY01", "wildcard list sorts the second entry");
+
+    gungnir::hle::reset_utility_state();
+    check(run_list("GUN9THSTORY*", 1u) == 0u, "short list reports success");
+    check(mem.load32(kIdList + 0x04u) == 1u, "list respects maxCount");
+    check(list_entry_name(0u) == "GUN9THSTORY00", "short list keeps the first entry");
+
+    gungnir::hle::reset_utility_state();
+    check(run_list("GUN9TNONE*", 8u) == 0u, "empty list reports success");
+    check(mem.load32(kIdList + 0x04u) == 0u, "empty list reports zero entries");
+
+    gungnir::hle::reset_utility_state();
+    check(run_list("GUN9THCLEAR*", 0u) == 0u, "zero-capacity list reports success");
+    check(mem.load32(kIdList + 0x04u) == 0u, "zero-capacity list reports zero entries");
+
+    gungnir::hle::reset_utility_state();
+    list_param("GUN9THSYS", 8u);
+    mem.store32(kParam + 0x5F4u, 0u);
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "list without idList init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "list without idList update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "list without idList reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0x80110328u, "list without idList is rejected");
 
     gungnir::hle::reset_utility_state();
     constexpr std::uint32_t kLoadBuf = 0x08831400u;
@@ -1129,6 +1279,141 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
     check(mem.load32(kParam + 0x1Cu) == 0x80110306u, "broken PARAM.SFO reports broken data");
 }
 
+void savedata_listload_contracts(const std::filesystem::path &memory_stick) {
+    const std::filesystem::path root = memory_stick / "listload";
+    std::filesystem::create_directories(root);
+    gungnir::savedata::SaveStore store(root);
+    const std::string payload_first = "first-slot-payload";
+    const std::string payload_second = "second-slot-payload-and-more";
+    const auto write_save = [&](const std::string &name, const std::string &payload,
+                                std::filesystem::file_time_type time) {
+        gungnir::savedata::SfoFields fields;
+        fields.title = name;
+        fields.savedata_title = name;
+        gungnir::savedata::SaveDirectory save;
+        save.name = name;
+        save.files.push_back(
+            {"PARAM.SFO", gungnir::savedata::build_param_sfo(fields, name, "DATA.BIN")});
+        save.files.push_back(
+            {"DATA.BIN", std::vector<std::uint8_t>(payload.begin(), payload.end())});
+        std::string error;
+        check(store.write(save, error), "listload fixture save written");
+        std::filesystem::last_write_time(
+            root / "PSP" / "SAVEDATA" / name / "PARAM.SFO", time);
+    };
+    const auto now = std::filesystem::file_time_type::clock::now();
+    write_save("ULUS10592SLOT00", payload_first, now - std::chrono::hours(48));
+    write_save("ULUS10592SLOT01", payload_second, now - std::chrono::hours(24));
+
+    Fixture f(test_nids_path(), {}, root);
+    auto &mem = f.runtime.memory();
+    constexpr std::uint32_t kParam = 0x08830000u;
+    constexpr std::uint32_t kNames = 0x08832000u;
+    constexpr std::uint32_t kDataBuf = 0x08833000u;
+    const auto util = [&f](const std::string &name, std::initializer_list<std::uint32_t> args = {}) {
+        return f.call("sceUtility", name, args);
+    };
+    const auto zero = [&mem](std::uint32_t address, std::uint32_t size) {
+        for (std::uint32_t i = 0; i < size; ++i) mem.store8(address + i, 0u);
+    };
+    const auto text = [&mem](std::uint32_t address, std::uint32_t size, std::string_view value) {
+        for (std::uint32_t i = 0; i < size; ++i)
+            mem.store8(address + i, i < value.size() ? static_cast<std::uint8_t>(value[i]) : 0u);
+    };
+    const auto guest_text = [&mem](std::uint32_t address, std::uint32_t size) {
+        std::string value;
+        for (std::uint32_t i = 0; i < size; ++i) {
+            const char c = static_cast<char>(mem.load8(address + i));
+            if (c == '\0') break;
+            value.push_back(c);
+        }
+        return value;
+    };
+    const auto param = [&](std::string_view save_name, std::uint32_t name_list,
+                           std::initializer_list<std::string_view> names, std::uint32_t focus) {
+        zero(kParam, 0x600u);
+        zero(kNames, 0x200u);
+        zero(kDataBuf, 0x100u);
+        mem.store32(kParam + 0x00u, 0x600u);
+        mem.store32(kParam + 0x30u, 4u); // LISTLOAD
+        text(kParam + 0x3Cu, 13u, "ULUS10592");
+        text(kParam + 0x4Cu, 20u, save_name);
+        mem.store32(kParam + 0x60u, name_list);
+        text(kParam + 0x64u, 13u, "DATA.BIN");
+        mem.store32(kParam + 0x74u, kDataBuf);
+        mem.store32(kParam + 0x78u, 0x100u);
+        mem.store32(kParam + 0x5C8u, focus);
+        if (name_list != 0u) {
+            std::uint32_t index = 0u;
+            for (const std::string_view name : names) {
+                text(kNames + index * 20u, 20u, name);
+                ++index;
+            }
+        }
+    };
+    const auto run = [&]() {
+        check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "listload init accepted");
+        check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "listload update accepted");
+        return util("sceUtilitySavedataGetStatus");
+    };
+    const auto loaded = [&](std::string_view name, std::string_view payload) {
+        return guest_text(kParam + 0x4Cu, 20u) == name &&
+            mem.load32(kParam + 0x34u) == 1021u &&
+            guest_text(kDataBuf, 0x100u) == payload;
+    };
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"SLOT00"}, 1u);
+    check(run() == 3u, "listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "listload reports success");
+    check(guest_text(kParam + 0x4Cu, 20u) == "SLOT00", "listload writes the selected save name");
+    check(mem.load32(kParam + 0x34u) == 1021u, "listload sets the bind value");
+    check(mem.load32(kParam + 0x7Cu) == payload_first.size(), "listload reports the data size");
+    check(guest_text(kDataBuf, 0x100u) == payload_first, "listload restores the first slot");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"SLOT00", "SLOT01"}, 3u);
+    check(run() == 3u, "latest listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "latest listload reports success");
+    check(loaded("SLOT01", payload_second), "latest listload selects the newest save");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"SLOT00", "SLOT01"}, 4u);
+    check(run() == 3u, "oldest listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "oldest listload reports success");
+    check(loaded("SLOT00", payload_first), "oldest listload selects the oldest save");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"SLOT00", "SLOT01"}, 2u);
+    check(run() == 3u, "last-list listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "last-list listload reports success");
+    check(loaded("SLOT01", payload_second), "last-list listload selects the final entry");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"NOPE", "SLOT01"}, 1u);
+    check(run() == 3u, "skipping listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "skipping listload reports success");
+    check(loaded("SLOT01", payload_second), "listload skips missing saves");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"<>"}, 1u);
+    check(run() == 3u, "wildcard listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "wildcard listload reports success");
+    check(loaded("SLOT00", payload_first), "wildcard listload expands every game save");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT00", 0u, {}, 0u);
+    check(run() == 3u, "fallback listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "fallback listload reports success");
+    check(loaded("SLOT00", payload_first), "fallback listload loads the single save name");
+
+    gungnir::hle::reset_utility_state();
+    param("SLOT", kNames, {"NOPE"}, 1u);
+    check(run() == 3u, "empty listload completes");
+    check(mem.load32(kParam + 0x1Cu) == 0x80110307u, "empty listload reports no data");
+    check(guest_text(kParam + 0x4Cu, 20u) == "SLOT", "empty listload leaves the save name alone");
+}
+
 void async_io_contracts(const std::filesystem::path &iso, const std::filesystem::path &memory_stick) {
     Fixture f(test_nids_path(), iso, memory_stick);
     auto &mem = f.runtime.memory();
@@ -1218,6 +1503,7 @@ int main(int argc, char **argv) {
     if (nids.empty()) return 2;
     setenv("GUNGNIR_TEST_NIDS_CSV", nids.c_str(), 1);
     try {
+        hle_ring_contracts();
         memory_contracts();
         thread_contracts();
         check_callback_yield_contract();
@@ -1232,6 +1518,7 @@ int main(int argc, char **argv) {
         sas_contracts();
         atrac_contracts();
         lwmutex_contracts();
+        utility_dialog_contracts();
         if (!memory_stick.empty()) {
             std::filesystem::create_directories(memory_stick);
             if (!iso.empty()) {
@@ -1239,6 +1526,7 @@ int main(int argc, char **argv) {
                 async_io_contracts(iso, memory_stick);
             }
             savedata_contracts(memory_stick);
+            savedata_listload_contracts(memory_stick);
         }
         std::cout << "hle_kernel_tests: OK\n";
         return 0;

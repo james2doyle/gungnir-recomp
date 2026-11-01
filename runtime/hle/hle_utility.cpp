@@ -4,9 +4,11 @@
 #include "savedata/save_store.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -29,6 +31,7 @@ constexpr std::uint32_t kSavedataSaveNoSpace = 0x80110383u;
 constexpr std::uint32_t kSavedataSaveParam = 0x80110388u;
 constexpr std::uint32_t kSavedataSizesNoData = 0x801103C7u;
 constexpr std::uint32_t kSavedataSizesParam = 0x801103C8u;
+constexpr std::uint32_t kSavedataListParam = 0x80110328u;
 
 constexpr std::uint32_t kParamSize = 0x00u;
 constexpr std::uint32_t kParamResult = 0x1Cu;
@@ -36,6 +39,7 @@ constexpr std::uint32_t kParamMode = 0x30u;
 constexpr std::uint32_t kParamBind = 0x34u;
 constexpr std::uint32_t kParamGameName = 0x3Cu;
 constexpr std::uint32_t kParamSaveName = 0x4Cu;
+constexpr std::uint32_t kParamSaveNameList = 0x60u;
 constexpr std::uint32_t kParamFileName = 0x64u;
 constexpr std::uint32_t kParamDataBuf = 0x74u;
 constexpr std::uint32_t kParamDataBufSize = 0x78u;
@@ -43,8 +47,11 @@ constexpr std::uint32_t kParamDataSize = 0x7Cu;
 
 void trace_savedata(const std::string &text) {
     static const bool enabled = std::getenv("GUNGNIR_TRACE_SAVEDATA") != nullptr;
-    static int remaining = 40;
-    if (!enabled || remaining <= 0) return;
+    static std::uint64_t remaining = [] {
+        const char *limit = std::getenv("GUNGNIR_TRACE_SAVEDATA_LIMIT");
+        return limit != nullptr ? std::strtoull(limit, nullptr, 10) : 40ull;
+    }();
+    if (!enabled || remaining == 0u) return;
     --remaining;
     std::fprintf(stderr, "[savedata] %s\n", text.c_str());
 }
@@ -59,6 +66,31 @@ constexpr std::uint32_t kParamSnd0 = 0x5B4u;
 constexpr std::uint32_t kParamMsFree = 0x5D0u;
 constexpr std::uint32_t kParamMsData = 0x5D4u;
 constexpr std::uint32_t kParamUtilityData = 0x5D8u;
+constexpr std::uint32_t kParamFocus = 0x5C8u;
+constexpr std::uint32_t kParamIdList = 0x5F4u;
+
+// SceUtilitySavedataIdListInfo: maxCount, resultCount, entries.
+constexpr std::uint32_t kIdListMaxCount = 0x00u;
+constexpr std::uint32_t kIdListResultCount = 0x04u;
+constexpr std::uint32_t kIdListEntries = 0x08u;
+// SceUtilitySavedataIdListEntry: st_mode, st_ctime, st_atime, st_mtime, name[20].
+constexpr std::uint32_t kListEntrySize = 0x48u;
+constexpr std::uint32_t kListEntryMode = 0x00u;
+constexpr std::uint32_t kListEntryCTime = 0x04u;
+constexpr std::uint32_t kListEntryATime = 0x14u;
+constexpr std::uint32_t kListEntryMTime = 0x24u;
+constexpr std::uint32_t kListEntryName = 0x34u;
+constexpr std::uint32_t kListEntryNameSize = 20u;
+constexpr std::uint32_t kListEntryFileMode = 0x11FFu;
+
+constexpr std::uint32_t kMsgDialogCommonResult = 0x1Cu;
+constexpr std::uint32_t kMsgDialogResult = 0x30u;
+constexpr std::uint32_t kMsgDialogOptions = 0x23Cu;
+constexpr std::uint32_t kMsgDialogButtonPressed = 0x240u;
+constexpr std::uint32_t kMsgDialogSizeV1 = 572u;
+constexpr std::uint32_t kMsgDialogSizeV2 = 580u;
+constexpr std::uint32_t kMsgDialogSizeV3 = 708u;
+constexpr std::uint32_t kMsgDialogPressedYes = 1u;
 
 // Gungnir uses the 0x600-byte layout (the only one whose field offsets this
 // handler validates). Other versions fail closed instead of being misread.
@@ -67,7 +99,9 @@ constexpr std::uint32_t kModeAutoLoad = 0u;
 constexpr std::uint32_t kModeAutoSave = 1u;
 constexpr std::uint32_t kModeLoad = 2u;
 constexpr std::uint32_t kModeSave = 3u;
+constexpr std::uint32_t kModeListLoad = 4u;
 constexpr std::uint32_t kModeSizes = 8u;
+constexpr std::uint32_t kModeList = 11u;
 constexpr std::uint32_t kSectorSize = 0x200u;
 constexpr std::uint32_t kSavedataBind = 1021u;
 constexpr std::uint32_t kFileDataSize = 0x08u;
@@ -82,7 +116,19 @@ struct SavedataState {
     bool started{};
 };
 
+// The message dialog has no UI here. It runs the same status machine and
+// auto-accepts with YES once the dialog becomes visible, which is what a
+// game observes when a player presses the default button. The accepted
+// result is written to the parameter block so the caller can read it back.
+struct MsgDialogState {
+    SavedataStatus status{SavedataStatus::None};
+    std::uint32_t param{};
+    std::uint32_t size{};
+    bool started{};
+};
+
 SavedataState g_state;
+MsgDialogState g_dialog;
 
 psprecomp::GuestMemory &memory() {
     return kernel().runtime().memory();
@@ -153,8 +199,61 @@ std::string save_directory_name(std::string_view game, std::string_view save) {
     return name;
 }
 
+std::filesystem::path savedata_root() {
+    return io_memory_stick_path() / "PSP" / "SAVEDATA";
+}
+
 std::filesystem::path save_directory(std::string_view game, std::string_view save) {
-    return io_memory_stick_path() / "PSP" / "SAVEDATA" / save_directory_name(game, save);
+    return savedata_root() / save_directory_name(game, save);
+}
+
+bool wildcard_match(std::string_view text, std::string_view pattern) {
+    std::size_t t = 0u;
+    std::size_t p = 0u;
+    std::size_t star = std::string_view::npos;
+    std::size_t star_text = 0u;
+    while (t < text.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == text[t])) {
+            ++t;
+            ++p;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++;
+            star_text = t;
+        } else if (star != std::string_view::npos) {
+            p = star + 1u;
+            t = ++star_text;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') ++p;
+    return p == pattern.size();
+}
+
+std::time_t file_time(const std::filesystem::path &path) {
+    std::error_code error;
+    const auto stamp = std::filesystem::last_write_time(path, error);
+    if (error) return std::time(nullptr);
+    const auto system = std::chrono::file_clock::to_sys(stamp);
+    return std::chrono::system_clock::to_time_t(
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(system));
+}
+
+// ScePspDateTime: year, month, day, hour, minute, second, microsecond.
+void store_psp_time(psprecomp::GuestMemory &mem, std::uint32_t address, std::time_t time) {
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &time);
+#else
+    localtime_r(&time, &tm);
+#endif
+    mem.store16(address + 0x00u, static_cast<std::uint16_t>(tm.tm_year + 1900));
+    mem.store16(address + 0x02u, static_cast<std::uint16_t>(tm.tm_mon + 1));
+    mem.store16(address + 0x04u, static_cast<std::uint16_t>(tm.tm_mday));
+    mem.store16(address + 0x06u, static_cast<std::uint16_t>(tm.tm_hour));
+    mem.store16(address + 0x08u, static_cast<std::uint16_t>(tm.tm_min));
+    mem.store16(address + 0x0Au, static_cast<std::uint16_t>(tm.tm_sec));
+    mem.store32(address + 0x0Cu, 0u);
 }
 
 std::vector<std::uint8_t> read_guest(
@@ -287,19 +386,24 @@ std::uint32_t perform_save() {
     return set_result(0u);
 }
 
-std::uint32_t perform_load() {
+std::uint32_t perform_load(std::string_view save_override = {}) {
     auto &mem = memory();
     const std::uint32_t param = g_state.param;
     mem.store32(param + kParamDataSize, 0u);
 
     const std::string game = read_fixed(mem, param + kParamGameName, 13u);
-    const std::string save_name = read_fixed(mem, param + kParamSaveName, 20u);
+    const std::string save_name = save_override.empty()
+        ? read_fixed(mem, param + kParamSaveName, 20u)
+        : std::string(save_override);
     const std::string file = read_fixed(mem, param + kParamFileName, 13u);
     const std::string directory = save_directory_name(game, save_name);
     if (!savedata::SaveStore::valid_name(directory)) return set_result(kSavedataLoadParam);
 
     savedata::SaveStore store(io_memory_stick_path());
     if (!store.read(directory)) return set_result(kSavedataLoadNoData);
+    // A list dialog writes the selected save name back into the request.
+    if (!save_override.empty() && !file.empty())
+        write_fixed(mem, param + kParamSaveName, 20u, save_name);
     const auto sfo_bytes = store.read_file(directory, "PARAM.SFO");
     if (!sfo_bytes) return set_result(kSavedataLoadBroken);
     const auto fields = savedata::parse_sfo_fields(*sfo_bytes);
@@ -343,6 +447,163 @@ std::uint32_t perform_load() {
     return set_result(0u);
 }
 
+std::uint32_t perform_list() {
+    auto &mem = memory();
+    const std::uint32_t param = g_state.param;
+    const std::uint32_t id_list = mem.load32(param + kParamIdList);
+    if (!valid(mem, id_list, kIdListEntries + 0x04u)) return set_result(kSavedataListParam);
+    const std::uint32_t max_count = mem.load32(id_list + kIdListMaxCount);
+    const std::uint32_t entries = mem.load32(id_list + kIdListEntries);
+
+    const std::string game = read_fixed(mem, param + kParamGameName, 13u);
+    const std::string save = read_fixed(mem, param + kParamSaveName, 20u);
+    if (!safe_component(game) || !safe_component(save)) return set_result(kSavedataListParam);
+    const std::string pattern = game + (save == "<>" ? std::string() : save);
+
+    std::uint32_t count = 0u;
+    if (max_count != 0u) {
+        if (static_cast<std::uint64_t>(max_count) * kListEntrySize > 0xFFFFFFFFull ||
+            !valid(mem, entries, max_count * kListEntrySize))
+            return set_result(kSavedataListParam);
+        savedata::SaveStore store(io_memory_stick_path());
+        for (const std::string &name : store.list(game)) {
+            if (!wildcard_match(name, pattern)) continue;
+            if (count >= max_count) break;
+            const std::string save_name = name.substr(game.size());
+            const std::uint32_t entry = entries + count * kListEntrySize;
+            for (std::uint32_t i = 0; i < kListEntrySize; ++i) mem.store8(entry + i, 0u);
+            mem.store32(entry + kListEntryMode, kListEntryFileMode);
+            const std::filesystem::path directory = savedata_root() / name;
+            const std::filesystem::path sfo = directory / "PARAM.SFO";
+            std::error_code error;
+            const std::time_t time = file_time(std::filesystem::is_regular_file(sfo, error) ? sfo : directory);
+            store_psp_time(mem, entry + kListEntryCTime, time);
+            store_psp_time(mem, entry + kListEntryATime, time);
+            store_psp_time(mem, entry + kListEntryMTime, time);
+            write_fixed(mem, entry + kListEntryName, kListEntryNameSize,
+                save_name.substr(0u, kListEntryNameSize - 1u));
+            ++count;
+        }
+    }
+    mem.store32(id_list + kIdListResultCount, count);
+    trace_savedata("list pattern=" + pattern + " count=" + std::to_string(count) +
+                   " max=" + std::to_string(max_count));
+    return set_result(0u);
+}
+
+struct ListCandidate {
+    std::string name;
+    std::uint64_t bytes{};
+    std::time_t time{};
+};
+
+// SceUtilitySavedataParam::saveNameList is a zero-terminated array of 20-byte
+// names. An absent or empty list falls back to the single saveName, and "<>"
+// means "no particular save" rather than a literal name.
+std::vector<std::string> read_save_name_list(std::string save) {
+    auto &mem = memory();
+    std::vector<std::string> names;
+    const std::uint32_t address = mem.load32(g_state.param + kParamSaveNameList);
+    if (valid(mem, address, 20u)) {
+        for (std::uint32_t i = 0u; i < 128u; ++i) {
+            if (!valid(mem, address + i * 20u, 20u)) break;
+            std::string entry = read_fixed(mem, address + i * 20u, 20u);
+            if (entry.empty()) break;
+            names.push_back(std::move(entry));
+        }
+    }
+    if (names.empty() && !save.empty() && save != "<>") names.push_back(std::move(save));
+    return names;
+}
+
+std::vector<ListCandidate> listload_candidates(
+    const std::string &game, const std::vector<std::string> &names) {
+    std::vector<ListCandidate> candidates;
+    const auto add = [&](std::string name) {
+        if (!savedata::SaveStore::valid_name(name)) return;
+        for (const ListCandidate &candidate : candidates)
+            if (candidate.name == name) return;
+        const std::filesystem::path directory = save_directory(game, name);
+        std::error_code error;
+        if (!std::filesystem::is_directory(directory, error)) return;
+        const std::filesystem::path sfo = directory / "PARAM.SFO";
+        ListCandidate candidate;
+        candidate.name = std::move(name);
+        candidate.bytes = directory_usage(directory).bytes;
+        candidate.time = file_time(std::filesystem::is_regular_file(sfo, error) ? sfo : directory);
+        candidates.push_back(std::move(candidate));
+    };
+    for (const std::string &name : names) {
+        if (name != "<>") {
+            add(name);
+            continue;
+        }
+        savedata::SaveStore store(io_memory_stick_path());
+        for (const std::string &directory : store.list(game))
+            add(directory.substr(game.size()));
+    }
+    return candidates;
+}
+
+// PSP focus values: unknown/first-list/first-data default to the first entry.
+std::size_t select_candidate(const std::vector<ListCandidate> &candidates, std::uint32_t focus) {
+    std::size_t selected = 0u;
+    switch (focus) {
+    case 2u:
+        return candidates.size() - 1u;
+    case 3u:
+        for (std::size_t i = 1u; i < candidates.size(); ++i)
+            if (candidates[i].time > candidates[selected].time) selected = i;
+        return selected;
+    case 4u:
+        for (std::size_t i = 1u; i < candidates.size(); ++i)
+            if (candidates[i].time < candidates[selected].time) selected = i;
+        return selected;
+    case 5u:
+        for (std::size_t i = 0u; i < candidates.size(); ++i)
+            if (candidates[i].bytes != 0u) return i;
+        return 0u;
+    case 6u:
+        for (std::size_t i = candidates.size(); i > 0u;) {
+            --i;
+            if (candidates[i].bytes != 0u) return i;
+        }
+        return 0u;
+    case 7u:
+        for (std::size_t i = 0u; i < candidates.size(); ++i)
+            if (candidates[i].bytes == 0u) return i;
+        return 0u;
+    case 8u:
+        for (std::size_t i = candidates.size(); i > 0u;) {
+            --i;
+            if (candidates[i].bytes == 0u) return i;
+        }
+        return 0u;
+    default:
+        return 0u;
+    }
+}
+
+// There is no save-picker UI. An empty list auto-cancels with NO_DATA; a
+// non-empty list auto-selects the caller's focus entry and loads it, with the
+// selected name written back into the request.
+std::uint32_t perform_list_load() {
+    auto &mem = memory();
+    const std::uint32_t param = g_state.param;
+    const std::string game = read_fixed(mem, param + kParamGameName, 13u);
+    const std::string save = read_fixed(mem, param + kParamSaveName, 20u);
+    if (!safe_component(game) || !safe_component(save)) return set_result(kSavedataLoadParam);
+    const std::vector<ListCandidate> candidates = listload_candidates(game, read_save_name_list(save));
+    if (candidates.empty()) {
+        trace_savedata("listload no data game=" + game + " save=" + save);
+        return set_result(kSavedataLoadNoData);
+    }
+    const std::size_t selected = select_candidate(candidates, mem.load32(param + kParamFocus));
+    trace_savedata("listload candidates=" + std::to_string(candidates.size()) +
+                   " selected=" + candidates[selected].name);
+    return perform_load(candidates[selected].name);
+}
+
 std::uint32_t perform_operation() {
     switch (g_state.mode) {
     case kModeAutoLoad:
@@ -353,8 +614,12 @@ std::uint32_t perform_operation() {
         return perform_sizes();
     case kModeSave:
         return perform_save();
+    case kModeListLoad:
+        return perform_list_load();
     case kModeLoad:
         return perform_load();
+    case kModeList:
+        return perform_list();
     default:
         memory().store32(g_state.param + kParamResult, kSavedataErrorType);
         log_once("savedata-mode:" + std::to_string(g_state.mode),
@@ -372,6 +637,38 @@ std::uint32_t advance_status() {
                    std::to_string(static_cast<int>(g_state.status)) + " returned " +
                    std::to_string(result));
     return result;
+}
+
+// The dialog has no renderer. Accepting on the first visible frame and
+// writing result 0 plus buttonPressed = YES is the headless equivalent of the
+// player pressing the default button; it follows the message-dialog state
+// machine used by PPSSPP (Core/Dialog/PSPMsgDialog.cpp).
+void accept_message_dialog() {
+    auto &mem = memory();
+    mem.store32(g_dialog.param + kMsgDialogCommonResult, 0u);
+    mem.store32(g_dialog.param + kMsgDialogResult, 0u);
+    if (g_dialog.size >= kMsgDialogSizeV2)
+        mem.store32(g_dialog.param + kMsgDialogButtonPressed, kMsgDialogPressedYes);
+}
+
+std::uint32_t advance_dialog_status() {
+    switch (g_dialog.status) {
+    case SavedataStatus::Init:
+        g_dialog.status = SavedataStatus::Running;
+        return 2u;
+    case SavedataStatus::Running:
+        accept_message_dialog();
+        g_dialog.status = SavedataStatus::Finished;
+        return 3u;
+    case SavedataStatus::Finished:
+        return 3u;
+    case SavedataStatus::Shutdown:
+        g_dialog.status = SavedataStatus::None;
+        return 4u;
+    case SavedataStatus::None:
+        return 0u;
+    }
+    return 0u;
 }
 
 std::uint32_t advance_status_inner() {
@@ -398,6 +695,7 @@ std::uint32_t advance_status_inner() {
 
 void reset_utility_state() {
     g_state = {};
+    g_dialog = {};
 }
 
 void register_utility(HleRegistrar &hle) {
@@ -432,8 +730,19 @@ void register_utility(HleRegistrar &hle) {
         g_state.param = param;
         g_state.mode = mem.load32(param + kParamMode);
         g_state.started = true;
+        std::string names;
+        const std::uint32_t name_list = mem.load32(param + 0x60u);
+        for (std::uint32_t i = 0u; i < 32u; ++i) {
+            if (!valid(mem, name_list + i * 20u, 20u)) break;
+            const std::string entry = read_fixed(mem, name_list + i * 20u, 20u);
+            if (entry.empty()) break;
+            names += (names.empty() ? "[\"" : ",\"") + entry + "\"";
+        }
+        if (!names.empty()) names += "]";
         trace_savedata("init mode=" + std::to_string(g_state.mode) + " game=" + game + " save=" + save +
-                       " file=" + file);
+                       " file=" + file + " focus=" + std::to_string(mem.load32(param + 0x5C8u)) +
+                       " saveNameList=" + psprecomp::hex32(name_list) + names + " idList=" +
+                       psprecomp::hex32(mem.load32(param + kParamIdList)));
         kernel().finish(ctx, 0u);
     });
     hle.add("sceUtility", "sceUtilitySavedataUpdate", [](Runtime &, AllegrexContext &ctx) {
@@ -457,6 +766,62 @@ void register_utility(HleRegistrar &hle) {
             return;
         }
         g_state.status = SavedataStatus::Shutdown;
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("sceUtility", "sceUtilityMsgDialogInitStart", [](Runtime &, AllegrexContext &ctx) {
+        const std::uint32_t param = arg(ctx, 0);
+        if (g_dialog.status != SavedataStatus::None) {
+            kernel().finish(ctx, kUtilityInvalidStatus);
+            return;
+        }
+        auto &mem = memory();
+        if (!valid(mem, param, 4u)) {
+            kernel().finish(ctx, kUtilityInvalidAddress);
+            return;
+        }
+        const std::uint32_t size = mem.load32(param + kParamSize);
+        if (size != kMsgDialogSizeV1 && size != kMsgDialogSizeV2 && size != kMsgDialogSizeV3) {
+            kernel().finish(ctx, kUtilityInvalidParamSize);
+            return;
+        }
+        if (!valid(mem, param, size)) {
+            kernel().finish(ctx, kUtilityInvalidAddress);
+            return;
+        }
+        g_dialog.status = SavedataStatus::Init;
+        g_dialog.param = param;
+        g_dialog.size = size;
+        g_dialog.started = true;
+        trace_savedata("msgdialog init size=" + std::to_string(size) +
+                       " mode=" + std::to_string(mem.load32(param + 0x34u)) +
+                       " options=" + std::to_string(mem.load32(param + kMsgDialogOptions)));
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("sceUtility", "sceUtilityMsgDialogUpdate", [](Runtime &, AllegrexContext &ctx) {
+        if (!g_dialog.started) {
+            kernel().finish(ctx, kUtilityWrongType);
+            return;
+        }
+        if (g_dialog.status != SavedataStatus::None) (void)advance_dialog_status();
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("sceUtility", "sceUtilityMsgDialogGetStatus", [](Runtime &, AllegrexContext &ctx) {
+        if (!g_dialog.started) {
+            kernel().finish(ctx, kUtilityWrongType);
+            return;
+        }
+        kernel().finish(ctx, advance_dialog_status());
+    });
+    hle.add("sceUtility", "sceUtilityMsgDialogShutdownStart", [](Runtime &, AllegrexContext &ctx) {
+        if (!g_dialog.started) {
+            kernel().finish(ctx, kUtilityWrongType);
+            return;
+        }
+        if (g_dialog.status != SavedataStatus::Finished) {
+            kernel().finish(ctx, kUtilityInvalidStatus);
+            return;
+        }
+        g_dialog.status = SavedataStatus::Shutdown;
         kernel().finish(ctx, 0u);
     });
 }

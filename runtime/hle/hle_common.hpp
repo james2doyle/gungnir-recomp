@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <iosfwd>
 #include <map>
 #include <set>
 #include <string>
@@ -62,6 +63,12 @@ std::filesystem::path io_memory_stick_path();
 [[nodiscard]] bool trace_sync();
 void log_sync(const std::string &message);
 void log_once(const std::string &key, const std::string &message);
+
+// Optional HLE call ring: GUNGNIR_HLE_RING=N keeps the last N import calls
+// with their arguments and return registers. The session dumps it when a run
+// stops on a fault, so a wrong return or a missing setup call is visible
+// without a debugger. Unset (or 0) disables it.
+void dump_hle_ring(std::ostream &out);
 
 class HleRegistrar {
 public:

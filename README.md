@@ -19,7 +19,7 @@ result runs on your device.
 
 ## Status
 
-Early development. Master plan: [`.dex/plan.md`](.dex/plan.md) — tasks T1–T13,
+Early development. Master plan: [`.dex/plan.md`](.dex/plan.md) — tasks T1–T14,
 milestones M0–M5. The first milestone (M4) is the game's **title screen
 rendered on an adb-connected device with navigable menus** (touch + gamepad).
 
