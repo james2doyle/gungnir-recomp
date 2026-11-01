@@ -1093,3 +1093,89 @@ plays. The count is derived from the intake import table plus
 
 Any of these can end the session with a named `missing_import` stop; the ten
 are the known gap set for the next device passes, not silent zero-returns.
+
+### Host boot runner grew to 19 GB without a frame sink (2026-11-01)
+
+**Symptom.** Driving the prologue through `build/profile-test/boot_runner`
+(no `--frame-json`) ballooned to 19 GB RSS within a minute and died with
+`session_run_failed: std::bad_alloc` under an 8 GiB address-space cap.
+
+**Root cause.** `sceDisplaySetFrameBuf` handed `pending_draws` to the frame
+sink only when one was installed, so with no sink every translated draw (and
+the texture references it owns) was retained for the process lifetime. The
+APK always installs a sink, which is why the device heap stayed at 180-190 MB;
+the Linux boot runner does not, so the same code leaked only on the host.
+
+**Fix.** The flip swaps the pending vector out unconditionally and only then
+offers it to the sink, so draws are delivered when something consumes them and
+dropped when nothing does.
+
+**Regression.** Red-first `draw_retention_contracts` in
+`tests/hle/media_tests.cpp` submits a real through-mode triangle list, flips
+without a sink and requires `ge_pending_draw_count() == 0` (it reported the
+retained draw before the fix); it then installs a sink and checks the draw is
+delivered and cleared. `ge_pending_draw_count()` is the observer.
+
+### Harness load skews frame pacing and can look like a stall (2026-11-01)
+
+**Observation.** The battle intro movie played "super slow" in a run where the
+driver polled `adb logcat -d` (full buffer) and `dumpsys meminfo` every two
+seconds, and it played smoothly in a later run of the same build with a lighter
+driver. The guest, the HLE and the APK were identical.
+
+**Consequence.** Frame rate and "it looks stuck" observations from a script
+that shells out to `logcat`/`dumpsys` every couple of seconds are not evidence
+about guest performance. `qa-newgame.sh` currently samples meminfo every two
+seconds during the monitor window and greps `logcat -d` in the same loop.
+
+**Rule.** Drive input from a quiet loop: stream `adb logcat -s gungnir:I` to a
+file once and grep that file, sample `dumpsys meminfo` at >=10 s intervals, and
+never treat a frozen screenshot from a polling run as a hang until
+`guest_stall`/`session_stop` confirms it.
+
+### Pre-battle stall: the frame thread parks in blocking audio (2026-11-01)
+
+**Symptom.** After the battle intro movie and the "Ace deployed!" lines the
+screen stops updating, but the process keeps dispatching: the app is at ~13% of
+one core, `guest_frame=` stops, and neither the dispatch limit nor the wall
+clock ever fires.
+
+**Diagnosis (new watchdog).** `session.stall_seconds` (Android default 30) runs
+a frame watchdog: if no guest frame reaches the display for that long, it logs
+one line and requests a stop, which the guest honours at its next heartbeat.
+
+```text
+guest_stall seconds=30 flips=2484 inflight=sceAudio::sceAudioOutputPannedBlocking last_import=sceSasCore::__sceSasCore
+session_stop cause=host_stop dispatches=950000 flips=2484 ... stop_pc=0x089A25EC
+```
+
+`stop_pc` is in the HLE thunk range, and the parked import is the blocking
+output. `inflight` is process-global, so read it as "the last thread that
+entered an import is parked there": the other guest threads keep dispatching,
+which is why the kernel's scheduler-deadlock check never sees an idle system.
+
+**Hypothesis (not yet proven).** The frame-producing thread is parked in
+`sceAudioOutputPannedBlocking` and is not woken at its drain deadline, or is
+woken but the guest immediately re-blocks; the remaining threads keep running a
+wait loop, so only the picture freezes. The audio wait is the only place the
+guest parks with `WaitType::Audio`, and its wake-up runs in
+`Kernel::process_timers` via `host_poll`, which retries the enqueue.
+
+**Candidate mechanisms (to test, none proven).**
+1. `g_channels[i].waiting` left set after a blocking call that never completes:
+   the channel then stays busy and every later blocking output parks again.
+   PPSSPP had exactly this class of bug — `AudioChannel::DoState` carries a
+   compatibility fix for a save that stored `waitingThread = -1` ("a failed
+   blocking wait left -1 here to keep the channel busy for good").
+2. `drain_us()` returns `uint32_t` from a 64-bit division, so a very large
+   `sample_count` truncates the deadline; a bogus data length would park the
+   caller for minutes.
+3. The deadline is observed (the runtime's starvation hook advances the clock
+   and calls `process_timers`), so "no scheduler tick" is ruled out.
+
+**Next step.** Reproduce from a snapshot at the battle (T15) and inspect the
+audio channel state at the stall, instead of replaying ten minutes per attempt.
+
+**Harness caveat.** See the pacing note above: the earlier "super slow" battle
+movie was measured while the driver polled `logcat`/`dumpsys` every two
+seconds; the same build played it smoothly in a quieter run.

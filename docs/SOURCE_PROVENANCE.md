@@ -205,3 +205,29 @@ was copied.
 
 Our handler returns 0 unconditionally, which is the retail value; no GPO state
 is modelled because the title only reads GPI.
+
+### T15 reference review — host save states
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later), behavioral only; never linked,
+  vendored, or copied. `Core/SaveState.cpp` (`SaveStart::DoState`) defines the
+  load/save order: quiesce utility IO, the SAS mixer and async IO, flush GPU
+  pending drawing, then `Memory` -> `CoreTiming` -> `MemoryStick` -> MIPS CPU ->
+  `HLEDoState` -> `__KernelDoState` -> filesystem (last, because kernel object
+  destructors may close files) -> MMIO -> media engine. Section versions gate
+  every block. `Core/HLE/sceKernel.cpp` (`__KernelDoState`) serializes the
+  object pool first and then interrupts, kernel memory, threading, alarms,
+  VTimers, event flags, mailboxes, modules, msgpipes, mutexes and semaphores in
+  that order. `Core/HLE/sceAudio.cpp` (`AudioChannel::DoState`) keeps
+  `reserved/sampleAddress/sampleCount/volumes/format/remainingSamples/
+  waitingThread/waitingAddress` and carries a compatibility fix for a state
+  that stored `waitingThread = -1`, which kept a channel busy forever.
+  `Common/Serialize/Serializer.h` documents the Dolphin-derived chunk writer:
+  versioned sections with 16-byte titles, no published format.
+- Decision: our snapshot uses our own small versioned container (magic,
+  version, corpus/config identity, TLV sections, payload hash). The reference
+  format is GPL code without a public specification, so it is not copied or
+  reimplemented; only the *ordering and completeness rules* inform the design.
+- Decision: audio channels are saved as HLE state (including the parked
+  waiter), while the mixer/AAudio stream and the GPU texture caches are
+  rebuilt on load, matching the reference (GPU flushes on save, resets caches
+  on load). This is also the likely field to inspect for the pre-battle stall.
