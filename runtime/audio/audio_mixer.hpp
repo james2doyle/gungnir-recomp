@@ -16,6 +16,7 @@ struct MixerStats {
     std::uint64_t submitted_buffers{};
     std::uint64_t overruns{};
     std::uint64_t rejected_buffers{};
+    std::uint32_t peak{};
 };
 
 // Interleaved s16 stereo ring fed by sceAudio buffers and drained by an

@@ -68,6 +68,30 @@ struct VulkanDrawCall {
     VulkanDrawState state;
 };
 
+struct ScissorRect {
+    int x0{};
+    int y0{};
+    int x1{};
+    int y1{};
+};
+
+struct ViewportRect {
+    int x{};
+    int y{};
+    int width{};
+    int height{};
+};
+
+// Fits a guest framebuffer into the target surface without changing its
+// aspect ratio, centring the result (pillar/letterbox).
+ViewportRect fit_viewport(int virtual_width, int virtual_height, int target_width, int target_height);
+
+// Maps a scissor expressed in the guest virtual framebuffer onto the
+// swapchain extent. Edges round outward; an inverted or empty input yields
+// an empty rect.
+ScissorRect scale_scissor_to_extent(ScissorRect rect, int source_width, int source_height, int target_width,
+                                    int target_height);
+
 inline VulkanDrawVertex to_vulkan_vertex(const ScreenVertex &vertex) {
     return {vertex.x,
             vertex.y,
@@ -87,6 +111,10 @@ public:
     struct Config {
         int width{256};
         int height{256};
+        // Guest framebuffer size in pixels. Zero means "same as width/height".
+        // Window resizes change width/height but never this virtual extent.
+        int virtual_width{};
+        int virtual_height{};
         bool headless{true};
         bool validation{false};
         std::vector<const char *> instance_extensions;
@@ -107,6 +135,9 @@ public:
                               const VulkanDrawState &state, VulkanFrame &frame, std::string &error);
     bool render_headless_draws(std::span<const VulkanDrawCall> calls, VulkanFrame &frame, std::string &error);
     bool render_swapchain(std::string &error);
+    // Presents a frame built from guest GE draws. An empty call list clears
+    // the swapchain without drawing the synthetic triangle.
+    bool render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error);
     bool recreate_swapchain(int width, int height, std::string &error);
     bool recreate_surface(std::string &error);
     void invalidate_texture(std::uint64_t key);
@@ -116,6 +147,9 @@ public:
     [[nodiscard]] bool initialized() const;
     [[nodiscard]] bool headless() const;
     [[nodiscard]] std::size_t pipeline_count() const;
+    [[nodiscard]] int swapchain_width() const;
+    [[nodiscard]] int swapchain_height() const;
+    [[nodiscard]] VkSurfaceTransformFlagBitsKHR surface_transform() const;
     [[nodiscard]] const gungnir::platform::VulkanDriverInfo &driver_info() const;
 
 private:

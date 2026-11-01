@@ -118,6 +118,15 @@ bool result_ok(VkResult result, const char *operation, std::string &error) {
     return false;
 }
 
+// Android returns VK_SUBOPTIMAL_KHR every frame when the swapchain does not
+// use the surface's current transform. Identity pre-transform still presents
+// correctly (the compositor rotates), so suboptimal is not a failure there.
+bool result_ok_or_suboptimal(VkResult result, const char *operation, std::string &error) {
+    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) return true;
+    error = std::string(operation) + " failed (" + std::to_string(static_cast<int>(result)) + ")";
+    return false;
+}
+
 void query_driver_info(VkPhysicalDevice physical,
                        gungnir::platform::VulkanDriverInfo &info) {
     VkPhysicalDeviceProperties properties{};
@@ -161,6 +170,43 @@ void query_driver_info(VkPhysicalDevice physical,
 
 } // namespace
 
+ViewportRect fit_viewport(int virtual_width, int virtual_height, int target_width, int target_height) {
+    if (virtual_width <= 0 || virtual_height <= 0 || target_width <= 0 || target_height <= 0) return {};
+    const long long by_width = static_cast<long long>(virtual_width) * target_height;
+    const long long by_height = static_cast<long long>(virtual_height) * target_width;
+    ViewportRect out;
+    if (by_width <= by_height) {
+        out.height = target_height;
+        out.width = static_cast<int>((by_width * 2 + virtual_height) / (2 * virtual_height));
+        if (out.width > target_width) out.width = target_width;
+    } else {
+        out.width = target_width;
+        out.height = static_cast<int>((by_height * 2 + virtual_width) / (2 * virtual_width));
+        if (out.height > target_height) out.height = target_height;
+    }
+    out.x = (target_width - out.width) / 2;
+    out.y = (target_height - out.height) / 2;
+    return out;
+}
+
+ScissorRect scale_scissor_to_extent(ScissorRect rect, int source_width, int source_height, int target_width,
+                                    int target_height) {
+    if (source_width <= 0 || source_height <= 0 || target_width <= 0 || target_height <= 0) return {};
+    if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) return {};
+    const auto scale_low = [](int value, int source, int target) {
+        return static_cast<int>(static_cast<long long>(value) * target / source);
+    };
+    const auto scale_high = [](int value, int source, int target) {
+        return static_cast<int>((static_cast<long long>(value) * target + source - 1) / source);
+    };
+    ScissorRect out;
+    out.x0 = std::clamp(scale_low(rect.x0, source_width, target_width), 0, target_width);
+    out.y0 = std::clamp(scale_low(rect.y0, source_height, target_height), 0, target_height);
+    out.x1 = std::clamp(scale_high(rect.x1, source_width, target_width), 0, target_width);
+    out.y1 = std::clamp(scale_high(rect.y1, source_height, target_height), 0, target_height);
+    return out;
+}
+
 struct VulkanBackend::Impl {
     Config config;
     gungnir::platform::VulkanDriverInfo driver_info;
@@ -189,6 +235,7 @@ struct VulkanBackend::Impl {
     VkSwapchainKHR swapchain{VK_NULL_HANDLE};
     VkFormat swapchain_format{VK_FORMAT_UNDEFINED};
     VkExtent2D swapchain_extent{};
+    VkSurfaceTransformFlagBitsKHR surface_transform{VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR};
     std::vector<VkImage> swapchain_images;
     std::vector<VkImageView> swapchain_views;
     std::vector<VkFramebuffer> swapchain_framebuffers;
@@ -221,6 +268,7 @@ struct VulkanBackend::Impl {
     std::map<std::uint64_t, GpuTexture> textures;
     GpuTexture white_texture;
     std::map<std::uint64_t, VkPipeline> draw_pipelines;
+    std::map<std::uint64_t, VkPipeline> swapchain_draw_pipelines;
     bool draw_resources_ready{};
 
     std::uint32_t find_memory_type(std::uint32_t bits, VkMemoryPropertyFlags properties) const {
@@ -663,7 +711,8 @@ struct VulkanBackend::Impl {
         return true;
     }
 
-    bool create_draw_pipeline(const VulkanDrawState &state, VkPipeline &graphics_pipeline, std::string &error) const {
+    bool create_draw_pipeline(const VulkanDrawState &state, VkRenderPass pass, bool depth_attachment,
+                              VkPipeline &graphics_pipeline, std::string &error) const {
         VkShaderModule vertex_module = VK_NULL_HANDLE;
         VkShaderModule fragment_module = VK_NULL_HANDLE;
         VkShaderModuleCreateInfo shader_info{};
@@ -726,9 +775,9 @@ struct VulkanBackend::Impl {
 
         VkPipelineDepthStencilStateCreateInfo depth{};
         depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depth.depthTestEnable = state.depth_test ? VK_TRUE : VK_FALSE;
-        depth.depthWriteEnable = state.depth_write ? VK_TRUE : VK_FALSE;
-        depth.depthCompareOp = to_vk_compare(state.depth_function);
+        depth.depthTestEnable = depth_attachment && state.depth_test ? VK_TRUE : VK_FALSE;
+        depth.depthWriteEnable = depth_attachment && state.depth_write ? VK_TRUE : VK_FALSE;
+        depth.depthCompareOp = depth_attachment ? to_vk_compare(state.depth_function) : VK_COMPARE_OP_ALWAYS;
 
         VkPipelineColorBlendAttachmentState blend{};
         blend.blendEnable = state.blend.enabled ? VK_TRUE : VK_FALSE;
@@ -764,7 +813,7 @@ struct VulkanBackend::Impl {
         info.pColorBlendState = &color_blend;
         info.pDynamicState = &dynamic;
         info.layout = draw_pipeline_layout;
-        info.renderPass = render_pass;
+        info.renderPass = pass;
         info.subpass = 0;
         const VkResult result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, &graphics_pipeline);
         vkDestroyShaderModule(device, fragment_module, nullptr);
@@ -910,6 +959,7 @@ struct VulkanBackend::Impl {
         }
         swapchain_format = chosen.format;
         swapchain_extent = extent;
+        surface_transform = capabilities.currentTransform;
 
         VkSwapchainCreateInfoKHR info{};
         info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -923,7 +973,12 @@ struct VulkanBackend::Impl {
         info.imageArrayLayers = 1;
         info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        info.preTransform = capabilities.currentTransform;
+        // Render in the window's natural orientation and let the compositor
+        // apply the surface rotation. Claiming the rotation here would make
+        // the compositor skip it, which presents guest frames rotated.
+        info.preTransform = (capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0
+                                ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                : capabilities.currentTransform;
         info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
         info.clipped = VK_TRUE;
@@ -1359,7 +1414,8 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
             pipelines[i] = found->second;
         } else {
             VkPipeline pipeline = VK_NULL_HANDLE;
-            if (!impl_->create_draw_pipeline(calls[i].state, pipeline, error)) return false;
+            if (!impl_->create_draw_pipeline(calls[i].state, impl_->render_pass, true, pipeline, error))
+                return false;
             pipelines[i] = impl_->draw_pipelines.emplace(key, pipeline).first->second;
         }
         Impl::GpuTexture *texture = impl_->texture_for(calls[i].state, error);
@@ -1458,7 +1514,7 @@ bool VulkanBackend::render_swapchain(std::string &error) {
         error = "swapchain_out_of_date";
         return false;
     }
-    if (!result_ok(acquired, "vkAcquireNextImageKHR", error)) return false;
+    if (!result_ok_or_suboptimal(acquired, "vkAcquireNextImageKHR", error)) return false;
 
     vkResetCommandBuffer(impl_->command_buffer, 0);
     VkCommandBufferBeginInfo begin{};
@@ -1507,11 +1563,186 @@ bool VulkanBackend::render_swapchain(std::string &error) {
     present.pSwapchains = &impl_->swapchain;
     present.pImageIndices = &image_index;
     const VkResult presented = vkQueuePresentKHR(impl_->queue, &present);
-    if (presented == VK_ERROR_OUT_OF_DATE_KHR || presented == VK_SUBOPTIMAL_KHR) {
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR) {
         error = "swapchain_out_of_date";
         return false;
     }
-    if (!result_ok(presented, "vkQueuePresentKHR", error)) return false;
+    if (!result_ok_or_suboptimal(presented, "vkQueuePresentKHR", error)) return false;
+    return result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
+                     error);
+}
+
+bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error) {
+    if (!impl_ || !impl_->initialized || impl_->config.headless || impl_->swapchain == VK_NULL_HANDLE) {
+        error = "swapchain_backend_not_initialized";
+        return false;
+    }
+    if (!calls.empty()) {
+        vkDeviceWaitIdle(impl_->device);
+        if (!impl_->create_draw_resources(error)) return false;
+    }
+
+    std::vector<std::size_t> vertex_offsets(calls.size());
+    std::vector<std::size_t> index_offsets(calls.size());
+    std::vector<VkPipeline> pipelines(calls.size(), VK_NULL_HANDLE);
+    std::vector<VkDescriptorSet> descriptors(calls.size(), VK_NULL_HANDLE);
+    if (!calls.empty()) {
+        std::size_t total_vertices = 0;
+        std::size_t total_indices = 0;
+        for (const VulkanDrawCall &call : calls) {
+            total_vertices += call.vertices.size();
+            total_indices += call.indices.size();
+        }
+        if (total_vertices == 0 || total_indices == 0) {
+            error = "empty_draw";
+            return false;
+        }
+        if (!impl_->ensure_draw_buffers(total_vertices * sizeof(VulkanDrawVertex),
+                                        total_indices * sizeof(std::uint16_t), error))
+            return false;
+        void *vertex_memory = nullptr;
+        if (!result_ok(vkMapMemory(impl_->device, impl_->draw_vertex_memory, 0,
+                                   total_vertices * sizeof(VulkanDrawVertex), 0, &vertex_memory),
+                       "map draw vertices", error))
+            return false;
+        auto *vertex_base = static_cast<VulkanDrawVertex *>(vertex_memory);
+        std::size_t vertex_offset = 0;
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            vertex_offsets[i] = vertex_offset;
+            std::copy(calls[i].vertices.begin(), calls[i].vertices.end(), vertex_base + vertex_offset);
+            vertex_offset += calls[i].vertices.size();
+        }
+        vkUnmapMemory(impl_->device, impl_->draw_vertex_memory);
+
+        void *index_memory = nullptr;
+        if (!result_ok(vkMapMemory(impl_->device, impl_->draw_index_memory, 0,
+                                   total_indices * sizeof(std::uint16_t), 0, &index_memory),
+                       "map draw indices", error))
+            return false;
+        auto *index_base = static_cast<std::uint16_t *>(index_memory);
+        std::size_t index_offset = 0;
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            index_offsets[i] = index_offset;
+            std::copy(calls[i].indices.begin(), calls[i].indices.end(), index_base + index_offset);
+            index_offset += calls[i].indices.size();
+        }
+        vkUnmapMemory(impl_->device, impl_->draw_index_memory);
+
+        for (std::size_t i = 0; i < calls.size(); ++i) {
+            if (calls[i].vertices.empty() || calls[i].indices.empty()) continue;
+            const std::uint64_t key = draw_pipeline_key(calls[i].state);
+            const auto found = impl_->swapchain_draw_pipelines.find(key);
+            if (found != impl_->swapchain_draw_pipelines.end()) {
+                pipelines[i] = found->second;
+            } else {
+                VkPipeline pipeline = VK_NULL_HANDLE;
+                if (!impl_->create_draw_pipeline(calls[i].state, impl_->swapchain_render_pass, false, pipeline,
+                                                 error))
+                    return false;
+                pipelines[i] = impl_->swapchain_draw_pipelines.emplace(key, pipeline).first->second;
+            }
+            Impl::GpuTexture *texture = impl_->texture_for(calls[i].state, error);
+            if (texture == nullptr) return false;
+            descriptors[i] = texture->descriptor;
+        }
+    }
+
+    if (!result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait fence", error))
+        return false;
+    if (!result_ok(vkResetFences(impl_->device, 1, &impl_->frame_fence), "reset fence", error)) return false;
+    std::uint32_t image_index = 0;
+    const VkResult acquired = vkAcquireNextImageKHR(impl_->device, impl_->swapchain, UINT64_MAX,
+                                                    impl_->image_available, VK_NULL_HANDLE, &image_index);
+    if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
+        error = "swapchain_out_of_date";
+        return false;
+    }
+    if (!result_ok_or_suboptimal(acquired, "vkAcquireNextImageKHR", error)) return false;
+
+    vkResetCommandBuffer(impl_->command_buffer, 0);
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (!result_ok(vkBeginCommandBuffer(impl_->command_buffer, &begin), "vkBeginCommandBuffer", error)) return false;
+    VkClearValue clear{};
+    clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkRenderPassBeginInfo pass{};
+    pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    pass.renderPass = impl_->swapchain_render_pass;
+    pass.framebuffer = impl_->swapchain_framebuffers[image_index];
+    pass.renderArea.extent = impl_->swapchain_extent;
+    pass.clearValueCount = 1;
+    pass.pClearValues = &clear;
+    vkCmdBeginRenderPass(impl_->command_buffer, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    const int virtual_width =
+        impl_->config.virtual_width > 0 ? impl_->config.virtual_width : impl_->config.width;
+    const int virtual_height =
+        impl_->config.virtual_height > 0 ? impl_->config.virtual_height : impl_->config.height;
+    const ViewportRect fitted =
+        fit_viewport(virtual_width, virtual_height, static_cast<int>(impl_->swapchain_extent.width),
+                     static_cast<int>(impl_->swapchain_extent.height));
+    VkViewport viewport{static_cast<float>(fitted.x), static_cast<float>(fitted.y),
+                        static_cast<float>(fitted.width), static_cast<float>(fitted.height), 0.0f, 1.0f};
+    vkCmdSetViewport(impl_->command_buffer, 0, 1, &viewport);
+    const float push_constants[2] = {static_cast<float>(virtual_width), static_cast<float>(virtual_height)};
+    for (std::size_t i = 0; i < calls.size(); ++i) {
+        if (pipelines[i] == VK_NULL_HANDLE || descriptors[i] == VK_NULL_HANDLE) continue;
+        const bool scissor_unset = calls[i].state.scissor_x1 == 0 && calls[i].state.scissor_y1 == 0;
+        ScissorRect rect{scissor_unset ? 0 : calls[i].state.scissor_x0,
+                         scissor_unset ? 0 : calls[i].state.scissor_y0,
+                         scissor_unset ? virtual_width : calls[i].state.scissor_x1,
+                         scissor_unset ? virtual_height : calls[i].state.scissor_y1};
+        rect = scale_scissor_to_extent(rect, virtual_width, virtual_height, fitted.width, fitted.height);
+        rect.x0 += fitted.x;
+        rect.y0 += fitted.y;
+        rect.x1 += fitted.x;
+        rect.y1 += fitted.y;
+        if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) continue;
+        const int x0 = rect.x0;
+        const int y0 = rect.y0;
+        const int x1 = rect.x1;
+        const int y1 = rect.y1;
+        vkCmdBindPipeline(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
+        vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof push_constants, push_constants);
+        vkCmdBindDescriptorSets(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl_->draw_pipeline_layout,
+                                0, 1, &descriptors[i], 0, nullptr);
+        const VkDeviceSize vertex_bind_offset = vertex_offsets[i] * sizeof(VulkanDrawVertex);
+        vkCmdBindVertexBuffers(impl_->command_buffer, 0, 1, &impl_->draw_vertex_buffer, &vertex_bind_offset);
+        const VkDeviceSize index_bind_offset = index_offsets[i] * sizeof(std::uint16_t);
+        vkCmdBindIndexBuffer(impl_->command_buffer, impl_->draw_index_buffer, index_bind_offset,
+                             VK_INDEX_TYPE_UINT16);
+        VkRect2D scissor{{x0, y0}, {static_cast<std::uint32_t>(x1 - x0), static_cast<std::uint32_t>(y1 - y0)}};
+        vkCmdSetScissor(impl_->command_buffer, 0, 1, &scissor);
+        vkCmdDrawIndexed(impl_->command_buffer, static_cast<std::uint32_t>(calls[i].indices.size()), 1, 0, 0, 0);
+    }
+    vkCmdEndRenderPass(impl_->command_buffer);
+    if (!result_ok(vkEndCommandBuffer(impl_->command_buffer), "vkEndCommandBuffer", error)) return false;
+
+    const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.waitSemaphoreCount = 1;
+    submit.pWaitSemaphores = &impl_->image_available;
+    submit.pWaitDstStageMask = &wait_stage;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &impl_->command_buffer;
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &impl_->render_finished;
+    if (!result_ok(vkQueueSubmit(impl_->queue, 1, &submit, impl_->frame_fence), "vkQueueSubmit", error)) return false;
+    VkPresentInfoKHR present{};
+    present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    present.waitSemaphoreCount = 1;
+    present.pWaitSemaphores = &impl_->render_finished;
+    present.swapchainCount = 1;
+    present.pSwapchains = &impl_->swapchain;
+    present.pImageIndices = &image_index;
+    const VkResult presented = vkQueuePresentKHR(impl_->queue, &present);
+    if (presented == VK_ERROR_OUT_OF_DATE_KHR) {
+        error = "swapchain_out_of_date";
+        return false;
+    }
+    if (!result_ok_or_suboptimal(presented, "vkQueuePresentKHR", error)) return false;
     return result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
                      error);
 }
@@ -1661,6 +1892,18 @@ bool VulkanBackend::headless() const {
 
 std::size_t VulkanBackend::pipeline_count() const {
     return impl_ ? impl_->draw_pipelines.size() : 0u;
+}
+
+int VulkanBackend::swapchain_width() const {
+    return impl_ ? static_cast<int>(impl_->swapchain_extent.width) : 0;
+}
+
+int VulkanBackend::swapchain_height() const {
+    return impl_ ? static_cast<int>(impl_->swapchain_extent.height) : 0;
+}
+
+VkSurfaceTransformFlagBitsKHR VulkanBackend::surface_transform() const {
+    return impl_ ? impl_->surface_transform : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 }
 
 const gungnir::platform::VulkanDriverInfo &VulkanBackend::driver_info() const {

@@ -1056,6 +1056,12 @@ void Kernel::on_vblank() {
     if (handlers == sub_interrupts.end()) return;
     for (const auto &[sub, handler] : handlers->second) {
         if (!handler.enabled || handler.handler == 0u) continue;
+        static bool logged = false;
+        if (trace_enabled() && !logged) {
+            logged = true;
+            std::cerr << "[kernel] dispatch vblank handler sub=" << sub
+                      << " handler=" << psprecomp::hex32(handler.handler) << "\n";
+        }
         InterruptCall call{};
         call.function = handler.handler;
         call.arguments = {sub, handler.argument, 0u, 0u};

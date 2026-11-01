@@ -180,6 +180,23 @@ void thread_contracts() {
     check(k.delete_thread(high) == 0, "dormant thread deleted");
 }
 
+void check_callback_yield_contract() {
+    Fixture f(test_nids_path(), {}, {});
+    auto &k = f.k;
+    const auto loader = k.current_uid();
+    const auto poller = k.create_thread("poller", 0x08824000u, 0x10u, 0x1000u, 0u, 0x08801000u);
+    check(poller > 0, "poller thread created");
+    check(k.start_thread(f.ctx, poller, 0u, 0u) == 0, "poller thread started");
+    f.ctx.set_gpr(31, Fixture::kReturnAddress);
+    k.finish(f.ctx, 0u);
+    check(k.current_uid() == poller, "poller preempts the loader");
+
+    (void)f.thread("sceKernelCheckCallback");
+    check(k.current_uid() == loader, "idle CheckCallback yields to a lower-priority thread");
+    check(k.find_thread(poller) != nullptr && k.find_thread(poller)->status == gungnir::hle::ThreadStatus::Waiting,
+          "yielding poller is waiting on its idle delay");
+}
+
 void sync_contracts() {
     Fixture f(test_nids_path(), {}, {});
     auto &mem = f.runtime.memory();
@@ -942,6 +959,8 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
     check(mem.load32(kUtility + 0x00u) != 0u, "utility used clusters filled");
     check(util("sceUtilitySavedataShutdownStart") == 0u, "sizes shutdown accepted");
     check(util("sceUtilitySavedataGetStatus") == 4u, "sizes reaches shutdown");
+    check(util("sceUtilitySavedataGetStatus") == 0u, "status stays none after shutdown");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "update after shutdown is accepted");
 
     gungnir::hle::reset_utility_state();
     param("MISSING");
@@ -1032,6 +1051,22 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
         payload_matches = payload_matches && mem.load8(kLoadBuf + static_cast<std::uint32_t>(i)) ==
             static_cast<std::uint8_t>(payload[i]);
     check(payload_matches, "load restores the data bytes");
+
+    gungnir::hle::reset_utility_state();
+    zero(kLoadBuf, 0x100u);
+    mode_param(0u, "MODES", kLoadBuf, 0x100u, 0u, "");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "autoload init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "autoload update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "autoload reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "autoload loads the save");
+    check(mem.load8(kLoadBuf) == static_cast<std::uint8_t>(payload[0]), "autoload restores the data bytes");
+
+    gungnir::hle::reset_utility_state();
+    mode_param(1u, "MODES", kData, 0x100u, static_cast<std::uint32_t>(payload.size()), "Fixture Title");
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "autosave init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "autosave update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "autosave reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "autosave writes the save");
 
     gungnir::hle::reset_utility_state();
     mem.store32(kParam + 0x30u, 3u);
@@ -1154,6 +1189,7 @@ int main(int argc, char **argv) {
     try {
         memory_contracts();
         thread_contracts();
+        check_callback_yield_contract();
         sync_contracts();
         blocking_sync_contracts();
         alarm_contracts();

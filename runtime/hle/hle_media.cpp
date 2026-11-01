@@ -1,6 +1,7 @@
 #include "hle/hle_media.hpp"
 
 #include "ge/display_list.hpp"
+#include "ge/state_machine.hpp"
 #include "input/input_state.hpp"
 #include "psprecomp/common.hpp"
 
@@ -11,7 +12,10 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace gungnir::hle {
 namespace {
@@ -58,6 +62,12 @@ struct MediaState {
     std::int32_t next_ge_callback{};
     std::map<std::uint32_t, GeList> ge_lists;
     std::uint32_t next_ge_list{1u};
+    gungnir::ge::StateMachine ge;
+    std::vector<gungnir::ge::Draw> pending_draws;
+    std::function<void(const std::vector<gungnir::ge::Draw> &)> frame_sink;
+    std::set<std::string> logged_ge_gaps;
+    std::uint64_t ge_frames{};
+    std::uint64_t ge_gaps{};
     std::function<void()> flip_observer;
 };
 
@@ -93,7 +103,7 @@ void deliver_ge_callbacks(GeList &list) {
 void make_ge_runner(Runtime &rt, GeList &list) {
     gungnir::ge::DisplayList::Config config;
     config.max_commands = 1'000'000u;
-    config.on_command = [&list](const gungnir::ge::Command &command) {
+    config.on_command = [&list, &rt](const gungnir::ge::Command &command) {
         ++list.commands;
         if (command.kind == gungnir::ge::CommandKind::Primitive) ++list.draws;
         if (command.kind == gungnir::ge::CommandKind::Signal) {
@@ -104,6 +114,15 @@ void make_ge_runner(Runtime &rt, GeList &list) {
             list.finish = command.argument;
             list.has_finish = true;
         }
+        media().ge.command(command, [&rt](std::uint32_t address, std::uint8_t *out, std::size_t size) {
+            if (!rt.memory().contains(address, size)) return false;
+            try {
+                rt.memory().copy_out(address, std::span<std::uint8_t>(out, size));
+                return true;
+            } catch (const std::exception &) {
+                return false;
+            }
+        });
     };
     gungnir::ge::WordReader reader = [&rt](std::uint32_t address) -> std::optional<std::uint32_t> {
         return rt.memory().load32(address);
@@ -202,7 +221,15 @@ void register_display(HleRegistrar &hle) {
                       << " width=" << display.buffer_width << " format=" << display.pixel_format << "\n";
         // A zero-width buffer is the guest turning the display off during
         // boot; only a real buffer is a presentable flip.
-        if (display.buffer_width != 0u && media().flip_observer) media().flip_observer();
+        if (display.buffer_width != 0u) {
+            ++media().ge_frames;
+            if (media().frame_sink) {
+                std::vector<gungnir::ge::Draw> draws = std::move(media().pending_draws);
+                media().pending_draws.clear();
+                media().frame_sink(draws);
+            }
+            if (media().flip_observer) media().flip_observer();
+        }
         kernel().finish(ctx, 0u);
     });
     hle.add("sceDisplay", "sceDisplayGetVcount",
@@ -342,10 +369,31 @@ DisplayState &display_state() {
 
 void reset_media_state() {
     media() = MediaState{};
+    MediaState &state = media();
+    state.ge.set_draw_sink([&state](const gungnir::ge::Draw &draw) {
+        state.pending_draws.push_back(draw);
+    });
+    state.ge.set_gap_sink([&state](const std::string &gap) {
+        ++state.ge_gaps;
+        if (state.logged_ge_gaps.insert(gap).second)
+            std::cerr << "[ge] gap: " << gap << "\n";
+    });
 }
 
 void set_display_flip_observer(std::function<void()> observer) {
     media().flip_observer = std::move(observer);
+}
+
+void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &)> sink) {
+    media().frame_sink = std::move(sink);
+}
+
+std::uint64_t ge_frame_count() {
+    return media().ge_frames;
+}
+
+std::uint64_t ge_gap_count() {
+    return media().ge_gaps;
 }
 
 void register_media(HleRegistrar &hle) {

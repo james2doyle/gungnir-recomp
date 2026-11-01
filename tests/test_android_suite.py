@@ -17,6 +17,7 @@ MODULES = (
     "tests.test_android_app",
     "tests.test_game_data",
     "tests.test_affinity",
+    "tests.test_session",
 )
 
 

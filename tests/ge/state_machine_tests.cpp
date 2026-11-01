@@ -1,0 +1,230 @@
+// T13b — GE state machine contracts.
+//
+// Inputs are synthetic command words and vertices of our authorship.
+
+#include "ge/state_machine.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace {
+
+using namespace gungnir::ge;
+
+int failures = 0;
+
+void check(bool condition, const std::string &message) {
+    if (!condition) {
+        std::cerr << "FAIL: " << message << "\n";
+        ++failures;
+    }
+}
+
+bool close(float a, float b, float tolerance = 1.0e-5f) {
+    return std::fabs(a - b) <= tolerance;
+}
+
+class Memory {
+public:
+    Memory() : bytes_(0x10000u, 0u) {}
+
+    void store32(std::uint32_t address, std::uint32_t value) {
+        std::memcpy(bytes_.data() + address, &value, sizeof value);
+    }
+
+    void store_float(std::uint32_t address, float value) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof bits);
+        store32(address, bits);
+    }
+
+    void store8(std::uint32_t address, std::uint8_t value) { bytes_[address] = value; }
+
+    bool read(std::uint32_t address, std::uint8_t *out, std::size_t size) const {
+        if (address + size > bytes_.size()) return false;
+        std::memcpy(out, bytes_.data() + address, size);
+        return true;
+    }
+
+private:
+    std::vector<std::uint8_t> bytes_;
+};
+
+MemoryView view(const Memory &memory) {
+    return [&memory](std::uint32_t address, std::uint8_t *out, std::size_t size) {
+        return memory.read(address, out, size);
+    };
+}
+
+Command command(CommandKind kind, std::uint32_t argument = 0u, std::uint8_t opcode = 0u) {
+    Command cmd;
+    cmd.kind = kind;
+    cmd.opcode = opcode;
+    cmd.argument = argument;
+    if (kind == CommandKind::VertexAddress || kind == CommandKind::IndexAddress)
+        cmd.address = argument;
+    if (kind == CommandKind::Primitive) {
+        cmd.primitive = static_cast<Primitive>((argument >> 16u) & 7u);
+        cmd.count = static_cast<std::uint16_t>(argument & 0xFFFFu);
+    }
+    if (kind == CommandKind::VertexType) cmd.vertex_layout = decode_vertex_layout(argument);
+    return cmd;
+}
+
+void write_through_triangle(Memory &memory, std::uint32_t address) {
+    const VertexLayout layout = decode_vertex_layout((3u << 7u) | 3u | (7u << 2u) | (1u << 23u));
+    const float positions[3][2] = {{10.0f, 20.0f}, {50.0f, 20.0f}, {10.0f, 60.0f}};
+    const std::array<std::uint32_t, 3> colors{0xFF0000FFu, 0xFF00FF00u, 0xFFFF0000u};
+    for (int i = 0; i < 3; ++i) {
+        const std::uint32_t at = address + static_cast<std::uint32_t>(i) * layout.stride;
+        memory.store_float(at + layout.position_offset + 0u, positions[i][0]);
+        memory.store_float(at + layout.position_offset + 4u, positions[i][1]);
+        memory.store_float(at + layout.position_offset + 8u, 0.0f);
+        memory.store_float(at + layout.texcoord_offset + 0u, 0.0f);
+        memory.store_float(at + layout.texcoord_offset + 4u, 0.0f);
+        memory.store32(at + layout.color_offset, colors[static_cast<std::size_t>(i)]);
+    }
+}
+
+void through_triangle() {
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+
+    check(draws.size() == 1u, "one through-mode draw");
+    if (draws.size() != 1u) return;
+    const Draw &draw = draws[0];
+    check(draw.vertices.size() == 3u, "three screen vertices");
+    check(draw.indices.size() == 3u, "three indices");
+    check(close(draw.vertices[0].x, 10.0f) && close(draw.vertices[0].y, 20.0f),
+        "through position is screen space");
+    check(close(draw.vertices[1].x, 50.0f), "second screen x");
+    check(draw.vertices[0].color[0] == 1.0f && draw.vertices[0].color[3] == 1.0f,
+        "8888 color decoded");
+}
+
+void indexed_and_textured() {
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    const std::uint32_t vt = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u) | (2u << 11u);
+    memory.store8(0x2000u, 0u);
+    memory.store8(0x2001u, 1u);
+    memory.store8(0x2002u, 2u);
+    for (int i = 0; i < 4; ++i) memory.store32(0x3000u + static_cast<std::uint32_t>(i) * 4u,
+        0xFF000000u | static_cast<std::uint32_t>(i * 40u) << 16u);
+
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), view(memory));
+    };
+    send(CommandKind::VertexType, vt, 0x12u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::IndexAddress, 0x2000u, 0x02u);
+    send(CommandKind::State, 1u, 0x1Eu);       // TEXTUREMAPENABLE
+    send(CommandKind::State, 0x3000u, 0xA0u);  // TEXADDR0
+    send(CommandKind::State, 2u, 0xA8u);       // TEXBUFWIDTH0
+    send(CommandKind::State, 0x0101u, 0xB8u);  // TEXSIZE0: 2x2
+    send(CommandKind::State, 3u, 0xC3u);       // TEXFORMAT: RGBA8888
+    send(CommandKind::State, 0u, 0xC2u);       // TEXMODE
+    send(CommandKind::Primitive, (6u << 16u) | 2u, 0x04u);  // sprites x2? use triangles instead
+
+    check(draws.size() == 1u, "one indexed draw");
+    if (draws.size() != 1u) return;
+    check(draws[0].state.texture != nullptr, "texture decoded");
+    check(draws[0].state.texture != nullptr && draws[0].state.texture->width == 2 &&
+              draws[0].state.texture->height == 2,
+        "texture extent");
+}
+
+void through_sprite_quad() {
+    Memory memory;
+    const std::uint32_t layout_bits = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u);
+    const VertexLayout layout = decode_vertex_layout(layout_bits);
+    const std::array<std::array<float, 2>, 2> positions{{{10.0f, 20.0f}, {50.0f, 60.0f}}};
+    const std::array<std::array<float, 2>, 2> texcoords{{{64.0f, 0.0f}, {128.0f, 32.0f}}};
+    for (int i = 0; i < 2; ++i) {
+        const std::uint32_t at = 0x1000u + static_cast<std::uint32_t>(i) * layout.stride;
+        memory.store_float(at + layout.position_offset + 0u, positions[static_cast<std::size_t>(i)][0]);
+        memory.store_float(at + layout.position_offset + 4u, positions[static_cast<std::size_t>(i)][1]);
+        memory.store_float(at + layout.position_offset + 8u, 0.0f);
+        memory.store_float(at + layout.texcoord_offset + 0u, texcoords[static_cast<std::size_t>(i)][0]);
+        memory.store_float(at + layout.texcoord_offset + 4u, texcoords[static_cast<std::size_t>(i)][1]);
+        memory.store32(at + layout.color_offset, 0xFFFFFFFFu);
+    }
+
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.command(command(CommandKind::VertexType, layout_bits, 0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (6u << 16u) | 2u, 0x04u), view(memory));
+
+    check(draws.size() == 1u, "one through-mode sprite draw");
+    if (draws.size() != 1u) return;
+    const Draw &draw = draws[0];
+    check(draw.vertices.size() == 4u, "sprite expands to four corners");
+    if (draw.vertices.size() != 4u) return;
+    check(close(draw.vertices[0].x, 10.0f) && close(draw.vertices[0].y, 20.0f), "sprite top-left position");
+    check(close(draw.vertices[1].x, 50.0f) && close(draw.vertices[1].y, 20.0f), "sprite top-right position");
+    check(close(draw.vertices[2].x, 10.0f) && close(draw.vertices[2].y, 60.0f), "sprite bottom-left position");
+    check(close(draw.vertices[3].x, 50.0f) && close(draw.vertices[3].y, 60.0f), "sprite bottom-right position");
+    check(close(draw.vertices[2].texcoord[0], 64.0f) && close(draw.vertices[2].texcoord[1], 32.0f),
+          "sprite bottom-left texcoord");
+}
+
+void scissor_and_gaps() {
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    std::vector<std::string> gaps;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.set_gap_sink([&gaps](const std::string &gap) { gaps.push_back(gap); });
+    machine.command(command(CommandKind::State, (100u << 10u) | 20u, 0xD4u), view(memory));
+    machine.command(command(CommandKind::State, (200u << 10u) | 220u, 0xD5u), view(memory));
+    machine.command(command(CommandKind::State, 1u, 0x21u), view(memory));
+    machine.command(command(CommandKind::State, 2u | (3u << 4u), 0xDFu), view(memory));
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    machine.command(command(CommandKind::Primitive, (1u << 16u) | 4u, 0x04u), view(memory));
+
+    check(draws.size() == 1u, "line primitive is not a Vulkan draw");
+    check(draws[0].state.scissor_x0 == 20 && draws[0].state.scissor_y0 == 100 &&
+              draws[0].state.scissor_x1 == 221 && draws[0].state.scissor_y1 == 201,
+        "scissor decoded");
+    check(draws[0].state.blend.enabled && draws[0].state.blend.source == BlendFactor::SrcAlpha &&
+              draws[0].state.blend.destination == BlendFactor::OneMinusSrcAlpha,
+        "blend decoded");
+    check(!gaps.empty(), "unsupported primitive is a named gap");
+}
+
+} // namespace
+
+int main() {
+    through_triangle();
+    indexed_and_textured();
+    through_sprite_quad();
+    scissor_and_gaps();
+    if (failures != 0) {
+        std::cerr << "state_machine_tests: " << failures << " failure(s)\n";
+        return 1;
+    }
+    std::cout << "state_machine_tests: OK\n";
+    return 0;
+}

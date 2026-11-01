@@ -1,10 +1,14 @@
+#include "ge/frame_queue.hpp"
+#include "ge/state_machine.hpp"
 #include "ge/vulkan_backend.hpp"
+#include "hle/hle_media.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include "audio/audio_mixer.hpp"
 #include "input/input_state.hpp"
 #include "input/sdl_input.hpp"
 #include "input/touch_haptics.hpp"
@@ -14,9 +18,12 @@
 #include "platform/android/affinity.hpp"
 #include "platform/android/assets.hpp"
 #include "platform/android/audio_smoke.hpp"
+#include "platform/android/aaudio_out.hpp"
 #include "platform/android/game_data.hpp"
 #include "platform/sdl_gamepad.hpp"
+#include "session/game_session.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -25,8 +32,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__ANDROID__)
@@ -64,34 +73,141 @@ std::string read_asset(const char *name) {
     return data;
 }
 
-void unpack_runtime_assets(const std::filesystem::path &internal) {
-    if (internal.empty()) return;
-    const std::string expected = read_asset("runtime/version.txt");
-    if (expected.empty()) {
-        GUNGNIR_LOGI("runtime_assets_missing\n");
-        return;
-    }
-    const std::filesystem::path destination = internal / "runtime" / "version.txt";
-    std::ifstream existing(destination);
+bool write_runtime_asset(const std::filesystem::path &destination, const std::string &content) {
+    std::ifstream existing(destination, std::ios::binary);
     const std::string current((std::istreambuf_iterator<char>(existing)),
                               std::istreambuf_iterator<char>());
-    if (gungnir::platform::version_stamp_matches(current, expected)) {
-        GUNGNIR_LOGI("runtime_assets_current\n");
-        return;
-    }
+    if (current == content) return false;
 
     std::error_code error;
     std::filesystem::create_directories(destination.parent_path(), error);
     const std::filesystem::path temporary = destination.string() + ".tmp";
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    output.write(expected.data(), static_cast<std::streamsize>(expected.size()));
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
     output.close();
     std::filesystem::rename(temporary, destination, error);
     if (error) {
         GUNGNIR_LOGE("runtime_assets_write_failed: %s\n", error.message().c_str());
+        return false;
+    }
+    return true;
+}
+
+void unpack_runtime_assets(const std::filesystem::path &internal) {
+    if (internal.empty()) return;
+    const std::string version = read_asset("runtime/version.txt");
+    const std::string nids = read_asset("nids.csv");
+    if (version.empty()) {
+        GUNGNIR_LOGI("runtime_assets_missing\n");
         return;
     }
-    GUNGNIR_LOGI("runtime_assets_unpacked\n");
+    if (nids.empty()) GUNGNIR_LOGE("runtime_assets_missing_nids\n");
+
+    const std::filesystem::path runtime = internal / "runtime";
+    bool changed = write_runtime_asset(runtime / "version.txt", version);
+    if (!nids.empty()) changed = write_runtime_asset(runtime / "nids.csv", nids) || changed;
+    if (changed) {
+        GUNGNIR_LOGI("runtime_assets_unpacked\n");
+    } else {
+        GUNGNIR_LOGI("runtime_assets_current\n");
+    }
+}
+
+std::filesystem::path find_runtime_elf(const std::vector<std::filesystem::path> &directories) {
+    for (const auto &directory : directories) {
+        const std::filesystem::path candidate = directory / "game" / "game.elf";
+        if (!std::filesystem::is_regular_file(candidate)) continue;
+        std::ifstream input(candidate, std::ios::binary);
+        char magic[4]{};
+        input.read(magic, sizeof(magic));
+        if (input.gcount() != static_cast<std::streamsize>(sizeof(magic)) ||
+            magic[0] != '\x7f' || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F') {
+            GUNGNIR_LOGE("game_elf_invalid_magic: %s\n", candidate.string().c_str());
+            continue;
+        }
+        return candidate;
+    }
+    return {};
+}
+
+class SilentSink final : public gungnir::audio::AudioSink {
+public:
+    bool submit(const gungnir::audio::AudioBuffer &buffer) override {
+        buffers += buffer.frames;
+        return true;
+    }
+    std::uint64_t buffers{};
+};
+
+#if defined(__ANDROID__)
+long long intent_long(const char *key, long long fallback) {
+    JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+    if (env == nullptr || activity == nullptr) return fallback;
+    jclass activity_class = env->GetObjectClass(activity);
+    if (activity_class == nullptr) return fallback;
+    jmethodID get_intent = env->GetMethodID(activity_class, "getIntent",
+                                            "()Landroid/content/Intent;");
+    jobject intent = get_intent != nullptr ? env->CallObjectMethod(activity, get_intent) : nullptr;
+    long long value = fallback;
+    if (intent != nullptr) {
+        jclass intent_class = env->GetObjectClass(intent);
+        jmethodID get_long = intent_class != nullptr
+            ? env->GetMethodID(intent_class, "getLongExtra", "(Ljava/lang/String;J)J") : nullptr;
+        jstring name = env->NewStringUTF(key);
+        if (get_long != nullptr && name != nullptr)
+            value = static_cast<long long>(
+                env->CallLongMethod(intent, get_long, name, static_cast<jlong>(fallback)));
+        if (name != nullptr) env->DeleteLocalRef(name);
+        if (intent_class != nullptr) env->DeleteLocalRef(intent_class);
+        env->DeleteLocalRef(intent);
+    }
+    env->DeleteLocalRef(activity_class);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return value;
+}
+#else
+long long intent_long(const char *, long long fallback) {
+    return fallback;
+}
+#endif
+
+bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
+                         const std::vector<gungnir::ge::Draw> &draws, std::string &error) {
+    struct OwnedDraw {
+        std::vector<gungnir::ge::VulkanDrawVertex> vertices;
+        std::vector<std::uint16_t> indices;
+        gungnir::ge::VulkanDrawState state;
+    };
+    std::vector<OwnedDraw> owned(draws.size());
+    std::vector<gungnir::ge::VulkanDrawCall> calls;
+    calls.reserve(draws.size());
+    for (std::size_t i = 0; i < draws.size(); ++i) {
+        const gungnir::ge::Draw &source = draws[i];
+        owned[i].vertices.reserve(source.vertices.size());
+        for (const gungnir::ge::ScreenVertex &vertex : source.vertices)
+            owned[i].vertices.push_back(gungnir::ge::to_vulkan_vertex(vertex));
+        owned[i].indices = source.indices;
+        const gungnir::ge::DrawState &in = source.state;
+        gungnir::ge::VulkanDrawState &out = owned[i].state;
+        out.scissor_x0 = in.scissor_x0;
+        out.scissor_y0 = in.scissor_y0;
+        out.scissor_x1 = in.scissor_x1;
+        out.scissor_y1 = in.scissor_y1;
+        out.depth_test = in.depth_test;
+        out.depth_write = in.depth_write;
+        out.depth_function = in.depth_function;
+        out.cull = in.cull;
+        out.front_face = in.front_face;
+        out.blend = in.blend;
+        out.texture = in.texture;
+        out.texture_key = in.texture_key;
+        out.linear = in.linear;
+        out.wrap_u = in.wrap_u;
+        out.wrap_v = in.wrap_v;
+        calls.push_back({owned[i].vertices, owned[i].indices, out});
+    }
+    return backend.render_swapchain_draws(calls, error);
 }
 
 gungnir::platform::GameDataResult check_game_data() {
@@ -129,9 +245,10 @@ void show_game_data_picker() {
 struct LifecycleState {
     std::atomic<bool> background{false};
     std::atomic<bool> resume{false};
-    std::atomic<SDL_AudioStream *> tone{nullptr};
     gungnir::input::SdlInput *sdl_input{};
     gungnir::platform::SdlGamepad *gamepad{};
+    gungnir::session::GameSession *session{};
+    gungnir::audio::AAudioOut *audio_out{};
 };
 
 bool lifecycle_watch(void *userdata, SDL_Event *event) {
@@ -141,9 +258,14 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
         if (state->gamepad != nullptr) state->gamepad->release_all();
         gungnir::input::state().release_all();
         state->background.store(true);
-        if (SDL_AudioStream *tone = state->tone.load(); tone != nullptr) {
-            if (!SDL_PauseAudioStreamDevice(tone))
-                GUNGNIR_LOGE("audio_pause_failed: %s\n", SDL_GetError());
+        if (state->session != nullptr) {
+            state->session->request_stop();
+            GUNGNIR_LOGI("session_stop_requested reason=background\n");
+        }
+        if (state->audio_out != nullptr) {
+            std::string error;
+            if (!state->audio_out->pause(error))
+                GUNGNIR_LOGE("audio_pause_failed: %s\n", error.c_str());
             else
                 GUNGNIR_LOGI("audio_paused\n");
         }
@@ -157,46 +279,16 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
     if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         state->background.store(false);
         state->resume.store(true);
-        if (SDL_AudioStream *tone = state->tone.load(); tone != nullptr) {
-            if (!SDL_ResumeAudioStreamDevice(tone))
-                GUNGNIR_LOGE("audio_resume_failed: %s\n", SDL_GetError());
+        if (state->audio_out != nullptr) {
+            std::string error;
+            if (!state->audio_out->resume(error))
+                GUNGNIR_LOGE("audio_resume_failed: %s\n", error.c_str());
             else
                 GUNGNIR_LOGI("audio_resumed\n");
         }
         GUNGNIR_LOGI("lifecycle_event foreground\n");
     }
     return true;
-}
-
-double g_tone_phase = 0.0;
-
-void tone_callback(void *, SDL_AudioStream *stream, int additional, int) {
-    if (stream == nullptr || additional <= 0) return;
-    std::vector<float> samples(static_cast<std::size_t>(additional) / sizeof(float));
-    for (float &sample : samples) {
-        sample = 0.05f * static_cast<float>(std::sin(g_tone_phase));
-        g_tone_phase += 2.0 * 3.141592653589793 * 440.0 / 48000.0;
-        if (g_tone_phase > 2.0 * 3.141592653589793) g_tone_phase -= 2.0 * 3.141592653589793;
-    }
-    SDL_PutAudioStreamData(stream, samples.data(),
-                           static_cast<int>(samples.size() * sizeof(float)));
-}
-
-SDL_AudioStream *open_tone() {
-    SDL_AudioSpec spec{SDL_AUDIO_F32, 1, 48000};
-    SDL_AudioStream *stream =
-        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, tone_callback, nullptr);
-    if (stream == nullptr) {
-        GUNGNIR_LOGE("audio_unavailable: %s\n", SDL_GetError());
-        return nullptr;
-    }
-    if (!SDL_ResumeAudioStreamDevice(stream)) {
-        GUNGNIR_LOGE("audio_resume_failed: %s\n", SDL_GetError());
-        SDL_DestroyAudioStream(stream);
-        return nullptr;
-    }
-    GUNGNIR_LOGI("audio_tone_ready\n");
-    return stream;
 }
 
 } // namespace
@@ -456,7 +548,8 @@ int main(int, char **) {
     gungnir::platform::SdlGamepad gamepad(gamepad_profiles, gamepad_directory);
     g_gamepad.store(&gamepad);
     if (gamepad_profiles.empty()) GUNGNIR_LOGE("gamepad_profiles_asset_missing\n");
-    if (!check_game_data().ok) show_game_data_picker();
+    gungnir::platform::GameDataResult game_data = check_game_data();
+    if (!game_data.ok) show_game_data_picker();
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft");
     SDL_Window *window =
         SDL_CreateWindow("Gungnir", 1280, 720, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -489,8 +582,10 @@ int main(int, char **) {
 
     gungnir::ge::VulkanBackend backend;
     gungnir::ge::VulkanBackend::Config config;
-    config.width = 1280;
-    config.height = 720;
+    config.width = 480;
+    config.height = 272;
+    config.virtual_width = 480;
+    config.virtual_height = 272;
     config.headless = false;
     config.driver = driver_selection;
     config.instance_extensions.assign(extensions, extensions + extension_count);
@@ -511,6 +606,8 @@ int main(int, char **) {
         return 1;
     }
 
+    GUNGNIR_LOGI("swapchain=%dx%d transform=%u\n", backend.swapchain_width(), backend.swapchain_height(),
+                 static_cast<unsigned>(backend.surface_transform()));
     const gungnir::platform::VulkanDriverInfo &driver = backend.driver_info();
     GUNGNIR_LOGI("driver_active=%s name=%s info=%s api=%u\n",
                  driver.custom ? "custom" : "system", driver.driver_name.c_str(),
@@ -540,19 +637,88 @@ int main(int, char **) {
         GUNGNIR_LOGI("priority_unavailable: %s\n", tuning.priority_error.c_str());
     }
 
+    gungnir::audio::MixerSink mixer(44'100u);
+    SilentSink silent_sink;
+    gungnir::audio::AudioSink *audio_sink = &silent_sink;
+    std::unique_ptr<gungnir::audio::AAudioOut> audio_out;
+    {
+        std::string audio_error;
+        audio_out = gungnir::audio::AAudioOut::open(mixer, audio_error);
+        if (audio_out != nullptr) {
+            audio_sink = &mixer;
+            GUNGNIR_LOGI("audio_output_ready\n");
+        } else {
+            GUNGNIR_LOGE("audio_output_unavailable: %s\n", audio_error.c_str());
+        }
+    }
+    gungnir::audio::set_audio_sink(audio_sink);
+
+    const bool debug_quad = intent_long("debug_quad", 0) != 0;
+    gungnir::ge::FrameQueue frame_queue;
+    gungnir::session::GameSession session;
+    std::thread session_thread;
+    std::atomic<bool> session_finished{false};
+    if (debug_quad) {
+        GUNGNIR_LOGI("debug_quad enabled\n");
+    } else if (game_data.ok && internal != nullptr) {
+        std::vector<std::filesystem::path> game_directories;
+        game_directories.emplace_back(internal);
+        if (const char *external = SDL_GetAndroidExternalStoragePath(); external != nullptr)
+            game_directories.emplace_back(external);
+        const std::filesystem::path elf = find_runtime_elf(game_directories);
+        if (elf.empty()) {
+            GUNGNIR_LOGE("session_start_failed: game_elf_missing (push game.elf to files/game/)\n");
+        } else {
+            gungnir::session::Config session_config;
+            session_config.elf_path = elf;
+            session_config.nids_path = std::filesystem::path(internal) / "runtime" / "nids.csv";
+            session_config.disc_path = game_data.path;
+            session_config.memory_stick = std::filesystem::path(internal) / "psp";
+            session_config.max_dispatches = static_cast<std::uint64_t>(
+                intent_long("dispatch_limit", 5'000'000'000LL));
+            session_config.wall_seconds = static_cast<double>(
+                intent_long("wall_seconds", 0));
+            session_config.stop_at_flip = intent_long("stop_at_flip", 0) != 0;
+            session_config.pacing = intent_long("pacing", 1) != 0;
+            std::error_code directory_error;
+            std::filesystem::create_directories(session_config.memory_stick, directory_error);
+            std::string start_error;
+            if (!session.start(session_config, audio_sink, start_error)) {
+                GUNGNIR_LOGE("session_start_failed: %s\n", start_error.c_str());
+            } else {
+                GUNGNIR_LOGI("session_start elf=%s\n", elf.string().c_str());
+                gungnir::hle::set_ge_frame_sink([&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
+                    frame_queue.publish(draws);
+                });
+                session_thread = std::thread([&session, &session_finished] {
+                    session.run();
+                    const gungnir::session::Result &result = session.result();
+                    GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
+                    if (!result.ok)
+                        GUNGNIR_LOGE("session_error: %s\n", result.error.c_str());
+                    session_finished.store(true);
+                });
+            }
+        }
+    } else if (!game_data.ok) {
+        GUNGNIR_LOGE("session_start_failed: game_data_unavailable\n");
+    }
+
     LifecycleState lifecycle;
     gungnir::input::SdlInput sdl_input;
     lifecycle.sdl_input = &sdl_input;
     lifecycle.gamepad = &gamepad;
-    SDL_AudioStream *tone = open_tone();
-    lifecycle.tone.store(tone);
+    lifecycle.session = &session;
+    lifecycle.audio_out = audio_out.get();
     SDL_AddEventWatch(lifecycle_watch, &lifecycle);
 
     bool running = true;
     bool first_frame = true;
+    std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;
     Uint64 next_surface_retry = 0;
+    Uint64 next_audio_stats = SDL_GetTicks() + 5000;
     int width = config.width;
     int height = config.height;
     while (running) {
@@ -574,6 +740,10 @@ int main(int, char **) {
                     height = window_height;
                     if (!backend.recreate_swapchain(width, height, error)) {
                         GUNGNIR_LOGE("swapchain_resize_failed: %s\n", error.c_str());
+                    } else {
+                        GUNGNIR_LOGI("swapchain=%dx%d transform=%u\n", backend.swapchain_width(),
+                                     backend.swapchain_height(),
+                                     static_cast<unsigned>(backend.surface_transform()));
                     }
                 }
             }
@@ -608,7 +778,31 @@ int main(int, char **) {
             continue;
         }
 
-        if (!backend.render_swapchain(error)) {
+        std::vector<gungnir::ge::Draw> guest_draws;
+        const bool have_guest_frame = !debug_quad && frame_queue.take_latest(guest_draws);
+        bool rendered = false;
+        if (debug_quad) {
+            const std::array<gungnir::ge::VulkanDrawVertex, 4> vertices{{
+                {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+                {480.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+                {0.0f, 272.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f},
+                {480.0f, 272.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f},
+            }};
+            const std::array<std::uint16_t, 6> indices{{0, 1, 2, 2, 1, 3}};
+            gungnir::ge::VulkanDrawState state;
+            state.scissor_x0 = 0;
+            state.scissor_y0 = 0;
+            state.scissor_x1 = 480;
+            state.scissor_y1 = 272;
+            const std::array<gungnir::ge::VulkanDrawCall, 1> calls{{{vertices, indices, state}}};
+            rendered = backend.render_swapchain_draws(calls, error);
+        } else if (have_guest_frame) {
+            rendered = present_guest_frame(backend, guest_draws, error);
+        } else {
+            SDL_Delay(1);
+            continue;
+        }
+        if (!rendered) {
             GUNGNIR_LOGE("render_failed: %s\n", error.c_str());
             needs_surface = true;
             if (++render_failures >= 3) break;
@@ -616,6 +810,48 @@ int main(int, char **) {
             continue;
         }
         render_failures = 0;
+        if (have_guest_frame && !guest_draws.empty()) {
+            ++guest_frames;
+            std::size_t vertices = 0u;
+            for (const gungnir::ge::Draw &draw : guest_draws) vertices += draw.vertices.size();
+            if (guest_frames == 1u || guest_frames % 60u == 0u)
+                GUNGNIR_LOGI("guest_frame=%llu draws=%zu vertices=%zu ge_gaps=%llu\n",
+                             static_cast<unsigned long long>(guest_frames), guest_draws.size(), vertices,
+                             static_cast<unsigned long long>(gungnir::hle::ge_gap_count()));
+            if (guest_frames == 1u || guest_frames == 60u) {
+                const auto &display = gungnir::hle::display_state();
+                GUNGNIR_LOGI("guest_display=%ux%u fb=%08X width=%u format=%u\n", display.width,
+                             display.height, display.framebuffer, display.buffer_width, display.pixel_format);
+                const std::size_t shown = std::min<std::size_t>(guest_draws.size(), 12u);
+                for (std::size_t i = 0; i < shown; ++i) {
+                    const gungnir::ge::Draw &draw = guest_draws[i];
+                    const gungnir::ge::ScreenVertex *v =
+                        draw.vertices.empty() ? nullptr : &draw.vertices.front();
+                    GUNGNIR_LOGI("guest_draw=%zu verts=%zu indices=%zu scissor=%d,%d-%d,%d texture=%dx%d "
+                                 "v0=%.1f,%.1f color=%.2f,%.2f,%.2f,%.2f\n",
+                                 i, draw.vertices.size(), draw.indices.size(), draw.state.scissor_x0,
+                                 draw.state.scissor_y0, draw.state.scissor_x1, draw.state.scissor_y1,
+                                 draw.state.texture != nullptr ? draw.state.texture->width : 0,
+                                 draw.state.texture != nullptr ? draw.state.texture->height : 0,
+                                 v != nullptr ? v->x : 0.0f, v != nullptr ? v->y : 0.0f,
+                                 v != nullptr ? v->color[0] : 0.0f, v != nullptr ? v->color[1] : 0.0f,
+                                 v != nullptr ? v->color[2] : 0.0f, v != nullptr ? v->color[3] : 0.0f);
+                }
+            }
+        }
+        const Uint64 now_ticks = SDL_GetTicks();
+        if (now_ticks >= next_audio_stats) {
+            next_audio_stats = now_ticks + 5000;
+            const gungnir::audio::MixerStats stats = mixer.stats();
+            GUNGNIR_LOGI("audio_mixer pulled=%llu underrun=%llu submitted=%llu overruns=%llu rejected=%llu "
+                         "peak=%u xruns=%d\n",
+                         static_cast<unsigned long long>(stats.frames_pulled),
+                         static_cast<unsigned long long>(stats.underrun_frames),
+                         static_cast<unsigned long long>(stats.submitted_buffers),
+                         static_cast<unsigned long long>(stats.overruns),
+                         static_cast<unsigned long long>(stats.rejected_buffers), stats.peak,
+                         audio_out != nullptr ? audio_out->xruns() : 0);
+        }
         if (first_frame) {
             GUNGNIR_LOGI("first frame %dx%d\n", width, height);
             first_frame = false;
@@ -624,10 +860,14 @@ int main(int, char **) {
     }
 
     SDL_RemoveEventWatch(lifecycle_watch, &lifecycle);
+    session.request_stop();
+    if (session_thread.joinable()) session_thread.join();
+    gungnir::hle::set_ge_frame_sink(nullptr);
+    session.shutdown();
+    gungnir::audio::set_audio_sink(nullptr);
+    audio_out.reset();
     g_gamepad.store(nullptr);
     gamepad.shutdown();
-    lifecycle.tone.store(nullptr);
-    if (tone != nullptr) SDL_DestroyAudioStream(tone);
     backend.shutdown();
     SDL_DestroyWindow(window);
     SDL_Quit();

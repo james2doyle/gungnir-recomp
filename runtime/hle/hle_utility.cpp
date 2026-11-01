@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -38,6 +40,14 @@ constexpr std::uint32_t kParamFileName = 0x64u;
 constexpr std::uint32_t kParamDataBuf = 0x74u;
 constexpr std::uint32_t kParamDataBufSize = 0x78u;
 constexpr std::uint32_t kParamDataSize = 0x7Cu;
+
+void trace_savedata(const std::string &text) {
+    static const bool enabled = std::getenv("GUNGNIR_TRACE_SAVEDATA") != nullptr;
+    static int remaining = 40;
+    if (!enabled || remaining <= 0) return;
+    --remaining;
+    std::fprintf(stderr, "[savedata] %s\n", text.c_str());
+}
 constexpr std::uint32_t kParamSfoTitle = 0x80u;
 constexpr std::uint32_t kParamSfoSavedataTitle = 0x100u;
 constexpr std::uint32_t kParamSfoDetail = 0x180u;
@@ -53,6 +63,8 @@ constexpr std::uint32_t kParamUtilityData = 0x5D8u;
 // Gungnir uses the 0x600-byte layout (the only one whose field offsets this
 // handler validates). Other versions fail closed instead of being misread.
 constexpr std::uint32_t kSavedataSizeV3 = 0x600u;
+constexpr std::uint32_t kModeAutoLoad = 0u;
+constexpr std::uint32_t kModeAutoSave = 1u;
 constexpr std::uint32_t kModeLoad = 2u;
 constexpr std::uint32_t kModeSave = 3u;
 constexpr std::uint32_t kModeSizes = 8u;
@@ -67,6 +79,7 @@ struct SavedataState {
     SavedataStatus status{SavedataStatus::None};
     std::uint32_t param{};
     std::uint32_t mode{};
+    bool started{};
 };
 
 SavedataState g_state;
@@ -332,6 +345,10 @@ std::uint32_t perform_load() {
 
 std::uint32_t perform_operation() {
     switch (g_state.mode) {
+    case kModeAutoLoad:
+        return perform_load();
+    case kModeAutoSave:
+        return perform_save();
     case kModeSizes:
         return perform_sizes();
     case kModeSave:
@@ -346,7 +363,18 @@ std::uint32_t perform_operation() {
     }
 }
 
+std::uint32_t advance_status_inner();
+
 std::uint32_t advance_status() {
+    const SavedataStatus before = g_state.status;
+    const std::uint32_t result = advance_status_inner();
+    trace_savedata("status " + std::to_string(static_cast<int>(before)) + " -> " +
+                   std::to_string(static_cast<int>(g_state.status)) + " returned " +
+                   std::to_string(result));
+    return result;
+}
+
+std::uint32_t advance_status_inner() {
     switch (g_state.status) {
     case SavedataStatus::Init:
         g_state.status = SavedataStatus::Running;
@@ -360,9 +388,10 @@ std::uint32_t advance_status() {
     case SavedataStatus::Shutdown:
         g_state.status = SavedataStatus::None;
         return 4u;
-    default:
-        return kUtilityWrongType;
+    case SavedataStatus::None:
+        return 0u;
     }
+    return 0u;
 }
 
 } // namespace
@@ -402,18 +431,21 @@ void register_utility(HleRegistrar &hle) {
         g_state.status = SavedataStatus::Init;
         g_state.param = param;
         g_state.mode = mem.load32(param + kParamMode);
+        g_state.started = true;
+        trace_savedata("init mode=" + std::to_string(g_state.mode) + " game=" + game + " save=" + save +
+                       " file=" + file);
         kernel().finish(ctx, 0u);
     });
     hle.add("sceUtility", "sceUtilitySavedataUpdate", [](Runtime &, AllegrexContext &ctx) {
-        if (g_state.status == SavedataStatus::None) {
+        if (!g_state.started) {
             kernel().finish(ctx, kUtilityWrongType);
             return;
         }
-        (void)advance_status();
+        if (g_state.status != SavedataStatus::None) (void)advance_status();
         kernel().finish(ctx, 0u);
     });
     hle.add("sceUtility", "sceUtilitySavedataGetStatus", [](Runtime &, AllegrexContext &ctx) {
-        if (g_state.status == SavedataStatus::None) {
+        if (!g_state.started) {
             kernel().finish(ctx, kUtilityWrongType);
             return;
         }

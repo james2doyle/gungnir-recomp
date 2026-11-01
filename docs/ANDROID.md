@@ -1,8 +1,12 @@
 # ANDROID — build, deploy and game-data intake
 
-Status: T9 shell. The APK currently renders the T7 synthetic Vulkan triangle,
-not Gungnir. Game-data intake, identity checking, asset unpacking and
-lifecycle recovery are implemented; the real runtime chain lands with T13.
+Status: T13a. The APK now compiles the shared session, HLE boot set, ATRAC
+decode and savedata chain and can run a bounded game session. VERIFIED on the
+arm64 phone: the real-corpus build reaches the first guest display flip with
+`missing_import=0` and `module_init_complete=true`
+(`docs/qa/2026-10-31-t13a-runtime.md`). The title-screen rendering path and menu
+bring-up are T13b. The synthetic Vulkan triangle still backs the shell until
+then.
 
 ## Prerequisites
 
@@ -29,6 +33,7 @@ scripts/android/build.sh \
 | `-Pgungnir.javaHome=DIR` | JDK 17–23 |
 | `-Pgungnir.depsDir=DIR` | fetched-dependency cache (default `build/android-deps`) |
 | `-Pgungnir.o1Sources=LIST` | semicolon-separated sources compiled at `-O1` |
+| `-Pgungnir.gameCorpus=DIR` | local generated AOT corpus (`generated_registry.cpp`, `recomp_units.hpp`, `generated_unit_*.cpp`); build output, never committed |
 | `-P<name>=<value>` | any other Gradle project property |
 
 `build.sh` validates the pinned SDK components and JDK, fetches SDL3
@@ -45,7 +50,7 @@ be dropped to `-O1` through `-Pgungnir.o1Sources`; the choice is visible in
 
 ```sh
 ADB_SERIAL=30c1f958 scripts/android/install.sh
-ADB_SERIAL=30c1f958 scripts/android/run.sh        # waits for "first frame"
+ADB_SERIAL=30c1f958 scripts/android/run.sh        # waits for "session_stop" or "first frame"
 ADB_SERIAL=30c1f958 scripts/android/logcat.sh     # gungnir/SDL/crash tags
 ADB_SERIAL=30c1f958 scripts/android/screenshot.sh # PNG under build/qa/android/
 ADB_SERIAL=30c1f958 scripts/android/lifecycle.sh  # 3 pause/resume cycles
@@ -68,6 +73,20 @@ Two supported paths converge on `getExternalFilesDir()/game/`:
 2. **SAF picker**: when no valid ISO is found, the app overlays a
    “Select Gungnir ISO” button. The picker copies the chosen file to
    `.../files/game/imported.iso` and re-verifies it.
+
+The bounded game session also needs the decrypted main module produced by the
+user's own intake run. Push it as `game.elf`:
+
+```sh
+adb push build/game/modules/SYSDIR__EBOOT.BIN.decrypted.elf \
+  /sdcard/Android/data/com.gungnir.recomp/files/game/game.elf
+```
+
+The APK is built with the matching AOT corpus
+(`-Pgungnir.gameCorpus=build/profile-test/generated`); without one, the session
+fails with `game_corpus_missing` instead of running empty. The NID registry is
+packaged from `configs/nids.csv` into app storage as `runtime/nids.csv`. The
+memory stick is app-private at `getFilesDir()/psp/` (`PSP/SAVEDATA/...`).
 
 Both paths must satisfy the published disc identity: size `262766592` and
 CRC32 `183F3EDC`. A mismatch blocks use with a named log line
@@ -151,7 +170,14 @@ closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
 | `device_locked` | keyguard is up |
 | `game_data_unavailable: <reason>` | no/invalid ISO; reason is the identity error |
 | `affinity_unavailable`, `priority_unavailable` | tuning denied; boot continues |
-| `audio_unavailable` | no audio device; the probe continues silently |
+| `audio_output_unavailable` | AAudio could not open; the game session uses a named silent sink |
+| `game_corpus_missing` | APK built without `-Pgungnir.gameCorpus`; rebuild with the user's generated corpus |
+| `game_elf_missing` | `game.elf` is not in `files/game/`; push the user-generated decrypted module |
+| `game_elf_invalid_magic` | `game.elf` is not an ELF file; intake output was not copied |
+| `session_elf_missing`, `session_nids_missing` | the session inputs are absent |
+| `session_audio_sink_missing` | no host audio sink was installed; programming error |
+| `session_start_failed: <reason>` | the shared session refused to start; the reason is named |
+| `session_error: <reason>` | the guest run failed after starting |
 | `surface_recreate_failed` | swapchain surface could not be rebuilt; retried |
 | `driver_fallback: <reason>` | a selected custom driver failed; the system driver is used |
 | `driver_selection_invalid` | the persisted selection file is malformed; system is used |
@@ -178,8 +204,12 @@ Each mutation was applied locally and the named gate failed for that reason:
 
 ## Current limits
 
-- No game rendering yet; the title screen is T13.
-- Audio is a lifecycle tone plus the AAudio/SAS smoke; game audio is T12/T13.
+- The game session reaches and reports the first guest display flip (T13a);
+  GE-list presentation, the title screen and menu input are T13b.
+- Game audio is fed through the 44.1 kHz mixer to AAudio; if AAudio cannot
+  open, the named silent sink is used and the failure is logged.
+- Savedata is mounted under `files/psp/PSP/SAVEDATA`; the save tree is not
+  bundled and must be pushed by the user.
 - Custom Adreno drivers are complete for arm64/API 28+; packages are
   user-supplied and never bundled. See
   [`ANDROID_DRIVERS.md`](ANDROID_DRIVERS.md) for the contract and named gaps.

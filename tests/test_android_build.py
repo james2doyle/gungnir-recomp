@@ -113,8 +113,13 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copytree(REPO / "cmake", root / "cmake")
             shutil.copytree(REPO / "runtime" / "audio", root / "runtime" / "audio")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
+            shutil.copytree(REPO / "runtime" / "hle", root / "runtime" / "hle")
             shutil.copytree(REPO / "runtime" / "input", root / "runtime" / "input")
             shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")
+            shutil.copytree(REPO / "runtime" / "savedata", root / "runtime" / "savedata")
+            shutil.copytree(REPO / "runtime" / "session", root / "runtime" / "session")
+            shutil.copytree(REPO / "configs", root / "configs")
+            shutil.copytree(REPO / "third_party" / "atrac3p", root / "third_party" / "atrac3p")
             shutil.copytree(REPO / "third_party" / "miniz", root / "third_party" / "miniz")
             shutil.copytree(REPO / "third_party" / "nlohmann-json",
                             root / "third_party" / "nlohmann-json")

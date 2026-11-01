@@ -558,3 +558,90 @@ control or movie call executed at this depth.
 **Closure.** T6 is complete: module init and the main loop are evidenced,
 the deepest bounded run is deterministic, and every unexecuted counterpart
 is counted. T7 remains required for M3 because no GE frame is rendered yet.
+
+## 2026-10-31 — T13a: one session, two hosts
+
+**Symptom.** The Linux boot runner reached module init and the first flip, but
+the Android APK still compiled only the GE/input/audio-sink subset. The HLE,
+ATRAC, savedata and generated AOT corpus were absent from the APK, so no device
+run could share the desktop boot path.
+
+**Falsification.** `cmake/AndroidRuntime.cmake` was checked against the
+`gungnir_hle` target: it had no `runtime/hle/*`, `atrac_file.cpp`, savedata,
+`elf32`/`iso_image` or `atrac3p`. A second boot implementation on Android would
+have drifted immediately.
+
+**Fix.** `runtime/session/game_session.*` now owns the boot flow (ELF load, AOT
+registration, HLE registration, bounded run, stop cause and import accounting);
+`tests/hle/boot_runner.cpp` is a CLI + JSON shell over it. The Android target
+compiles the same session, HLE, ATRAC, savedata and yakumo sources. The app
+starts the session on a worker thread, mounts `files/psp` as ms0, writes the
+packaged `configs/nids.csv` to `files/runtime/nids.csv`, loads the user's
+`game.elf` from `files/game/`, and logs one `session_stop` line. Without a
+corpus the APK builds a named `game_corpus_missing` stub instead of running
+empty.
+
+**Evidence.** VERIFIED on the host: the refactored `tests.test_boot` suite still
+reaches the first `sceDisplaySetFrameBuf`, reports identical two-run traces and
+has no executed unbound import (`3 tests OK`, 45 s). VERIFIED on the arm64 phone
+(M2102K1AC, Android 14, Adreno): the real-corpus APK logged
+`session_stop cause=first_flip dispatches=213 flips=2 ... imports_unbound=51
+imports_executed=37 missing_import=0 module_init_complete=true`, and
+`scripts/android/run.sh` returned `SESSION_OK`. The 51 unbound imports are the
+documented gaps and none executed. Details: `docs/qa/2026-10-31-t13a-runtime.md`.
+
+**Regression.** `tests/test_session.py` (report contract + Android source list +
+corpus/memstick wiring), `tests/session/session_report_tests.cpp`, and the
+existing `tests/test_boot.py` against the real corpus.
+
+## 2026-11-01 — T13b: title screen on device
+
+**Symptom.** The first Android GE frame was black; the synthetic debug quad
+appeared as a small rainbow rectangle in the bottom-left, rotated relative to
+the UI overlay. After fixing the scale, the title band rendered but its text
+was scrambled, and boot stopped at "Checking storage media".
+
+**Falsification and root causes.**
+
+1. *Scale/rotation.* `recreate_swapchain()` overwrote `Config::width/height`
+   with the surface size (3063x1335), so the mesh shader divided 480x272 guest
+   pixels by the surface extent; the scissor was also clamped to 480x272. The
+   surface reports `currentTransform=ROTATE_90` while the code requested it as
+   `preTransform`, so the compositor skipped the rotation. Fix: separate
+   `virtual_width/height`, fit the viewport to the guest aspect, scale the
+   scissor, request `preTransform=IDENTITY`, and treat `VK_SUBOPTIMAL_KHR` as
+   success (Granite's Android behavior). VERIFIED: debug quad fills the fitted
+   rect upright; title/logo render at the correct aspect.
+2. *Scrambled text.* The sprite path copied the top-left vertex into the
+   bottom-left corner but never replaced its Y, so every rectangle drew as a
+   triangle. Fix: `bl.y = bottom_right.y`; regression
+   `through_sprite_quad`. VERIFIED: storage/legal text is legible.
+3. *Boot stall.* `sceUtilitySavedataGetStatus` returned `WRONG_TYPE` after the
+   dialog reached NONE; the guest polls it until it sees 0. Fix: keep returning
+   0 after a successful init (JPCSP documents this). AUTOLOAD/AUTOSAVE were
+   also mapped to the load/save paths. The next stop was an unbound
+   `sceUmdCancelWaitDriveStat`; the UMD medium/wait calls are now bound.
+4. *Movie skip.* The opening movie calls `sceMpegInit`; MPEG is deferred to
+   M5/T12. All 24 imported sceMpeg entry points now return explicit named-gap
+   errors instead of stopping the session, and the guest skips the movie.
+5. *Starvation.* The skipped-movie worker (`loopHacker`, priority 31)
+   busy-polled `sceKernelTryReceiveMsgPipe` and `sceKernelCheckCallback`, so
+   `user_main` (priority 32) never ran and never sent the worker's 0xBEEF
+   event. `sceKernelCheckCallback` now yields 50 us when no callbacks are
+   queued; contract `check_callback_yield_contract`. VERIFIED on the host:
+   flips rose from 310 to 476 and frame 450 carries the title key art (32
+   draws, 21 textured). Device: storage check, ATLUS logo and title path
+   confirmed; the user reports it working.
+
+**Open issue: audio.** The title decodes ATRAC heavily
+(`sceAtracDecodeData` 1.18M calls in a 2.5M-dispatch host run). The latest
+instrumented device run reports `pulled=670277 underrun=19741 submitted=1273
+overruns=0 rejected=0 peak=0 xruns=0`: the mixer received only silent buffers
+in that run, so the audible distortion heard on the previous build is not yet
+reproduced. HYPOTHESIS: ATRAC track decode/streaming or guest audio pacing,
+with underrun stutter as the secondary candidate. Next: capture the actual
+PCM, fix the source, then re-check peak/underrun/xrun at the title and menu.
+
+**Regression.** `tests/ge/state_machine_tests.cpp`,
+`tests/ge/vulkan_tests.cpp`, `tests/hle/kernel_tests.cpp`,
+`tests/test_boot.py`; device evidence in the T13b task and the audio log.

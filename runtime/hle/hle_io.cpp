@@ -699,6 +699,18 @@ void register_io(
         kernel().finish(ctx, io().disc ? (kPresent | kReady | kReadable) : 0x01u);
     });
     hle.add("sceUmdUser", "sceUmdGetErrorStat", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 0u); });
+    hle.add("sceUmdUser", "sceUmdCheckMedium", [](Runtime &, AllegrexContext &ctx) {
+        kernel().finish(ctx, io().disc ? 1u : 0u);
+    });
+    hle.add("sceUmdUser", "sceUmdWaitDriveStat", [](Runtime &, AllegrexContext &ctx) {
+        kernel().finish(ctx, io().disc ? 0u : 0x80020148u);
+    });
+    hle.add("sceUmdUser", "sceUmdWaitDriveStatCB", [](Runtime &, AllegrexContext &ctx) {
+        kernel().finish(ctx, io().disc ? 0u : 0x80020148u);
+    });
+    hle.add("sceUmdUser", "sceUmdCancelWaitDriveStat", [](Runtime &, AllegrexContext &ctx) {
+        kernel().finish(ctx, 0u);
+    });
 }
 
 } // namespace gungnir::hle

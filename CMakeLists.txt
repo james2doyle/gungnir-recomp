@@ -74,10 +74,14 @@ add_library(gungnir_hle STATIC
     runtime/hle/hle_threadman.cpp
     runtime/hle/hle_system.cpp
     runtime/hle/hle_io.cpp
+    runtime/hle/hle_mpeg.cpp
     runtime/hle/hle_utility.cpp
     runtime/hle/hle_media.cpp
     runtime/hle/hle_module.cpp
-    runtime/savedata/save_store.cpp)
+    runtime/savedata/save_store.cpp
+    runtime/session/game_session.cpp
+    runtime/session/session_report.cpp
+    runtime/session/corpus_present.cpp)
 target_include_directories(gungnir_hle PUBLIC runtime)
 target_link_libraries(gungnir_hle PUBLIC yakumo gungnir_ge gungnir_input atrac3p)
 
@@ -106,10 +110,17 @@ target_link_libraries(savedata_tests PRIVATE gungnir_hle)
 set_target_properties(savedata_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/savedata)
 
+add_executable(session_report_tests tests/session/session_report_tests.cpp)
+target_link_libraries(session_report_tests PRIVATE gungnir_hle)
+set_target_properties(session_report_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
 # --- GE command stream (T7a) ----------------------------------------------
 add_library(gungnir_ge STATIC
     runtime/ge/display_list.cpp
+    runtime/ge/frame_queue.cpp
     runtime/ge/software.cpp
+    runtime/ge/state_machine.cpp
     runtime/ge/texture.cpp
     runtime/ge/vertex.cpp)
 target_include_directories(gungnir_ge PUBLIC runtime)
@@ -132,6 +143,11 @@ set_target_properties(ge_texture_tests PROPERTIES
 add_executable(ge_software_tests tests/ge/software_tests.cpp)
 target_link_libraries(ge_software_tests PRIVATE gungnir_ge)
 set_target_properties(ge_software_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
+add_executable(ge_state_machine_tests tests/ge/state_machine_tests.cpp)
+target_link_libraries(ge_state_machine_tests PRIVATE gungnir_ge)
+set_target_properties(ge_state_machine_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
 # --- Texture containers (T8a) ---------------------------------------------

@@ -145,3 +145,26 @@ mode 4 and save import validation (`docs/FINDINGS.md`), fixed-profile benchmark
 and input-script patterns (`tools/mga2/*.pad`), xBRZ/texture-replacement and
 D3D12/Vulkan/software parity reporting, and the startup-skip UX. No code was
 adopted.
+
+### T13a reference review — shared session and Android runtime wiring
+
+- `AdamFull/ff7ccrecomp` (MIT): Gradle/CMake shape for a psprecore-derived runtime, a build-time generated corpus directory, and generated-output gitignore. Read at `CMakeLists.txt` (`FF7CC_GENERATED_DIR`, `CONFIGURE_DEPENDS`) and the Android app module. No code copied.
+- `AdamFull/psprecore` (MIT): platform-neutral frontend/session split (`runtime/src/frontend.cpp`) and launch-intent-driven options. The unlicensed `nx-foundation` subtree stays excluded. No code copied.
+- `Jstar269/nakagawa-recomp` (GPL-3.0): Android CMake function and `-P` machine-path property pattern (already the T9 template). No new code copied.
+- `sp00nznet/wtf-psp-recomp` (MIT): gitignored `gen/` plus `CONFIGURE_DEPENDS` corpus glob. Its stated intent to commit generated C remains rejected.
+- `zxyandreay/azazel6` (MIT): bounded-run/evidence discipline for the session log. No code copied.
+- `codepdbh` (reference only): AAudio/affinity and huge generated TU `-O1` pitfalls; its CPU-readback present path is not adopted.
+- `hrydgard/ppsspp` (GPL-2.0-or-later): not used in T13a beyond the existing behavioral notes; never linked.
+
+### T13b reference review — Android presentation, savedata and movie gap
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later): diff oracle for Vulkan surface
+  transform handling, savedata status semantics and thread scheduling; never
+  linked or vendored into the product.
+- `Themaister/Granite` (MIT): Android `VK_SUBOPTIMAL_KHR` handling pattern
+  (treat as success while using identity pre-transform). No code copied.
+- `jpcsp/jpcsp`: `sceUtilitySavedataGetStatus` keeps returning NONE after
+  shutdown (behavioral reference only). No code copied.
+- `jrouwe/JoltPhysics` (MIT): `preTransform` usage example. No code copied.
+- `uofw/uofw`: sceMpeg error constants used by the explicit deferral stubs.
+  No code copied.

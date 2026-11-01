@@ -27,6 +27,8 @@ options:
   -Pgungnir.javaHome=DIR  JDK 17-23 (default: JAVA_HOME, else java on PATH)
   -Pgungnir.depsDir=DIR   fetched-dependency cache (default: build/android-deps)
   -Pgungnir.o1Sources=LIST semicolon-separated sources compiled at -O1
+  -Pgungnir.gameCorpus=DIR  generated AOT corpus (build output, never committed)
+  -Pgungnir.abis=LIST      ABIs to build (default arm64-v8a,x86_64)
   -P<name>=<value>        any other Gradle project property
 EOF
 }

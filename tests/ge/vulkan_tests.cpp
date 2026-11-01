@@ -35,6 +35,43 @@ void shader_validation() {
           "shader modules start with the SPIR-V magic");
 }
 
+void viewport_fitting() {
+    const ViewportRect same = fit_viewport(480, 272, 480, 272);
+    check(same.x == 0 && same.y == 0 && same.width == 480 && same.height == 272,
+          "an equal target keeps the guest viewport");
+
+    const ViewportRect wide = fit_viewport(480, 272, 3063, 1335);
+    check(wide.width == 2356 && wide.height == 1335 && wide.x == 353 && wide.y == 0,
+          "a wider surface pillar-boxes a 16:9 guest without stretching");
+
+    const ViewportRect tall = fit_viewport(480, 272, 272, 480);
+    check(tall.width == 272 && tall.height == 154 && tall.x == 0 && tall.y == 163,
+          "a taller surface letter-boxes a 16:9 guest without stretching");
+
+    const ViewportRect degenerate = fit_viewport(0, 272, 480, 272);
+    check(degenerate.width == 0 && degenerate.height == 0, "a zero guest extent yields an empty viewport");
+}
+
+void scissor_scaling() {
+    const ScissorRect full = scale_scissor_to_extent({0, 0, 480, 272}, 480, 272, 3063, 1335);
+    check(full.x0 == 0 && full.y0 == 0 && full.x1 == 3063 && full.y1 == 1335,
+          "a full guest scissor covers the full swapchain");
+
+    const ScissorRect identity = scale_scissor_to_extent({10, 20, 110, 120}, 480, 272, 480, 272);
+    check(identity.x0 == 10 && identity.y0 == 20 && identity.x1 == 110 && identity.y1 == 120,
+          "a scissor at the guest extent is unchanged");
+
+    const ScissorRect band = scale_scissor_to_extent({0, 103, 480, 169}, 480, 272, 3063, 1335);
+    check(band.x0 == 0 && band.x1 == 3063, "a full-width band scales to the full swapchain width");
+    check(band.y0 == 505 && band.y1 == 830, "scissor edges round outward to the target extent");
+
+    const ScissorRect empty = scale_scissor_to_extent({200, 100, 100, 50}, 480, 272, 3063, 1335);
+    check(empty.x1 <= empty.x0 || empty.y1 <= empty.y0, "an inverted scissor stays empty");
+
+    const ScissorRect invalid = scale_scissor_to_extent({0, 0, 480, 272}, 0, 272, 3063, 1335);
+    check(invalid.x1 <= invalid.x0 || invalid.y1 <= invalid.y0, "a non-positive source extent yields an empty scissor");
+}
+
 void headless_triangle() {
     std::string reason;
     if (!VulkanBackend::available(reason)) {
@@ -349,6 +386,8 @@ void windowed_swapchain() {
 int main() {
     try {
         shader_validation();
+        viewport_fitting();
+        scissor_scaling();
         headless_triangle();
         parity_tests();
 #if defined(GUNGNIR_HAVE_SDL3)

@@ -110,22 +110,36 @@ Two 200,000-dispatch runs produce identical reports (TC-6.4). A 30-second
 unpaced run reaches 1,810,000 dispatches and 7,394 flips without a missing
 import.
 
-The remaining 57 imports are **counted gaps**, not stubs: any that executes
+The remaining 23 imports are **counted gaps**, not stubs: any that executes
 still stops with `Missing HLE import …`. They are grouped as follows.
 
 | Group | Imports | Disposition |
 |---|---:|---|
 | IoFileMgr `sceIoDread`/`sceIoIoctl` | 2 | implement with the first directory-scan/device-control use |
-| Kernel/ThreadMan/Utils/UMD small calls | 8 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI, UMD medium/waits |
-| sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5); savedata SIZES is implemented |
-| ATRAC track | 6 | whole-file prepare/decode/loop plus single-buffer streaming and buffer queries implemented in T12a |
+| Kernel/ThreadMan/Utils small calls | 4 | `WaitEventFlagCB`, profiler, `KernelMemcpy`, GPI |
+| sceUtility dialogs/install | 9 | MsgDialog (4) and GamedataInstall (5) |
 | SAS controls | 8 | ADSR/noise/reverb; wait for the first non-default control use |
-| sceMpeg | 24 | no movie at boot depth; decision-gated for M5/T12 |
 
-Other savedata modes (LOAD/SAVE/LIST/...) are modes of the four bound
-savedata imports; LOAD and SAVE are implemented in T12b, while list/delete
-and the save picker remain named gaps. T6 closes on this audit; T7 remains
-required for M3 because no GE frame is rendered yet.
+The UMD medium/wait calls (`sceUmdCheckMedium`, `sceUmdWaitDriveStat(CB)`,
+`sceUmdCancelWaitDriveStat`) are now bound: the drive is reported present and
+ready. Savedata modes LOAD, SAVE, SIZES, AUTOLOAD and AUTOSAVE are implemented;
+LIST, DELETE and the save picker remain named gaps.
+
+sceMpeg is not an unbound gap any more: all 24 imported entry points are bound
+to explicit errors (`SCE_MPEG_ERROR_NO_RAPI` from `sceMpegInit`,
+`NOT_INITIALIZE` afterwards, cleanup success) and log one
+`[hle] gap: sceMpeg::…` line. The guest therefore skips the opening movie and
+reaches the title; actual PMF playback remains decision-gated for M5/T12.
+
+`sceKernelCheckCallback` with no queued callbacks yields for 50 µs. Without
+that idle yield the post-movie worker (priority 31) busy-polled
+`TryReceiveMsgPipe` + `CheckCallback` and starved `user_main` (priority 32), so
+the game never sent the worker's completion event. The contract is
+`check_callback_yield_contract` in `tests/hle/kernel_tests.cpp`; it fails when
+the yield is replaced by an immediate return.
+
+T6 closes on this audit; T7 remains required for M3 because no GE frame is
+rendered yet.
 
 ## Module registry (T6d, VERIFIED)
 

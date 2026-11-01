@@ -9,8 +9,11 @@
 
 #include "hle/hle_common.hpp"
 
+#include "ge/state_machine.hpp"
+
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace gungnir::hle {
 
@@ -33,6 +36,12 @@ void reset_media_state();
 // Called after a guest frame flip. The boot runner uses it to stop at the
 // first sceDisplaySetFrameBuf; interactive hosts would present here.
 void set_display_flip_observer(std::function<void()> observer);
+
+// Receives the draws accumulated since the previous real flip. The callback
+// runs on the guest thread and must not block.
+void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &)> sink);
+[[nodiscard]] std::uint64_t ge_frame_count();
+[[nodiscard]] std::uint64_t ge_gap_count();
 
 void register_media(HleRegistrar &hle);
 

@@ -13,6 +13,10 @@ namespace {
 
 constexpr std::uint32_t kEventFlagWaitMulti = 0x200u;
 constexpr std::uint32_t kMutexAttrRecursive = 0x200u;
+// A polling CheckCallback is an idle point in the guest's event loop. Yielding
+// briefly keeps a high-priority poller from starving lower-priority game
+// threads (the movie worker does this while an unsupported codec is skipped).
+constexpr std::uint32_t kIdleCheckYieldUs = 50u;
 
 std::int32_t as_signed(std::uint32_t value) {
     return static_cast<std::int32_t>(value);
@@ -99,7 +103,11 @@ void register_threads(HleRegistrar &hle) {
     hle.add("ThreadManForUser", "sceKernelWaitThreadEnd", wait_thread_end(false));
     hle.add("ThreadManForUser", "sceKernelCheckCallback", [](Runtime &, AllegrexContext &ctx) {
         const bool queued = kernel().deliver_callbacks();
-        kernel().finish(ctx, queued ? 1u : 0u);
+        if (!queued) {
+            kernel().delay_current(ctx, kIdleCheckYieldUs);
+            return;
+        }
+        kernel().finish(ctx, 1u);
     });
     hle.add("ThreadManForUser", "sceKernelWaitThreadEndCB", wait_thread_end(true));
 
@@ -589,6 +597,12 @@ void msgpipe_send(Runtime &rt, AllegrexContext &ctx, bool callbacks, bool try_on
     if (wait_mode != 0u && wait_mode != 1u) {
         kernel().finish(ctx, error::kIllegalMode);
         return;
+    }
+    if (trace_sync()) {
+        const Thread *thread = kernel().current_thread();
+        log_sync("SendMsgPipe uid=" + std::to_string(uid) + " size=" + std::to_string(size) + " magic=" +
+                 psprecomp::hex32(source != 0u ? rt.memory().load32(source) : 0u) + " from=" +
+                 (thread != nullptr ? thread->name : "interrupt"));
     }
     MsgPipe &pipe = found->second;
     if (pipe.buffer_size != 0u && size > pipe.buffer_size) {

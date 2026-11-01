@@ -140,6 +140,34 @@ class TestBoundedBoot(unittest.TestCase):
             report = json.loads(report_path.read_text()) if report_path.exists() else None
             return proc, report
 
+    def run_boot_with_frame(self):
+        with tempfile.TemporaryDirectory(prefix="gungnir-frame-") as work:
+            report_path = Path(work) / "boot.json"
+            frame_path = Path(work) / "frame.json"
+            memory_stick = Path(work) / "ms"
+            memory_stick.mkdir()
+            proc = subprocess.run(
+                [str(self.binary), "--elf", str(self.elf), "--nids", str(NIDS),
+                 "--disc", str(GAME_ISO), "--ms", str(memory_stick),
+                 "--load-base", "0x08804000", "--max-dispatches", "500000",
+                 "--wall-seconds", "120", "--no-stop-at-flip", "--trace-out", str(report_path),
+                 "--frame-json", str(frame_path)],
+                capture_output=True, text=True, timeout=180)
+            report = json.loads(report_path.read_text()) if report_path.exists() else None
+            frame = json.loads(frame_path.read_text()) if frame_path.exists() else None
+            return proc, report, frame
+
+    def test_first_flip_carries_guest_geometry(self):
+        proc, report, frame = self.run_boot_with_frame()
+        self.assertIsNotNone(report, proc.stderr[-4000:])
+        self.assertIsNotNone(frame, proc.stderr[-4000:])
+        self.assertEqual(proc.returncode, 3, proc.stderr[-4000:])
+        self.assertGreater(frame["draws"], 0, "no GE draw was captured")
+        self.assertGreater(frame["ge_frames"], 0)
+        self.assertGreater(frame["vertices"], 0)
+        self.assertGreater(frame["indices"], 0)
+        self.assertGreater(frame["textured_draws"], 0, "title frame has no textured draw")
+
     def test_boot_reaches_first_frame_buffer(self):
         proc, report = self.run_boot()
         self.assertIsNotNone(report, proc.stderr[-4000:])

@@ -90,6 +90,9 @@ void register_interrupts(HleRegistrar &hle) {
         auto &handler = kernel().sub_interrupts[arg(ctx, 0)][arg(ctx, 1)];
         handler.handler = arg(ctx, 2);
         handler.argument = arg(ctx, 3);
+        if (trace_sync())
+            log_sync("RegisterSubIntr intr=" + std::to_string(arg(ctx, 0)) + " sub=" + std::to_string(arg(ctx, 1)) +
+                     " handler=" + psprecomp::hex32(arg(ctx, 2)) + " arg=" + psprecomp::hex32(arg(ctx, 3)));
         kernel().finish(ctx, 0u);
     });
     hle.add("InterruptManager", "sceKernelReleaseSubIntrHandler", [](Runtime &, AllegrexContext &ctx) {
@@ -100,6 +103,9 @@ void register_interrupts(HleRegistrar &hle) {
         auto &handlers = kernel().sub_interrupts[arg(ctx, 0)];
         const auto found = handlers.find(arg(ctx, 1));
         if (found != handlers.end()) found->second.enabled = true;
+        if (trace_sync())
+            log_sync("EnableSubIntr intr=" + std::to_string(arg(ctx, 0)) + " sub=" + std::to_string(arg(ctx, 1)) +
+                     " found=" + (found != handlers.end() ? "1" : "0"));
         kernel().finish(ctx, found != handlers.end() ? 0u : error::kIllegalArgument);
     });
 }

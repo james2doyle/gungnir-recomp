@@ -17,12 +17,25 @@ fi
 "$ADB" "${ADB_ARGS[@]}" logcat -c
 "$ADB" "${ADB_ARGS[@]}" shell am force-stop "$PACKAGE"
 "$ADB" "${ADB_ARGS[@]}" shell am start -n "$ACTIVITY" >/dev/null
-for _ in $(seq 1 30); do
-    if "$ADB" "${ADB_ARGS[@]}" logcat -d -s gungnir:I | grep -q "first frame"; then
+for _ in $(seq 1 120); do
+    LOG=$("$ADB" "${ADB_ARGS[@]}" logcat -d -s gungnir:I 2>/dev/null || true)
+    if printf '%s\n' "$LOG" | grep -q "session_stop.*cause=first_flip.*missing_import=0"; then
+        echo "SESSION_OK"
+        exit 0
+    fi
+    if printf '%s\n' "$LOG" | grep -q "session_stop"; then
+        echo "session_stop_not_first_flip" >&2
+        exit 1
+    fi
+    if printf '%s\n' "$LOG" | grep -q "first frame"; then
         echo "FRAME_OK"
         exit 0
     fi
+    if printf '%s\n' "$LOG" | grep -q "session_start_failed"; then
+        echo "session_start_failed" >&2
+        exit 1
+    fi
     sleep 0.5
 done
-echo "frame_timeout: no 'first frame' log line" >&2
+echo "frame_timeout: no 'session_stop' or 'first frame' log line" >&2
 exit 1

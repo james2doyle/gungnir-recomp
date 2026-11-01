@@ -63,10 +63,76 @@ function(gungnir_add_runtime_library target)
                 "${ARG_ROOT}/tools/embed_shaders.py"
         VERBATIM)
 
+    set(GUNGNIR_GAME_CORPUS "" CACHE PATH
+        "Generated AOT corpus directory (build output, never committed)")
+    set(corpus_sources "")
+    set(corpus_include "")
+    if(GUNGNIR_GAME_CORPUS)
+        if(NOT EXISTS "${GUNGNIR_GAME_CORPUS}/generated_registry.cpp" OR
+           NOT EXISTS "${GUNGNIR_GAME_CORPUS}/recomp_units.hpp")
+            message(FATAL_ERROR
+                "game_corpus_missing: ${GUNGNIR_GAME_CORPUS} needs generated_registry.cpp and recomp_units.hpp")
+        endif()
+        file(GLOB GAME_CORPUS_SOURCES CONFIGURE_DEPENDS
+            "${GUNGNIR_GAME_CORPUS}/generated_unit_*.cpp")
+        if(NOT GAME_CORPUS_SOURCES)
+            message(FATAL_ERROR
+                "game_corpus_missing: ${GUNGNIR_GAME_CORPUS} has no generated_unit_*.cpp")
+        endif()
+        list(APPEND corpus_sources
+            "${GUNGNIR_GAME_CORPUS}/generated_registry.cpp"
+            ${GAME_CORPUS_SOURCES}
+            "${ARG_ROOT}/runtime/session/corpus_present.cpp")
+        list(APPEND corpus_include "${GUNGNIR_GAME_CORPUS}")
+        list(LENGTH GAME_CORPUS_SOURCES corpus_units)
+        message(STATUS "gungnir: game corpus ${GUNGNIR_GAME_CORPUS} (${corpus_units} units)")
+    else()
+        list(APPEND corpus_sources "${ARG_ROOT}/runtime/session/corpus_absent.cpp")
+        message(STATUS "gungnir: game corpus absent; runtime reports game_corpus_missing")
+    endif()
+
+    if(NOT TARGET gungnir_atrac3p)
+        add_library(gungnir_atrac3p STATIC
+            "${ARG_ROOT}/third_party/atrac3p/atrac3p_api.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/atrac.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/atrac3.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/atrac3plus.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/atrac3plusdec.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/atrac3plusdsp.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/bitstream.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/fft_float.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/fft_init_table.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/mdct_float.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavcodec/sinewin.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavutil/float_dsp.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavutil/intmath.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavutil/log2_tab.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavutil/mem.c"
+            "${ARG_ROOT}/third_party/atrac3p/libavutil/reverse.c")
+        target_include_directories(gungnir_atrac3p PUBLIC "${ARG_ROOT}/third_party/atrac3p")
+        target_compile_options(gungnir_atrac3p PRIVATE -fno-strict-aliasing)
+    endif()
+
     add_library(${target} SHARED
         "${ARG_ROOT}/runtime/audio/audio_mixer.cpp"
         "${ARG_ROOT}/runtime/audio/audio_sink.cpp"
         "${ARG_ROOT}/runtime/audio/sas_core.cpp"
+        "${ARG_ROOT}/runtime/audio/atrac_file.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_common.cpp"
+        "${ARG_ROOT}/runtime/hle/kernel.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_atrac.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_audio.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_io.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_media.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_mpeg.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_module.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_sysmem.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_system.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_threadman.cpp"
+        "${ARG_ROOT}/runtime/hle/hle_utility.cpp"
+        "${ARG_ROOT}/runtime/savedata/save_store.cpp"
+        "${ARG_ROOT}/runtime/session/game_session.cpp"
+        "${ARG_ROOT}/runtime/session/session_report.cpp"
         "${ARG_ROOT}/runtime/platform/android/aaudio_out.cpp"
         "${ARG_ROOT}/runtime/platform/android/audio_smoke.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_profile.cpp"
@@ -79,7 +145,9 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/input/touch_layout_store.cpp"
         "${ARG_ROOT}/runtime/input/touch_overlay.cpp"
         "${ARG_ROOT}/runtime/ge/display_list.cpp"
+        "${ARG_ROOT}/runtime/ge/frame_queue.cpp"
         "${ARG_ROOT}/runtime/ge/software.cpp"
+        "${ARG_ROOT}/runtime/ge/state_machine.cpp"
         "${ARG_ROOT}/runtime/ge/texture.cpp"
         "${ARG_ROOT}/runtime/ge/vertex.cpp"
         "${ARG_ROOT}/runtime/ge/vulkan_backend.cpp"
@@ -91,12 +159,19 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
         "${ARG_ROOT}/third_party/miniz/miniz.c"
         "${ARG_ROOT}/third_party/yakumo/src/decoder.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/deflate.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/elf32.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/guest_memory.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/interpreter.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/iso_image.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/nid_registry.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/param_sfo.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/program_analysis.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/runtime.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/sha256.cpp"
+        "${ARG_ROOT}/third_party/yakumo/src/utf8_path.cpp"
         "${ARG_ROOT}/third_party/volk/volk.c"
+        ${corpus_sources}
         "${gen_dir}/vulkan_shaders.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/main.cpp")
     target_include_directories(${target} PRIVATE
@@ -105,10 +180,14 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/third_party/miniz"
         "${ARG_ROOT}/third_party/nlohmann-json"
         "${ARG_ROOT}/third_party/yakumo/include"
+        "${ARG_ROOT}/third_party/yakumo/src"
+        "${ARG_ROOT}/third_party/atrac3p"
+        ${corpus_include}
         "${ARG_ROOT}/third_party/volk")
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
     target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android aaudio log z)
+    target_link_libraries(${target} PRIVATE gungnir_atrac3p)
     target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_SDL3=1)
     if(ARG_ADRENOTOOLS_TARGET)
         target_link_libraries(${target} PRIVATE ${ARG_ADRENOTOOLS_TARGET})

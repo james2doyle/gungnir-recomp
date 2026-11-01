@@ -38,6 +38,9 @@ bool MixerSink::submit(const AudioBuffer &buffer) {
         const std::int32_t right = buffer.channels == 2u ? buffer.samples[source + 1u] : left;
         ring_[write * 2u] = scale(left, buffer.left_volume);
         ring_[write * 2u + 1u] = scale(right, buffer.right_volume);
+        const std::uint32_t magnitude = static_cast<std::uint32_t>(
+            std::max(std::abs(ring_[write * 2u]), std::abs(ring_[write * 2u + 1u])));
+        stats_.peak = std::max(stats_.peak, magnitude);
         write = (write + 1u) % capacity_frames_;
     }
     available_ += frames;
