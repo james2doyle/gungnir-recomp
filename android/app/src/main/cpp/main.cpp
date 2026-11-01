@@ -695,6 +695,8 @@ int main(int, char **) {
                     const gungnir::session::Result &result = session.result();
                     GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
                     GUNGNIR_LOGI("session_stop_reason=%s\n", result.stop_reason.c_str());
+                    for (const std::string &import : result.imports_unbound)
+                        GUNGNIR_LOGI("session_unbound=%s\n", import.c_str());
                     if (!result.ok)
                         GUNGNIR_LOGE("session_error: %s\n", result.error.c_str());
                     session_finished.store(true);

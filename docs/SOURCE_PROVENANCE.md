@@ -194,3 +194,14 @@ budgets (64 MiB / 512 entries, 128 MiB) with GPU destruction deferred to the
 next idle frame. The sources above informed the size/age policy and the
 deferred-destruction requirement; no upstream code, constants table, or file
 was copied.
+
+### T13i reference review — UtilsForUser GPI (bind, do not guess)
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later), behavioral only, never linked or
+  vendored. `Core/HLE/sceKernel.cpp` implements `sceKernelGetGPI` as a read of
+  the dev-kit switch bits and documents that they are always 0 on production
+  hardware; `sceKernelSetGPO` only records the debug LED mask. GitHub issue
+  `#19132` discusses the dev-kit-only GPO feature. No code copied.
+
+Our handler returns 0 unconditionally, which is the retail value; no GPO state
+is modelled because the title only reads GPI.

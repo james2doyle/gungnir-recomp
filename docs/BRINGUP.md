@@ -1038,3 +1038,58 @@ M2102K1AC: `qa-newgame.sh` reached `NEW_GAME_REACHED` with native-heap PSS
 change (79 -> 272 draws/frame), then 190 MB at 60 s and 1,620 guest frames.
 The pre-fix run reached 8.0 GB at ~1,140 frames and was killed; the same
 script now exits 0 instead of `PROCESS_MEMORY_GROWTH`/`PROCESS_KILLED`.
+
+### "Hang" after the prologue: an unbound `sceKernelGetGPI` stop (T13i)
+
+**Symptom.** After the native-heap fix the device run reached the "Dept.
+Heaven Episode" prologue, then froze on a black screen with only the touch
+overlay: no guest fault, no process kill, `guest_frame=` lines stopped and the
+process slept at ~400 MB RSS. The screen looked hung, but the session had
+ended.
+
+**Root cause.** `logcat` ended with
+`session_stop cause=missing_import ... stop_pc=0x089A22F4` and
+`session_stop_reason=Missing HLE import UtilsForUser::sceKernelGetGPI
+(NID_0x37FB5C42)`. `configs/nids.csv` already carried the NID, but no handler
+was registered, so the import trapped and stopped the session. The app keeps
+presenting its last frame (black at that point), which reads as a hang rather
+than a named stop.
+
+**Reference behaviour.** PPSSPP `Core/HLE/sceKernel.cpp` returns the
+dev-kit GPI switch bits and notes they are always 0 on production systems
+(`sceKernelSetGPO` only stores the debug LED mask; issue #19132 covers the
+dev-kit-only GPO feature). Retail Gungnir therefore expects 0.
+
+**Fix.** `sceKernelGetGPI` joins the other UtilsForUser no-ops and returns 0;
+`sceKernelSetGPO` keeps returning 0. Red-first `utils_contracts` asserts the
+call returns 0 **and** that the runtime did not stop, because an unbound
+import only sets the stop reason and leaves `v0` untouched — a value-only
+assertion passed against the unbound import.
+
+**Visibility.** `main.cpp` now logs one `session_unbound=<library>:<nid>` line
+per import still unbound when the session stops, so the remaining gaps for
+this path are visible in a single run instead of one stop at a time.
+
+**Device verification.** APK `9173b120ee5f…` (debug, arm64-v8a, local corpus)
+on the M2102K1AC: `qa-newgame.sh` reached `NEW_GAME_REACHED
+native_heap_pss_mb=194`, and the session kept running instead of stopping. The
+prologue plays through the "15 years" interstitial into the first event scene
+(`Eastern Wilds`, `Giulio: This rain's getting worse...`), and pad taps advance
+the dialogue to the next speaker (`Young Soldier: Onions, red`). 3,420 guest
+frames with no `session_stop`, native heap 180-190 MB. Evidence:
+`build/qa/android/t13i-newgame-20261101-000529/` (gitignored).
+
+**Remaining unbound imports on this title.** After binding GPI the session still
+counts 10 unbound imports out of 215; none has executed yet while the prologue
+plays. The count is derived from the intake import table plus
+`configs/nids.csv`, not from a device stop:
+
+`IoFileMgrForUser` `sceIoIoctl` (0x63632449), `sceIoDread` (0xE3EB004C);
+`Kernel_Library` `sceKernelMemcpy` (0x1839852A); `ThreadManForUser`
+`sceKernelWaitEventFlagCB` (0x328C546A), `sceKernelReferThreadProfiler`
+(0x64D4540E); `sceUtility` `sceUtilityGamedataInstallInitStart` (0x24AC31EB),
+`GetStatus` (0xB57E95D9), `Update` (0x4AECD179), `ShutdownStart`
+(0x32E32DCB), `Abort` (0x180F7B62).
+
+Any of these can end the session with a named `missing_import` stop; the ten
+are the known gap set for the next device passes, not silent zero-returns.

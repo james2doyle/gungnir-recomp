@@ -121,6 +121,16 @@ void hle_ring_contracts() {
     unsetenv("GUNGNIR_HLE_RING");
 }
 
+void utils_contracts() {
+    Fixture f(test_nids_path(), {}, {});
+    // Retail hardware has no dev-kit GPI switches, so the read returns 0. An
+    // unbound import only stops the runtime, so assert the call really ran.
+    check(f.call("UtilsForUser", "sceKernelGetGPI") == 0u, "sceKernelGetGPI reads 0 on retail");
+    check(!f.runtime.stopped(), "sceKernelGetGPI is bound");
+    check(f.call("UtilsForUser", "sceKernelSetGPO", {0x1u}) == 0u, "sceKernelSetGPO is accepted");
+    check(!f.runtime.stopped(), "sceKernelSetGPO is bound");
+}
+
 void memory_contracts() {
     // No loader thread here: its module_start stack would occupy the top of
     // the user region and move the high-allocation expectation.
@@ -1506,6 +1516,7 @@ int main(int argc, char **argv) {
     setenv("GUNGNIR_TEST_NIDS_CSV", nids.c_str(), 1);
     try {
         hle_ring_contracts();
+        utils_contracts();
         memory_contracts();
         thread_contracts();
         check_callback_yield_contract();

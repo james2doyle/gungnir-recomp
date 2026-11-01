@@ -40,7 +40,8 @@ void success(Runtime &, AllegrexContext &ctx) {
 
 void register_utils(HleRegistrar &hle) {
     for (const char *name : {"sceKernelDcacheWritebackAll", "sceKernelDcacheWritebackInvalidateAll",
-             "sceKernelDcacheInvalidateRange", "sceKernelDcacheWritebackRange", "sceKernelSetGPO"})
+             "sceKernelDcacheInvalidateRange", "sceKernelDcacheWritebackRange", "sceKernelSetGPO",
+             "sceKernelGetGPI"})
         hle.add("UtilsForUser", name, success);
     // The guest flushes the instruction cache after copying code into an overlay
     // slot, which is the profile's cue to re-check which overlay is loaded.
