@@ -9,8 +9,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace psprecomp {
 class Runtime;
@@ -31,6 +33,9 @@ struct Config {
     std::uint32_t load_base{0x08804000u};
     std::uint64_t max_dispatches{50'000'000u};
     double wall_seconds{0.0};
+    // Report a guest thread that stops making progress (blocked host call).
+    // Zero disables the watchdog.
+    double stall_seconds{0.0};
     bool stop_at_flip{true};
     bool pacing{false};
 };
@@ -58,6 +63,10 @@ public:
 
     [[nodiscard]] const Result &result() const;
     [[nodiscard]] bool started() const;
+
+    // Receives at most one line when the stall watchdog fires. Must be set
+    // before start(); the sink runs on the watchdog thread.
+    void set_diagnostic_sink(std::function<void(std::string_view)> sink);
     [[nodiscard]] psprecomp::Runtime &runtime();
 
 private:

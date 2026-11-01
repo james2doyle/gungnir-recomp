@@ -678,10 +678,15 @@ int main(int, char **) {
                 intent_long("dispatch_limit", 5'000'000'000LL));
             session_config.wall_seconds = static_cast<double>(
                 intent_long("wall_seconds", 0));
+            session_config.stall_seconds = static_cast<double>(
+                intent_long("stall_seconds", 30));
             session_config.stop_at_flip = intent_long("stop_at_flip", 0) != 0;
             session_config.pacing = intent_long("pacing", 1) != 0;
             std::error_code directory_error;
             std::filesystem::create_directories(session_config.memory_stick, directory_error);
+            session.set_diagnostic_sink([](std::string_view line) {
+                GUNGNIR_LOGE("%.*s\n", static_cast<int>(line.size()), line.data());
+            });
             std::string start_error;
             if (!session.start(session_config, audio_sink, start_error)) {
                 GUNGNIR_LOGE("session_start_failed: %s\n", start_error.c_str());

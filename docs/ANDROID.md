@@ -74,6 +74,7 @@ adb shell am start -n com.gungnir.recomp/.GungnirActivity \
 |---|---|---|
 | `dispatch_limit` | 5,000,000,000 | hard upper bound on guest dispatches |
 | `wall_seconds` | 0 (unbounded) | wall-clock bound for a bounded run |
+| `stall_seconds` | 30 | report a guest thread that stops progressing for this long; 0 disables |
 | `stop_at_flip` | false | stop at the first `sceDisplaySetFrameBuf` |
 | `pacing` | true | pace the guest clock to real time (59.94 Hz vblanks) |
 | `debug_quad` | false | draw the synthetic test quad instead of the guest |
@@ -90,6 +91,8 @@ guest_frame=<n> draws=<n> vertices=<n> ge_gaps=<n>
 audio_mixer pulled=<n> underrun=<n> submitted=<n> overruns=<n> rejected=<n> peak=<n> xruns=<n>
 session_stop cause=<first_flip|dispatch_limit|wall_clock|missing_import|host_stop|guest_stop|scheduler_deadlock> dispatches=<n> flips=<n> imports_bound=<n> imports_total=<n> stop_pc=<addr>
 session_stop_reason=<reason>
+session_unbound=<library>:<nid>          (one line per unbound import)
+guest_stall seconds=<n> flips=<n> inflight=<library::name|none> last_import=<library::name|none>
 ```
 
 `imports_unbound` is the number of counted gaps (the JSON report lists them);
@@ -97,6 +100,13 @@ session_stop_reason=<reason>
 its library and NID. `overruns` and
 `rejected` describe the audio mixer (a rejected buffer is a programming error);
 `xruns` is the AAudio underrun count from the driver.
+
+`guest_stall` is emitted at most once per session by the frame watchdog: it
+fires when no guest frame reaches the display for `stall_seconds`, which covers
+both a handler blocked in a host wait and a guest loop that keeps dispatching
+while polling a flag (the dispatch and wall-clock bounds never see either).
+`inflight` names the handler running at that moment, `last_import` the most
+recently completed one — a watch loop names itself there between calls.
 
 ## Game data
 

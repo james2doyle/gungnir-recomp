@@ -85,7 +85,7 @@ bool parse_pad_press(const std::string &text, PadPress &press) {
     std::cerr << "boot_runner: " << message << "\n"
               << "usage: boot_runner --elf FILE --nids CSV --disc FILE --ms DIR\n"
                  "                   [--load-base HEX] [--max-dispatches N]\n"
-                 "                   [--wall-seconds N] [--boot-path TEXT]\n"
+                 "                   [--wall-seconds N] [--stall-seconds N] [--boot-path TEXT]\n"
                  "                   [--trace-out FILE] [--frame-json FILE] [--frame-at N] [--frame-ppm FILE]\n"
                  "                   [--texture-ppm FILE] [--draw-only N]\n"
                  "                   [--no-stop-at-flip]\n";
@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
         else if (arg == "--load-base") config.load_base = parse_hex(next("--load-base"));
         else if (arg == "--max-dispatches") config.max_dispatches = std::stoull(next("--max-dispatches"));
         else if (arg == "--wall-seconds") config.wall_seconds = std::stod(next("--wall-seconds"));
+        else if (arg == "--stall-seconds") config.stall_seconds = std::stod(next("--stall-seconds"));
         else if (arg == "--boot-path") config.boot_path = next("--boot-path");
         else if (arg == "--trace-out") trace_path = next("--trace-out");
         else if (arg == "--frame-json") frame_path = next("--frame-json");
@@ -142,6 +143,9 @@ int main(int argc, char **argv) {
     try {
         CountingSink audio_sink;
         gungnir::session::GameSession session;
+        session.set_diagnostic_sink([](std::string_view line) {
+            std::cerr << "[session] " << line << "\n";
+        });
         std::string error;
         if (!session.start(config, &audio_sink, error)) {
             std::cerr << "boot_runner: " << error << "\n";

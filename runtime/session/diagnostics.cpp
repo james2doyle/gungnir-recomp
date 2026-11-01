@@ -86,4 +86,31 @@ void dump_chain_ring(std::ostream &out) {
     g_active.clear();
 }
 
+StallWatchdog::StallWatchdog(double limit_seconds) noexcept : limit_seconds_(limit_seconds) {}
+
+bool StallWatchdog::observe(std::uint64_t progress, double now_seconds) noexcept {
+    if (!enabled()) return false;
+    if (!seen_) {
+        seen_ = true;
+        last_progress_ = progress;
+        last_change_ = now_seconds;
+        return false;
+    }
+    if (progress != last_progress_) {
+        last_progress_ = progress;
+        last_change_ = now_seconds;
+        stalled_ = 0.0;
+        reported_ = false;
+        return false;
+    }
+    stalled_ = now_seconds - last_change_;
+    if (reported_ || stalled_ < limit_seconds_) return false;
+    reported_ = true;
+    return true;
+}
+
+double StallWatchdog::stalled_seconds() const noexcept {
+    return stalled_;
+}
+
 } // namespace gungnir::session

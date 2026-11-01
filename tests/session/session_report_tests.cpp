@@ -157,6 +157,18 @@ int main() {
     gungnir::session::dump_chain_ring(disabled);
     check(disabled.str().empty(), "disabled chain ring dumps nothing");
 
+    gungnir::session::StallWatchdog watchdog(5.0);
+    check(!watchdog.observe(0u, 100.0), "watchdog arms without reporting");
+    check(!watchdog.observe(0u, 104.0), "watchdog holds fire below the limit");
+    check(watchdog.stalled_seconds() == 4.0, "watchdog tracks the stalled span");
+    check(watchdog.observe(0u, 106.0), "watchdog reports once at the limit");
+    check(!watchdog.observe(0u, 120.0), "watchdog does not report twice");
+    check(!watchdog.observe(7u, 121.0), "progress re-arms the watchdog");
+    check(!watchdog.observe(7u, 125.0), "re-armed watchdog holds fire");
+    check(watchdog.observe(7u, 126.5), "re-armed watchdog reports at the limit again");
+    gungnir::session::StallWatchdog off(0.0);
+    check(!off.observe(1u, 0.0) && !off.observe(1u, 1000.0), "zero limit disables the watchdog");
+
     if (failures != 0) {
         std::cerr << "session_report_tests: " << failures << " failure(s)\n";
         return 1;

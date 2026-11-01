@@ -42,9 +42,12 @@ int run_csv(Runtime &runtime) {
 int run_registrar(Runtime &runtime) {
     HleRegistrar hle(runtime);
     int calls = 0;
+    std::string seen_inflight;
     if (!hle.try_add("Kernel_Library", "sceKernelGetThreadId",
-            [&calls](Runtime &, AllegrexContext &ctx) {
+            [&calls, &seen_inflight](Runtime &, AllegrexContext &ctx) {
                 ++calls;
+                const char *inflight = gungnir::hle::inflight_import();
+                seen_inflight = inflight != nullptr ? inflight : "";
                 ctx.gpr[2] = 0x1234u;
             }))
         return fail("registrar could not bind cross-library alias");
@@ -54,6 +57,9 @@ int run_registrar(Runtime &runtime) {
     if (runtime.stopped()) return fail("bound import stopped: " + runtime.stop_reason());
     if (calls != 1) return fail("handler call count " + std::to_string(calls));
     if (ctx.gpr[2] != 0x1234u) return fail("handler did not set v0");
+    if (seen_inflight != "Kernel_Library::sceKernelGetThreadId")
+        return fail("inflight import not visible inside the handler: " + seen_inflight);
+    if (gungnir::hle::inflight_import() != nullptr) return fail("inflight import not cleared after the call");
     std::cout << "registrar: bound and invoked alias\n";
     return 0;
 }

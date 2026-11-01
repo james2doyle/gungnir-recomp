@@ -18,4 +18,28 @@ void chain_ring_enter(std::uint32_t target, std::uint32_t depth, std::uint32_t r
 void chain_ring_leave(std::uint32_t target, std::uint32_t depth, std::uint32_t v0, std::uint32_t v1);
 void dump_chain_ring(std::ostream &out);
 
+// Guest-progress watchdog. A guest thread that blocks inside a host wait never
+// reaches the scheduler, so neither the dispatch limit nor the wall clock can
+// report it; this notices a progress counter that stops moving. Time is
+// injected so the policy is testable without sleeping.
+class StallWatchdog {
+public:
+    explicit StallWatchdog(double limit_seconds) noexcept;
+
+    // Returns true exactly once when `progress` has not changed for longer
+    // than the limit. Any change re-arms it.
+    bool observe(std::uint64_t progress, double now_seconds) noexcept;
+
+    [[nodiscard]] double stalled_seconds() const noexcept;
+    [[nodiscard]] bool enabled() const noexcept { return limit_seconds_ > 0.0; }
+
+private:
+    double limit_seconds_{};
+    std::uint64_t last_progress_{};
+    double last_change_{};
+    double stalled_{};
+    bool seen_{};
+    bool reported_{};
+};
+
 } // namespace gungnir::session

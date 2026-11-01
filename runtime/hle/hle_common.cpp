@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <deque>
 #include <iostream>
@@ -24,6 +25,8 @@ struct HleRingEntry {
 
 std::deque<HleRingEntry> g_hle_ring;
 std::uint64_t g_hle_ring_sequence = 0u;
+std::atomic<const char *> g_inflight_import{nullptr};
+std::atomic<const char *> g_last_import{nullptr};
 
 std::size_t hle_ring_capacity() {
     static const std::size_t capacity = [] {
@@ -117,15 +120,16 @@ bool HleRegistrar::try_add(std::string_view library, std::string_view name, HleF
         }
         nid = first;
     }
-    if (hle_ring_capacity() != 0u) {
-        const std::string key = std::string(library) + "::" + std::string(name);
-        function = [key, handler = std::move(function)](
-                       Runtime &rt, AllegrexContext &ctx) {
-            const std::array<std::uint32_t, 4> args{ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]};
-            handler(rt, ctx);
-            record_hle_call(key, args, ctx);
-        };
-    }
+    const std::string key = std::string(library) + "::" + std::string(name);
+    function = [key, handler = std::move(function)](
+                   Runtime &rt, AllegrexContext &ctx) {
+        const std::array<std::uint32_t, 4> args{ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]};
+        g_inflight_import.store(key.c_str(), std::memory_order_relaxed);
+        handler(rt, ctx);
+        g_inflight_import.store(nullptr, std::memory_order_relaxed);
+        g_last_import.store(key.c_str(), std::memory_order_relaxed);
+        record_hle_call(key, args, ctx);
+    };
     runtime_.register_hle(std::string(library), nid, std::move(function));
     bound_.insert({std::string(library), nid});
     return true;
@@ -159,6 +163,14 @@ void log_sync(const std::string &message) {
 void log_once(const std::string &key, const std::string &message) {
     static std::unordered_set<std::string> seen;
     if (seen.insert(key).second) std::cerr << message << "\n";
+}
+
+const char *inflight_import() noexcept {
+    return g_inflight_import.load(std::memory_order_relaxed);
+}
+
+const char *last_completed_import() noexcept {
+    return g_last_import.load(std::memory_order_relaxed);
 }
 
 void dump_hle_ring(std::ostream &out) {

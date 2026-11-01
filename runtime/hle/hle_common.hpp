@@ -70,6 +70,15 @@ void log_once(const std::string &key, const std::string &message);
 // without a debugger. Unset (or 0) disables it.
 void dump_hle_ring(std::ostream &out);
 
+// Name of the import currently executing on the guest thread ("Library::name"),
+// or null between calls. A blocked handler leaves its name visible so a stall
+// can be attributed without a debugger.
+[[nodiscard]] const char *inflight_import() noexcept;
+
+// Name of the most recently completed import, or null before the first call.
+// A watch loop that keeps calling one import names it here between calls.
+[[nodiscard]] const char *last_completed_import() noexcept;
+
 class HleRegistrar {
 public:
     explicit HleRegistrar(psprecomp::Runtime &runtime);
