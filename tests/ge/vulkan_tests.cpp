@@ -25,7 +25,7 @@ namespace {
 
 using namespace gungnir::ge;
 
-void check(bool condition, const char *contract) {
+void check(bool condition, const std::string &contract) {
     if (!condition) throw std::runtime_error(contract);
 }
 
@@ -421,6 +421,49 @@ void many_textures() {
     backend.shutdown();
 }
 
+void bounded_gpu_texture_cache() {
+    std::string reason;
+    if (!VulkanBackend::available(reason)) {
+        std::cout << "SKIP: " << reason << "\n";
+        std::exit(77);
+    }
+    VulkanBackend backend;
+    VulkanBackend::Config config;
+    config.width = 32;
+    config.height = 32;
+    config.headless = true;
+    config.texture_cache_limit = 8u;
+    config.texture_cache_bytes = 1u << 20u;
+    std::string error;
+    check(backend.initialize(config, error), error);
+
+    const Quad quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                 rgba8(255, 255, 255)},
+                                0.5f, true);
+    std::vector<TextureImage> images;
+    images.reserve(32u);
+    for (int i = 0; i < 32; ++i) {
+        TextureImage image;
+        image.width = 2;
+        image.height = 2;
+        image.pixels.assign(4u, rgba8(static_cast<std::uint32_t>(i * 7), 32, 64));
+        images.push_back(std::move(image));
+    }
+    VulkanFrame frame;
+    for (std::size_t i = 0; i < images.size(); ++i) {
+        VulkanDrawState state;
+        state.texture = &images[i];
+        state.texture_key = 0x8000u + i;
+        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error), error);
+        check(backend.texture_count() <= config.texture_cache_limit,
+              "the GPU texture cache keeps at most its configured entry count (frame " + std::to_string(i) +
+                  " held " + std::to_string(backend.texture_count()) + ")");
+        check(backend.texture_bytes() <= config.texture_cache_bytes,
+              "the GPU texture cache keeps at most its configured byte budget");
+    }
+    backend.shutdown();
+}
+
 int main() {
     try {
         shader_validation();
@@ -429,6 +472,7 @@ int main() {
         headless_triangle();
         parity_tests();
         many_textures();
+        bounded_gpu_texture_cache();
 #if defined(GUNGNIR_HAVE_SDL3)
         windowed_swapchain();
 #endif

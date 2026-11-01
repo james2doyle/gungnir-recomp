@@ -31,7 +31,7 @@ bool close(float a, float b, float tolerance = 1.0e-5f) {
 
 class Memory {
 public:
-    Memory() : bytes_(0x10000u, 0u) {}
+    explicit Memory(std::size_t size = 0x10000u) : bytes_(size, 0u) {}
 
     void store32(std::uint32_t address, std::uint32_t value) {
         std::memcpy(bytes_.data() + address, &value, sizeof value);
@@ -214,6 +214,67 @@ void scissor_and_gaps() {
     check(!gaps.empty(), "unsupported primitive is a named gap");
 }
 
+void bounded_texture_retention() {
+    Memory memory(0x200000u);
+    write_through_triangle(memory, 0x1000u);
+    constexpr std::uint32_t kTexture = 0x40000u;
+    constexpr int kSize = 256;
+    for (int i = 0; i < kSize * kSize; ++i)
+        memory.store32(kTexture + static_cast<std::uint32_t>(i) * 4u,
+                       0xFF000000u | static_cast<std::uint32_t>(i & 0xFFFF));
+
+    StateMachine machine;
+    Draw latest;
+    bool have_latest = false;
+    machine.set_draw_sink([&latest, &have_latest](const Draw &draw) {
+        latest = draw;
+        have_latest = true;
+    });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), view(memory));
+    };
+    const std::uint32_t vt = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u);
+    send(CommandKind::VertexType, vt, 0x12u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::State, 1u, 0x1Eu);
+    send(CommandKind::State, kTexture, 0xA0u);
+    send(CommandKind::State, kSize, 0xA8u);
+    send(CommandKind::State, (8u << 8u) | 8u, 0xB8u);
+    send(CommandKind::State, 3u, 0xC3u);
+    send(CommandKind::State, 0u, 0xC2u);
+
+    Draw first;
+    bool have_first = false;
+    machine.set_draw_sink([&latest, &have_latest, &first, &have_first](const Draw &draw) {
+        latest = draw;
+        have_latest = true;
+        if (!have_first) {
+            first = draw;
+            have_first = true;
+        }
+    });
+    for (int i = 0; i < 400; ++i) {
+        memory.store8(kTexture + static_cast<std::uint32_t>(i % (kSize * kSize * 4)), static_cast<std::uint8_t>(i));
+        send(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u);
+    }
+
+    check(have_latest && have_first, "textured draws emitted");
+    check(machine.cached_texture_count() <= 300u,
+          "texture cache entry count is bounded (got " + std::to_string(machine.cached_texture_count()) + ")");
+    check(machine.cached_texture_bytes() <= 72u * 1024u * 1024u,
+          "texture cache bytes are bounded (got " + std::to_string(machine.cached_texture_bytes()) + ")");
+    check(have_first && first.state.texture != nullptr && !first.state.texture->pixels.empty(),
+          "an in-flight draw keeps its decoded texture alive");
+    check(have_first && first.state.texture_cpu != nullptr && first.state.texture_cpu->state().width == kSize,
+          "an in-flight draw keeps its source texture alive");
+    if (have_first && first.state.texture_cpu != nullptr) {
+        std::vector<std::uint32_t> decoded;
+        first.state.texture_cpu->decode(decoded);
+        check(decoded.size() == static_cast<std::size_t>(kSize) * static_cast<std::size_t>(kSize),
+              "an in-flight draw can still decode its source texture");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -221,6 +282,7 @@ int main() {
     indexed_and_textured();
     through_sprite_quad();
     scissor_and_gaps();
+    bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";
         return 1;

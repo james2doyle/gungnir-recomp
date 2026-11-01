@@ -117,6 +117,11 @@ public:
         int virtual_height{};
         bool headless{true};
         bool validation{false};
+        // Bound on retained GPU textures. Eviction runs while the device is
+        // idle at the start of the next frame, so descriptors in flight stay
+        // valid. A single oversized texture is always retained.
+        std::size_t texture_cache_limit{512};
+        std::size_t texture_cache_bytes{128u * 1024u * 1024u};
         std::vector<const char *> instance_extensions;
         gungnir::platform::VulkanDriverSelection driver;
         std::function<VkSurfaceKHR(VkInstance)> create_surface;
@@ -147,6 +152,8 @@ public:
     [[nodiscard]] bool initialized() const;
     [[nodiscard]] bool headless() const;
     [[nodiscard]] std::size_t pipeline_count() const;
+    [[nodiscard]] std::size_t texture_count() const;
+    [[nodiscard]] std::size_t texture_bytes() const;
     [[nodiscard]] int swapchain_width() const;
     [[nodiscard]] int swapchain_height() const;
     [[nodiscard]] VkSurfaceTransformFlagBitsKHR surface_transform() const;

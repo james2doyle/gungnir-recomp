@@ -220,20 +220,47 @@ std::uint64_t Texture::content_key() const {
 
 const TextureImage *TextureCache::find(std::uint64_t key) const {
     const auto found = images_.find(key);
-    return found == images_.end() ? nullptr : &found->second;
+    return found == images_.end() ? nullptr : found->second.image.get();
+}
+
+std::shared_ptr<const TextureImage> TextureCache::get_shared(std::uint64_t key, const Texture &texture,
+                                                             TextureUploader *uploader) {
+    const auto found = images_.find(key);
+    if (found != images_.end()) {
+        order_.splice(order_.end(), order_, found->second.order);
+        return found->second.image;
+    }
+
+    auto image = std::make_shared<TextureImage>();
+    image->width = texture.state().width;
+    image->height = texture.state().height;
+    texture.decode(image->pixels);
+
+    Entry entry;
+    entry.image = image;
+    entry.bytes = image->pixels.size() * sizeof(std::uint32_t);
+    order_.push_back(key);
+    entry.order = std::prev(order_.end());
+    bytes_ += entry.bytes;
+    images_.emplace(key, std::move(entry));
+    evict_over_budget(key);
+    if (uploader != nullptr && images_.find(key) != images_.end()) uploader->upload(key, *image);
+    return image;
 }
 
 const TextureImage &TextureCache::get(std::uint64_t key, const Texture &texture, TextureUploader *uploader) {
-    const auto found = images_.find(key);
-    if (found != images_.end()) return found->second;
+    return *get_shared(key, texture, uploader);
+}
 
-    TextureImage image;
-    image.width = texture.state().width;
-    image.height = texture.state().height;
-    texture.decode(image.pixels);
-    const auto inserted = images_.emplace(key, std::move(image));
-    if (uploader != nullptr) uploader->upload(key, inserted.first->second);
-    return inserted.first->second;
+void TextureCache::evict_over_budget(std::uint64_t keep) {
+    while (bytes_ > budget_ && images_.size() > 1u && order_.front() != keep) {
+        const std::uint64_t key = order_.front();
+        order_.pop_front();
+        const auto found = images_.find(key);
+        if (found == images_.end()) continue;
+        bytes_ -= found->second.bytes;
+        images_.erase(found);
+    }
 }
 
 void TextureCache::invalidate(std::uint64_t key) {
@@ -241,11 +268,18 @@ void TextureCache::invalidate(std::uint64_t key) {
 }
 
 void TextureCache::invalidate(std::uint64_t key, TextureUploader *uploader) {
-    if (images_.erase(key) != 0u && uploader != nullptr) uploader->invalidate(key);
+    const auto found = images_.find(key);
+    if (found == images_.end()) return;
+    bytes_ -= found->second.bytes;
+    order_.erase(found->second.order);
+    images_.erase(found);
+    if (uploader != nullptr) uploader->invalidate(key);
 }
 
 void TextureCache::clear() {
     images_.clear();
+    order_.clear();
+    bytes_ = 0u;
 }
 
 void TextureRangeIndex::track(std::uint32_t address, std::uint32_t size, std::uint64_t key) {

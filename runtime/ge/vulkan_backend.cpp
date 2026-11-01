@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <list>
 #include <map>
 #include <vector>
 
@@ -264,8 +265,14 @@ struct VulkanBackend::Impl {
         VkImageView view{VK_NULL_HANDLE};
         VkSampler sampler{VK_NULL_HANDLE};
         VkDescriptorSet descriptor{VK_NULL_HANDLE};
+        std::size_t bytes{};
     };
     std::map<std::uint64_t, GpuTexture> textures;
+    std::list<std::uint64_t> texture_order;
+    std::vector<GpuTexture> retired_textures;
+    std::size_t texture_bytes{};
+    std::size_t texture_limit{512u};
+    std::size_t texture_budget{128u * 1024u * 1024u};
     GpuTexture white_texture;
     std::map<std::uint64_t, VkPipeline> draw_pipelines;
     std::map<std::uint64_t, VkPipeline> swapchain_draw_pipelines;
@@ -851,11 +858,38 @@ struct VulkanBackend::Impl {
     GpuTexture *texture_for(const VulkanDrawState &state, std::string &error) {
         if (state.texture == nullptr) return &white_texture;
         const auto found = textures.find(state.texture_key);
-        if (found != textures.end()) return &found->second;
+        if (found != textures.end()) {
+            texture_order.remove(state.texture_key);
+            texture_order.push_back(state.texture_key);
+            return &found->second;
+        }
         GpuTexture texture;
         if (!create_gpu_texture(*state.texture, state.linear, state.wrap_u, state.wrap_v, texture, error)) return nullptr;
+        texture.bytes = static_cast<std::size_t>(state.texture->width) *
+                        static_cast<std::size_t>(state.texture->height) * sizeof(std::uint32_t);
+        texture_bytes += texture.bytes;
+        texture_order.push_back(state.texture_key);
         const auto inserted = textures.emplace(state.texture_key, texture);
         return &inserted.first->second;
+    }
+
+    // Called only after the device is idle: every frame still referencing a
+    // retired texture has finished on the GPU.
+    void reap_retired_textures() {
+        for (GpuTexture &texture : retired_textures) destroy_texture(texture);
+        retired_textures.clear();
+    }
+
+    void evict_textures() {
+        while ((textures.size() > texture_limit || texture_bytes > texture_budget) && textures.size() > 1u) {
+            const std::uint64_t key = texture_order.front();
+            texture_order.pop_front();
+            const auto found = textures.find(key);
+            if (found == textures.end()) continue;
+            texture_bytes -= found->second.bytes;
+            retired_textures.push_back(std::move(found->second));
+            textures.erase(found);
+        }
     }
 
     bool create_headless(std::string &error) {
@@ -1087,6 +1121,8 @@ bool VulkanBackend::available(std::string &reason) {
 bool VulkanBackend::initialize(const Config &config, std::string &error) {
     shutdown();
     impl_->config = config;
+    impl_->texture_limit = std::max<std::size_t>(config.texture_cache_limit, 1u);
+    impl_->texture_budget = std::max<std::size_t>(config.texture_cache_bytes, 1u);
     if (config.width <= 0 || config.height <= 0) {
         error = "invalid_extent";
         return false;
@@ -1359,6 +1395,8 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         return false;
     }
     vkDeviceWaitIdle(impl_->device);
+    impl_->reap_retired_textures();
+    impl_->evict_textures();
     if (!impl_->create_draw_resources(error)) return false;
 
     std::size_t total_vertices = 0;
@@ -1496,6 +1534,7 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
     frame.height = impl_->config.height;
     frame.rgba.assign(static_cast<std::uint8_t *>(data), static_cast<std::uint8_t *>(data) + size);
     vkUnmapMemory(impl_->device, impl_->readback_memory);
+    impl_->evict_textures();
     return true;
 }
 
@@ -1580,6 +1619,8 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
     }
     if (!calls.empty()) {
         vkDeviceWaitIdle(impl_->device);
+        impl_->reap_retired_textures();
+        impl_->evict_textures();
         if (!impl_->create_draw_resources(error)) return false;
     }
 
@@ -1744,8 +1785,11 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         return false;
     }
     if (!result_ok_or_suboptimal(presented, "vkQueuePresentKHR", error)) return false;
-    return result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
-                     error);
+    if (!result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
+                   error))
+        return false;
+    impl_->evict_textures();
+    return true;
 }
 
 bool VulkanBackend::recreate_surface(std::string &error) {
@@ -1795,9 +1839,10 @@ void VulkanBackend::invalidate_texture(std::uint64_t key) {
     if (!impl_ || impl_->device == VK_NULL_HANDLE) return;
     const auto found = impl_->textures.find(key);
     if (found == impl_->textures.end()) return;
-    vkDeviceWaitIdle(impl_->device);
-    impl_->destroy_texture(found->second);
+    impl_->texture_bytes -= found->second.bytes;
+    impl_->retired_textures.push_back(std::move(found->second));
     impl_->textures.erase(found);
+    impl_->texture_order.remove(key);
 }
 
 void VulkanBackend::shutdown() {
@@ -1810,6 +1855,9 @@ void VulkanBackend::shutdown() {
         impl_->destroy_texture(impl_->white_texture);
         for (auto &entry : impl_->textures) impl_->destroy_texture(entry.second);
         impl_->textures.clear();
+        impl_->reap_retired_textures();
+        impl_->texture_order.clear();
+        impl_->texture_bytes = 0u;
         if (impl_->draw_descriptor_pool != VK_NULL_HANDLE)
             vkDestroyDescriptorPool(impl_->device, impl_->draw_descriptor_pool, nullptr);
         if (impl_->draw_descriptor_layout != VK_NULL_HANDLE)
@@ -1893,6 +1941,14 @@ bool VulkanBackend::headless() const {
 
 std::size_t VulkanBackend::pipeline_count() const {
     return impl_ ? impl_->draw_pipelines.size() : 0u;
+}
+
+std::size_t VulkanBackend::texture_count() const {
+    return impl_ ? impl_->textures.size() : 0u;
+}
+
+std::size_t VulkanBackend::texture_bytes() const {
+    return impl_ ? impl_->texture_bytes : 0u;
 }
 
 int VulkanBackend::swapchain_width() const {

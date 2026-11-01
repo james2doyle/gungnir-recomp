@@ -94,7 +94,6 @@ void StateMachine::reset() {
     draws_ = 0u;
     gaps_ = 0u;
     textures_.clear();
-    cpu_textures_.clear();
 }
 
 void StateMachine::set_draw_sink(DrawSink sink) {
@@ -104,6 +103,10 @@ void StateMachine::set_draw_sink(DrawSink sink) {
 void StateMachine::set_gap_sink(GapSink sink) {
     gap_sink_ = std::move(sink);
 }
+
+std::size_t StateMachine::cached_texture_count() const { return textures_.size(); }
+
+std::size_t StateMachine::cached_texture_bytes() const { return textures_.byte_size(); }
 
 std::uint32_t StateMachine::reg_param(std::uint8_t opcode) const {
     return regs_[opcode] & 0xFFFFFFu;
@@ -329,7 +332,7 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     texture_state.clamp_v = ((reg_param(0xC7u) >> 8u) & 1u) != 0u;
     texture_state.linear = (reg_param(0xC6u) & 1u) != 0u;
     texture_state.clut_format = reg_param(0xC5u);
-    auto cpu = std::make_unique<CpuTexture>();
+    auto cpu = std::make_shared<CpuTexture>();
     cpu->data = std::move(data);
     cpu->clut.assign(clut.begin(), clut.end());
     cpu->texture.emplace(texture_state, std::span<const std::uint8_t>(cpu->data),
@@ -339,16 +342,17 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     const std::uint64_t sampler = (texture_state.linear ? 1ull : 0ull) |
         (texture_state.clamp_u ? 2ull : 0ull) | (texture_state.clamp_v ? 4ull : 0ull);
     const std::uint64_t key = texture.content_key() ^ (sampler * 0x9E3779B97F4A7C15ull);
-    const TextureImage &image = textures_.get(key, texture);
+    const std::shared_ptr<const TextureImage> image = textures_.get_shared(key, texture);
     state.texture_enabled = true;
-    state.texture = &image;
+    state.texture = image.get();
     state.texture_cpu = &texture;
-    cpu_textures_.push_back(std::move(cpu));
+    state.texture_storage = image;
+    state.texture_cpu_storage = cpu;
     state.texture_key = key;
     state.linear = texture_state.linear;
     state.wrap_u = texture_state.clamp_u;
     state.wrap_v = texture_state.clamp_v;
-    return &image;
+    return state.texture;
 }
 
 void StateMachine::draw_primitive(const Command &command, const MemoryView &memory) {

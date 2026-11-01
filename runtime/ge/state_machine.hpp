@@ -12,9 +12,8 @@
 
 #include <array>
 #include <cstdint>
-#include <memory>
 #include <functional>
-#include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -40,6 +39,8 @@ struct DrawState {
     bool wrap_v{};
     const TextureImage *texture{};
     const Texture *texture_cpu{};
+    std::shared_ptr<const TextureImage> texture_storage;
+    std::shared_ptr<const CpuTexture> texture_cpu_storage;
     std::uint64_t texture_key{};
 };
 
@@ -68,6 +69,8 @@ public:
     [[nodiscard]] const std::array<std::uint32_t, 256> &registers() const { return regs_; }
     [[nodiscard]] std::uint64_t draw_count() const { return draws_; }
     [[nodiscard]] std::uint64_t gap_count() const { return gaps_; }
+    [[nodiscard]] std::size_t cached_texture_count() const;
+    [[nodiscard]] std::size_t cached_texture_bytes() const;
 
 private:
     void draw_primitive(const Command &command, const MemoryView &memory);
@@ -99,13 +102,7 @@ private:
     int bone_index_{};
     std::uint64_t draws_{};
     std::uint64_t gaps_{};
-    struct CpuTexture {
-        std::vector<std::uint8_t> data;
-        std::vector<std::uint8_t> clut;
-        std::optional<Texture> texture;
-    };
     TextureCache textures_;
-    std::vector<std::unique_ptr<CpuTexture>> cpu_textures_;
     DrawSink draw_sink_;
     GapSink gap_sink_;
 };

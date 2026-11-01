@@ -7,6 +7,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <list>
+#include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -73,6 +76,14 @@ struct TextureImage {
     std::vector<std::uint32_t> pixels;
 };
 
+// Guest bytes backing one texture decode. Kept alive by in-flight draws so a
+// frame queued for presentation never reads freed source data.
+struct CpuTexture {
+    std::vector<std::uint8_t> data;
+    std::vector<std::uint8_t> clut;
+    std::optional<Texture> texture;
+};
+
 class TextureUploader {
 public:
     virtual ~TextureUploader() = default;
@@ -84,13 +95,28 @@ class TextureCache {
 public:
     [[nodiscard]] const TextureImage *find(std::uint64_t key) const;
     const TextureImage &get(std::uint64_t key, const Texture &texture, TextureUploader *uploader = nullptr);
+    [[nodiscard]] std::shared_ptr<const TextureImage> get_shared(std::uint64_t key, const Texture &texture,
+                                                                 TextureUploader *uploader = nullptr);
     void invalidate(std::uint64_t key);
     void invalidate(std::uint64_t key, TextureUploader *uploader);
     void clear();
     [[nodiscard]] std::size_t size() const { return images_.size(); }
+    [[nodiscard]] std::size_t byte_size() const { return bytes_; }
+    void set_budget(std::size_t bytes) { budget_ = bytes; }
 
 private:
-    std::unordered_map<std::uint64_t, TextureImage> images_;
+    struct Entry {
+        std::shared_ptr<const TextureImage> image;
+        std::size_t bytes{};
+        std::list<std::uint64_t>::iterator order{};
+    };
+
+    void evict_over_budget(std::uint64_t keep);
+
+    std::unordered_map<std::uint64_t, Entry> images_;
+    std::list<std::uint64_t> order_;
+    std::size_t bytes_{};
+    std::size_t budget_{64u * 1024u * 1024u};
 };
 
 // Guest-address ranges that currently back cached textures. A draw that renders
