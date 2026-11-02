@@ -283,6 +283,14 @@ int main(int argc, char **argv) {
                           << "\", \"0x" << draw.state.blend.fixed_destination << std::dec << "\"]"
                           << ", \"fog\": " << (draw.state.fog_enabled ? "true" : "false")
                           << ", \"fog_color\": \"0x" << std::hex << draw.state.fog_color << std::dec << "\""
+                          << ", \"stencil\": " << (draw.state.stencil.test ? "true" : "false")
+                          << ", \"stencil_op\": [" << static_cast<int>(draw.state.stencil.sfail) << ", "
+                          << static_cast<int>(draw.state.stencil.zfail) << ", "
+                          << static_cast<int>(draw.state.stencil.zpass) << "]"
+                          << ", \"stencil_fn\": " << static_cast<int>(draw.state.stencil.function)
+                          << ", \"stencil_ref\": " << static_cast<int>(draw.state.stencil.reference)
+                          << ", \"stencil_mask\": \"0x" << std::hex
+                          << static_cast<int>(draw.state.stencil.mask) << std::dec << "\""
                           << ", \"depth\": [" << (draw.state.depth_test ? "true" : "false") << ", "
                           << (draw.state.depth_write ? "true" : "false") << "]"
                           << ", \"cull\": " << static_cast<int>(draw.state.cull);
@@ -380,6 +388,8 @@ int main(int argc, char **argv) {
                 state.alpha_test = draw.state.alpha_test;
                 state.alpha_function = draw.state.alpha_function;
                 state.alpha_reference = draw.state.alpha_reference;
+                state.clear = draw.state.clear;
+                state.clear_depth_write = draw.state.clear_depth_write;
                 state.fog_enabled = draw.state.fog_enabled;
                 state.fog_color = draw.state.fog_color;
                 state.tex_func = draw.state.tex_func;
@@ -390,6 +400,7 @@ int main(int argc, char **argv) {
                 state.fb_format = draw.state.draw_format <= 3u
                                       ? static_cast<gungnir::ge::TextureFormat>(draw.state.draw_format)
                                       : gungnir::ge::TextureFormat::Rgba8888;
+                state.stencil = draw.state.stencil;
                 // Render-to-texture: when the texture address overlaps a
                 // dirty target surface with matching params, sample the
                 // surface instead of the (stale) RAM decode.

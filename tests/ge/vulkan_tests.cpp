@@ -594,6 +594,46 @@ void parity_tests() {
     check(backend.render_headless_draw(line_vk, line_indices, vk_line, vulkan, error, 0u), error.c_str());
     compare_frames(line_software, vulkan, 1, false, "horizontal line matches software");
 
+    // Stencil: Equal against a cleared plane rejects; Always passes and
+    // the zpass REPLACE writes the reference. Pre-enforcement everything
+    // drew unconditionally.
+    Framebuffer stencil_software(32, 32);
+    stencil_software.clear(rgba8(0, 0, 0), 0xFFFFu, 0u);
+    RasterState stencil_state;
+    stencil_state.scissor_x0 = 0;
+    stencil_state.scissor_y0 = 0;
+    stencil_state.scissor_x1 = 32;
+    stencil_state.scissor_y1 = 32;
+    stencil_state.stencil.test = true;
+    stencil_state.stencil.function = CompareFunc::Equal;
+    stencil_state.stencil.reference = 1;
+    stencil_state.stencil.mask = 0xFFu;
+    stencil_state.stencil.zpass = StencilOp::Replace;
+    SoftwareRasterizer stencil_rasterizer(stencil_software, stencil_state);
+    const Quad stencil_quad =
+        make_quad({rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0)});
+    draw_quad_software(stencil_rasterizer, stencil_quad);
+    VulkanDrawState vk_stencil;
+    vk_stencil.stencil.test = true;
+    vk_stencil.stencil.function = CompareFunc::Equal;
+    vk_stencil.stencil.reference = 1;
+    vk_stencil.stencil.mask = 0xFFu;
+    vk_stencil.stencil.zpass = StencilOp::Replace;
+    check(backend.render_headless_draw(stencil_quad.vk, stencil_quad.indices, vk_stencil, vulkan, error, 0u),
+          error.c_str());
+    compare_frames(stencil_software, vulkan, 1, false, "stencil reject matches software");
+    check(stencil_software.color_at(0, 0) == rgba8(0, 0, 0), "equal-against-zero rejects the quad");
+    stencil_state.stencil.function = CompareFunc::Always;
+    stencil_rasterizer.state() = stencil_state;
+    draw_quad_software(stencil_rasterizer, stencil_quad);
+    vk_stencil.stencil.function = CompareFunc::Always;
+    check(backend.render_headless_draw(stencil_quad.vk, stencil_quad.indices, vk_stencil, vulkan, error, 0u),
+          error.c_str());
+    compare_frames(stencil_software, vulkan, 1, false, "stencil replace matches software");
+    check(stencil_software.color_at(0, 0) == rgba8(255, 0, 0) &&
+              stencil_software.stencil_at(0, 0) == 1u,
+          "always passes and writes the reference");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

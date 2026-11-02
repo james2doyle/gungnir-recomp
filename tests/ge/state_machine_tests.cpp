@@ -298,6 +298,24 @@ void clear_and_write_mask() {
     if (kept.empty()) return;
     check(!kept[0].state.clear, "normal draw is not a clear");
     check(kept[0].state.write_mask == 0xFFFFFF00u, "PMASK latched as the write mask");
+
+    // 0xD3 bit 10 keeps depth: a clear with it set must not write depth.
+    Memory nodepth;
+    write_through_triangle(nodepth, 0x1000u);
+    StateMachine nodepth_machine;
+    std::vector<Draw> nodepth_draws;
+    nodepth_machine.set_draw_sink([&nodepth_draws](const Draw &draw) { nodepth_draws.push_back(draw); });
+    nodepth_machine.command(command(CommandKind::State, 0x401u, 0xD3u), view(nodepth));
+    nodepth_machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                                    0x12u),
+                            view(nodepth));
+    nodepth_machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(nodepth));
+    nodepth_machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(nodepth));
+    check(!nodepth_draws.empty(), "depth-masked clear emits");
+    if (!nodepth_draws.empty()) {
+        check(nodepth_draws[0].state.clear, "masked draw is still a clear");
+        check(!nodepth_draws[0].state.clear_depth_write, "0xD3 bit 10 keeps depth");
+    }
 }
 
 void alpha_test_decode() {
@@ -367,9 +385,7 @@ void fog_decode() {
     check(world_draws[0].state.fog_color == 0x0000FF00u, "fog color latched");
 }
 
-void line_strip_emits() {
-    // Points/lines used to be a named gap (primitive_unsupported) and were
-    // dropped; they now emit draws the rasterizers can consume.
+void texwrap_decode() {
     Memory memory;
     write_through_triangle(memory, 0x1000u);
     StateMachine machine;
@@ -393,7 +409,33 @@ void line_strip_emits() {
         check(gap.find("primitive_unsupported") == std::string::npos, "no unsupported-primitive gap");
 }
 
-void texwrap_decode() {
+void stencil_decode() {
+    // 0x24 enables the test, 0xDC carries func/ref/mask, 0xDD the
+    // sfail/zfail/zpass ops. Clears disable the test.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.command(command(CommandKind::State, 1u, 0x24u), view(memory));
+    machine.command(command(CommandKind::State, (2u | (0x40u << 8u) | (0xFFu << 16u)), 0xDCu), view(memory));
+    machine.command(command(CommandKind::State, (0u | (1u << 8u) | (2u << 16u)), 0xDDu), view(memory));
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    check(!draws.empty(), "stencil-tested draw emits");
+    if (draws.empty()) return;
+    check(draws[0].state.stencil.test, "stencil test enabled decoded");
+    check(draws[0].state.stencil.function == CompareFunc::Equal, "stencil func decoded");
+    check(draws[0].state.stencil.reference == 0x40u, "stencil reference decoded");
+    check(draws[0].state.stencil.mask == 0xFFu, "stencil mask decoded");
+    check(draws[0].state.stencil.sfail == StencilOp::Keep, "stencil sfail decoded");
+    check(draws[0].state.stencil.zfail == StencilOp::Zero, "stencil zfail decoded");
+    check(draws[0].state.stencil.zpass == StencilOp::Replace, "stencil zpass decoded");
+}
+
+void line_strip_emits() {
     // TEXWRAP (0xC7) bit 0 clamps U, bit 8 clamps V; clear repeats. The
     // flags ride DrawState as clamp_u/v (true = clamp, matching the
     // reference tex_coord). A prior bug fed them into repeat-semantics
@@ -553,6 +595,7 @@ int main() {
     texwrap_decode();
     line_strip_emits();
     texfunc_decode();
+    stencil_decode();
     bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";

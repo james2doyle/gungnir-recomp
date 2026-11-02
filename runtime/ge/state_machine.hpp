@@ -38,6 +38,7 @@ struct DrawState {
     bool alpha_test{};
     CompareFunc alpha_function{CompareFunc::Greater};
     std::uint8_t alpha_reference{};
+    StencilState stencil{};
     bool texture_enabled{};
     // Texture combine (TEXFUNC 0xC9 / TEXENVCOLOR 0xCA).
     TextureFunc tex_func{TextureFunc::Modulate};
@@ -65,6 +66,8 @@ struct DrawState {
     std::uint32_t texture_address{};
     std::size_t texture_size{};
     bool clear{};
+    // 0xD3 bit 10 set keeps depth (does not clear it).
+    bool clear_depth_write{true};
     // PMASK bits set = keep destination (PSP reset 0 = full write).
     std::uint32_t write_mask{};
     // Fog (0x1F/0xCD/0xCE/0xCF): enabled for transform-mode non-clear

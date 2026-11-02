@@ -482,3 +482,50 @@ is modelled because the title only reads GPI.
   (routing/display/RTT, observed red on stubs), a display-target
   Vulkan parity case (observed red: mashed image), and PPSSPP
   side-by-side.
+
+### GE stencil-via-alpha reference review (2026-11-02)
+
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `setup_pipe` (stencil decode
+  `stFunc`/`stRef`/`stMask`/`sFail`/`sZFail`/`sZPass`, clears disable
+  the test) and `shade_t` (test against destination alpha, zpass op
+  select with KEEP/ZERO/REPLACE/INVERT/INCR/DECR). Behavioral reference
+  only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` stencil register layout (0x24/0xDC/0xDD);
+  ops themselves a named gap there. Behavioral reference only.
+- Adopted: full decode (0x24 enable, 0xDC func/ref/mask, 0xDD
+  sfail/zfail/zpass) into `DrawState`; software enforcement with
+  per-outcome ops on a per-target stencil plane (alpha-tested first,
+  then stencil, then depth, blend, zpass write); Vulkan stencil state
+  (D24S8 depth-stencil on headless and swapchain, dynamic reference,
+  128-bit pipeline key) with swapchain display-group filtering intact.
+  Corpus finding: the game enables stencil on ~95% of draws but with
+  func Always (1634) plus 60 Equal draws, so enforcement is nearly a
+  no-op on current scenes. Verified by `stencil_decode` (observed red),
+  extended `stencil_lite` (zfail path), and a Vulkan mask/replace
+  parity case (observed red with enforcement neutered).
+
+### GE vertex-driven clears reference review (2026-11-02)
+
+- `pspdev/pspsdk` (BSD): `src/gu/sceGuClear.c` (CLEAR draws are
+  2-vertex sprites with `z = clear_depth`, stencil packed in vertex
+  alpha per pixel format; `sceGuClearDepth(0)` in `src/samples/gu/ortho`
+  shows far=0 clears under the inverted range),
+  `sceGuDepthRange(65535,0)` documents the inverted depth buffer.
+  Behavioral reference only; no code copied.
+- `hrydgard/PPSSPP` (GPL-2.0+): `GPU/GPUState.h` `minz`/`maxz`
+  registers after `scissor2`, `clearmode` bit layout (0x100 color,
+  0x200 alpha, 0x400 depth); `GPU/Software/Rasterizer.cpp` clear path
+  bypasses tests; docs `ge-vertex-pipeline#viewport` (screen Z from
+  NDC via viewport scale/center). Behavioral reference only.
+- Adopted: CLEAR draws bypass tests/blend and write vertex
+  color/depth/stencil through the masks (software `shade_pixel`
+  fast-path + Vulkan `depth_test off` / `depth_write` from the 0xD3
+  depth bit); new `clear_depth_write` decode (0xD3 bit 10).
+  Root-caused the missing-characters regression both paths: the game
+  clears depth to 0 (vertex strips, inverted range, GREATER func),
+  which the old code rejected against stale `0xFFFF`/`1.0` planes,
+  killing every depth-tested draw. Verified by `clear_fill` software
+  and `0xD3`-decode unit tests (both observed red), host battle
+  render (chibis back), and device battle proof with full depth on.

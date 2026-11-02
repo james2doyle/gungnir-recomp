@@ -125,6 +125,41 @@ bool compare(CompareFunc function, std::uint32_t incoming, std::uint32_t stored)
     return false;
 }
 
+StencilOp stencil_op_from_ge(std::uint32_t code) {
+    switch (code & 7u) {
+    case 0u:
+        return StencilOp::Keep;
+    case 1u:
+        return StencilOp::Zero;
+    case 2u:
+        return StencilOp::Replace;
+    case 3u:
+        return StencilOp::Invert;
+    case 4u:
+        return StencilOp::Increment;
+    default:
+        return StencilOp::Decrement;
+    }
+}
+
+std::uint8_t apply_stencil_op(StencilOp op, std::uint8_t stored, std::uint8_t reference) {
+    switch (op) {
+    case StencilOp::Keep:
+        return stored;
+    case StencilOp::Zero:
+        return 0u;
+    case StencilOp::Replace:
+        return reference;
+    case StencilOp::Invert:
+        return static_cast<std::uint8_t>(~stored);
+    case StencilOp::Increment:
+        return stored < 255u ? static_cast<std::uint8_t>(stored + 1u) : 255u;
+    case StencilOp::Decrement:
+        return stored > 0u ? static_cast<std::uint8_t>(stored - 1u) : 0u;
+    }
+    return stored;
+}
+
 Framebuffer::Framebuffer(int width, int height) : width_(width), height_(height) {
     const std::size_t count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     color.resize(count);
@@ -180,11 +215,6 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
     if (!in_scissor(x, y)) return;
     const std::size_t index =
         static_cast<std::size_t>(y) * static_cast<std::size_t>(target_.width()) + static_cast<std::size_t>(x);
-
-    if (state_.stencil.test &&
-        !compare(state_.stencil.function, state_.stencil.reference, target_.stencil[index]))
-        return;
-    if (state_.stencil.write) target_.stencil[index] = state_.stencil.reference;
 
     std::uint32_t source = rgba8(to_byte(fragment.color[0]), to_byte(fragment.color[1]), to_byte(fragment.color[2]),
                                  to_byte(fragment.color[3]));
@@ -249,6 +279,23 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
         source = rgba8(clamp_channel(r), clamp_channel(g), clamp_channel(b), clamp_channel(a));
     }
 
+    const std::uint16_t z =
+        static_cast<std::uint16_t>(std::lround(std::clamp(fragment.z, 0.0f, 65535.0f)));
+    if (state_.clear) {
+        // Vertex-driven clear (pspsdk sceGuClear packs z = clear_depth and
+        // stencil in vertex alpha): bypass tests and blending, write
+        // straight through the masks. The corpus clears depth to 0, which
+        // the GREATER test would reject against a stale 0xFFFF plane.
+        target_.color[index] = (source & ~state_.write_mask) | (target_.color[index] & state_.write_mask);
+        if (state_.fb_format != TextureFormat::Rgba8888)
+            target_.color[index] =
+                unpack_framebuffer(pack_framebuffer(target_.color[index], state_.fb_format), state_.fb_format);
+        if (state_.clear_depth_write) target_.depth[index] = z;
+        if ((state_.write_mask & 0xFF000000u) != 0xFF000000u)
+            target_.stencil[index] = static_cast<std::uint8_t>(channel(source, 24));
+        return;
+    }
+
     if (state_.alpha_test && !compare(state_.alpha_function, channel(source, 24), state_.alpha_reference)) return;
 
     if (state_.fog_enabled) {
@@ -268,9 +315,19 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
         }
     }
 
-    const std::uint16_t z =
-        static_cast<std::uint16_t>(std::lround(std::clamp(fragment.z, 0.0f, 65535.0f)));
-    if (state_.depth_test && !compare(state_.depth_function, z, target_.depth[index])) return;
+    if (state_.stencil.test &&
+        !compare(state_.stencil.function, state_.stencil.reference & state_.stencil.mask,
+                 target_.stencil[index] & state_.stencil.mask)) {
+        target_.stencil[index] =
+            apply_stencil_op(state_.stencil.sfail, target_.stencil[index], state_.stencil.reference);
+        return;
+    }
+    if (state_.depth_test && !compare(state_.depth_function, z, target_.depth[index])) {
+        if (state_.stencil.test)
+            target_.stencil[index] =
+                apply_stencil_op(state_.stencil.zfail, target_.stencil[index], state_.stencil.reference);
+        return;
+    }
     if (state_.depth_write) target_.depth[index] = z;
 
     if (state_.blend.enabled) {
@@ -295,6 +352,9 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
     if (state_.fb_format != TextureFormat::Rgba8888)
         target_.color[index] =
             unpack_framebuffer(pack_framebuffer(target_.color[index], state_.fb_format), state_.fb_format);
+    if (state_.stencil.test)
+        target_.stencil[index] =
+            apply_stencil_op(state_.stencil.zpass, target_.stencil[index], state_.stencil.reference);
 }
 
 void SoftwareRasterizer::draw_triangle(const ScreenVertex &a, const ScreenVertex &b, const ScreenVertex &c) {

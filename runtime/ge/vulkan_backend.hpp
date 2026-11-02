@@ -72,6 +72,9 @@ struct VulkanDrawState {
     std::uint32_t tex_env{};
     // Draw-target pixel format (FBPPIXFORMAT 0xD2).
     TextureFormat fb_format{TextureFormat::Rgba8888};
+    // Stencil test + ops (0x24/0xDC/0xDD): compared against a per-target
+    // stencil plane, updated per outcome. Clears disable the test.
+    StencilState stencil{};
     // Primitive topology: strips/fans arrive pre-expanded as triangle
     // lists, line strips as segment lists; points/lines need their own
     // pipeline topology.

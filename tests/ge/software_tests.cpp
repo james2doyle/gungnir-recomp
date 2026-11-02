@@ -222,9 +222,9 @@ void stencil_lite() {
     state.scissor_x1 = 2;
     state.scissor_y1 = 2;
     state.stencil.test = true;
-    state.stencil.write = true;
     state.stencil.function = CompareFunc::Always;
     state.stencil.reference = 1;
+    state.stencil.zpass = StencilOp::Replace;
     SoftwareRasterizer rasterizer(framebuffer, state);
     full_screen(rasterizer, rgba8(255, 0, 0));
     check(framebuffer.stencil_at(0, 0) == 1u && framebuffer.color_at(0, 0) == rgba8(255, 0, 0),
@@ -237,6 +237,17 @@ void stencil_lite() {
     rasterizer.state() = state;
     full_screen(rasterizer, rgba8(0, 0, 255));
     check(framebuffer.color_at(0, 0) == rgba8(0, 255, 0), "mismatched stencil reference rejects");
+    // Depth failure runs the zfail op: zero the stencil and hold color.
+    state.stencil.reference = 1;
+    state.stencil.function = CompareFunc::Equal;
+    state.stencil.zfail = StencilOp::Zero;
+    state.depth_test = true;
+    state.depth_write = false;
+    state.depth_function = CompareFunc::Less;
+    rasterizer.state() = state;
+    full_screen(rasterizer, rgba8(255, 255, 255), 0xFFFFu);
+    check(framebuffer.stencil_at(0, 0) == 0u && framebuffer.color_at(0, 0) == rgba8(0, 255, 0),
+          "depth failure runs zfail and holds color");
 }
 
 void texture_sampling() {
@@ -336,6 +347,34 @@ void golden_and_determinism() {
     check(first == 0x422B77A53737E005ull, "golden scene matches the pinned readback hash");
 }
 
+void clear_fill_writes_through() {
+    // Vertex-driven clears (pspsdk sceGuClear: z = clear_depth, stencil in
+    // vertex alpha) bypass tests: the corpus clears depth to 0, which the
+    // GREATER test would reject against a 0xFFFF plane.
+    Framebuffer framebuffer(2, 2);
+    framebuffer.clear(rgba8(255, 255, 255), 0xFFFFu, 9u);
+    RasterState state;
+    state.scissor_x1 = 2;
+    state.scissor_y1 = 2;
+    state.clear = true;
+    state.clear_depth_write = true;
+    state.depth_test = true;
+    state.depth_write = true;
+    state.depth_function = CompareFunc::Greater;
+    state.stencil.test = true;
+    state.stencil.function = CompareFunc::Equal;
+    SoftwareRasterizer rasterizer(framebuffer, state);
+    full_screen(rasterizer, rgba8(0, 0, 0, 0), 0.0f);
+    check(framebuffer.color_at(0, 0) == rgba8(0, 0, 0, 0), "clear writes color through tests");
+    check(framebuffer.depth_at(0, 0) == 0u, "clear writes depth zero through the test");
+    check(framebuffer.stencil_at(0, 0) == 0u, "clear writes stencil from vertex alpha");
+    state.clear_depth_write = false;
+    rasterizer.state() = state;
+    framebuffer.clear(rgba8(255, 255, 255), 1234u, 9u);
+    full_screen(rasterizer, rgba8(0, 0, 0, 0), 0.0f);
+    check(framebuffer.depth_at(0, 0) == 1234u, "depth mask keeps depth on alpha-only clears");
+}
+
 } // namespace
 
 int main() {
@@ -343,6 +382,7 @@ int main() {
         triangle_contract();
         strip_fan_and_sprites();
         depth_ordering();
+        clear_fill_writes_through();
         blending();
         scissor_and_alpha_test();
         stencil_lite();

@@ -268,8 +268,11 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.scissor_y0 = in.scissor_y0;
         out.scissor_x1 = in.scissor_x1;
         out.scissor_y1 = in.scissor_y1;
-        out.depth_test = in.depth_test;
-        out.depth_write = in.depth_write;
+        out.depth_test = in.depth_test && !in.clear;
+        // Vertex-driven clears carry the depth in vertex z; the GREATER
+        // test would reject the clear value against a stale plane, so
+        // write it straight through (subject to the 0xD3 depth bit).
+        out.depth_write = in.clear ? in.clear_depth_write : in.depth_write;
         out.depth_function = in.depth_function;
         out.cull = in.cull;
         out.front_face = in.front_face;
@@ -286,6 +289,7 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.fb_format = in.draw_format <= 3u ? static_cast<gungnir::ge::TextureFormat>(in.draw_format)
                                             : gungnir::ge::TextureFormat::Rgba8888;
         out.primitive = source.primitive;
+        out.stencil = in.stencil;
         out.write_mask = in.write_mask;
         out.texture = in.texture;
         out.texture_key = in.texture_key;

@@ -447,6 +447,9 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
 
     draw.state.draw_format = reg_param(0xD2u) & 7u;
     draw.state.clear = (reg_param(0xD3u) & 1u) != 0u;
+    // 0xD3 bit 10 keeps depth: vertex-driven clears (pspsdk sceGuClear
+    // packs z = clear_depth, stencil in vertex alpha) write it otherwise.
+    draw.state.clear_depth_write = (reg_param(0xD3u) & 0x400u) == 0u;
     if (draw.state.clear) {
         const std::uint32_t clear = reg_param(0xD3u);
         draw.state.write_mask = ((clear & 0x100u) != 0u ? 0u : 0x00FFFFFFu) |
@@ -470,6 +473,17 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.alpha_function = compare_from_ge(alpha & 7u);
         draw.state.alpha_reference = static_cast<std::uint8_t>((alpha >> 8u) & 0xFFu);
         // Alpha mask (bits 16-23) not applied yet (named gap if ever observed).
+    }
+    draw.state.stencil.test = reg_on(0x24u) && !draw.state.clear;
+    if (draw.state.stencil.test) {
+        const std::uint32_t test = reg_param(0xDCu);
+        const std::uint32_t ops = reg_param(0xDDu);
+        draw.state.stencil.function = compare_from_ge(test & 7u);
+        draw.state.stencil.reference = static_cast<std::uint8_t>((test >> 8u) & 0xFFu);
+        draw.state.stencil.mask = static_cast<std::uint8_t>((test >> 16u) & 0xFFu);
+        draw.state.stencil.sfail = stencil_op_from_ge(ops & 7u);
+        draw.state.stencil.zfail = stencil_op_from_ge((ops >> 8u) & 7u);
+        draw.state.stencil.zpass = stencil_op_from_ge((ops >> 16u) & 7u);
     }
     draw.state.fog_enabled = reg_on(0x1Fu) && !draw.state.clear && !layout_.through;
     draw.state.fog_color = reg_param(0xCFu);

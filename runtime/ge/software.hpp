@@ -51,6 +51,16 @@ enum class BlendFactor : std::uint8_t {
 
 enum class BlendEquation : std::uint8_t { Add, Subtract, ReverseSubtract, Min, Max };
 
+// Stencil ops (STENCILOP 0xDD): applied to the stencil value when the
+// stencil test fails, the depth test fails, or everything passes.
+enum class StencilOp : std::uint8_t { Keep, Zero, Replace, Invert, Increment, Decrement };
+
+// Maps a GE stencil-op code (STENCILOP 0xDD fields) to an op; codes above
+// Decrement behave as Decrement (both behavioral references agree).
+[[nodiscard]] StencilOp stencil_op_from_ge(std::uint32_t code);
+// Applies a stencil op to the stored value with the given reference.
+[[nodiscard]] std::uint8_t apply_stencil_op(StencilOp op, std::uint8_t stored, std::uint8_t reference);
+
 // GE texture function (TEXFUNC 0xC9 low 3 bits): how the texel combines
 // with the vertex color. Bit 8 selects RGBA mode (texture alpha feeds
 // the result alpha); bit 16 doubles the color result. Blend reads the
@@ -70,9 +80,13 @@ struct BlendState {
 
 struct StencilState {
     bool test{};
-    bool write{};
     std::uint8_t reference{};
     CompareFunc function{CompareFunc::Always};
+    // Low 8 bits of the stencil value participate in the test.
+    std::uint8_t mask{0xFFu};
+    StencilOp sfail{StencilOp::Keep};
+    StencilOp zfail{StencilOp::Keep};
+    StencilOp zpass{StencilOp::Keep};
 
     bool operator==(const StencilState &) const = default;
 };
@@ -100,6 +114,11 @@ struct RasterState {
     // Write mask: bits set = keep destination (PMASK 0xE8/0xE9, or the
     // CLEAR-mode bits). Zero means a full write.
     std::uint32_t write_mask{};
+    // CLEAR mode (0xD3): bypasses alpha/depth/stencil tests and blending;
+    // writes vertex color/depth/alpha straight through the masks.
+    bool clear{};
+    // 0xD3 bit 10 set keeps depth (does not clear it).
+    bool clear_depth_write{true};
     // Draw-target pixel format (FBPPIXFORMAT 0xD2): 5650/5551/4444
     // targets quantize on write; RGBA8888 stores exactly.
     TextureFormat fb_format{TextureFormat::Rgba8888};
