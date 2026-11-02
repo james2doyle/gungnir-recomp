@@ -274,6 +274,9 @@ int main(int argc, char **argv) {
                 frame_out << ", \"blend\": " << (draw.state.blend.enabled ? "true" : "false")
                           << ", \"blend_factors\": [" << static_cast<int>(draw.state.blend.source) << ", "
                           << static_cast<int>(draw.state.blend.destination) << "]"
+                          << ", \"blend_eq\": " << static_cast<int>(draw.state.blend.equation)
+                          << ", \"fix\": [\"0x" << std::hex << draw.state.blend.fixed_source
+                          << "\", \"0x" << draw.state.blend.fixed_destination << std::dec << "\"]"
                           << ", \"depth\": [" << (draw.state.depth_test ? "true" : "false") << ", "
                           << (draw.state.depth_write ? "true" : "false") << "]"
                           << ", \"cull\": " << static_cast<int>(draw.state.cull);
@@ -357,6 +360,9 @@ int main(int argc, char **argv) {
                 state.depth_write = draw.state.depth_write;
                 state.depth_function = draw.state.depth_function;
                 state.blend = draw.state.blend;
+                state.alpha_test = draw.state.alpha_test;
+                state.alpha_function = draw.state.alpha_function;
+                state.alpha_reference = draw.state.alpha_reference;
                 state.write_mask = draw.state.write_mask;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;

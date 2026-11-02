@@ -308,3 +308,22 @@ is modelled because the title only reads GPI.
   Vulkan (partial-byte masks fall back to full write — named gap).
   Our own additions: per-draw `draw_buffer`/`clear`/`write_mask` capture
   and `blend_factor_table` red-first contracts.
+
+### GE alpha-test + blend-clamp reference review (2026-11-01)
+
+- `pspsdk` (`src/gu/pspgu.h`): alpha-test enable/func/ref register layout
+  (`0x22`/`0xDB`), blend factor/equation codes (factors 6-9 doubled alpha,
+  `GU_ADD`=0). Behavioral reference only.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `setup_pipe` (alpha test decode, clears
+  disable tex/blend/alpha/depth-test), `blend_channel` clamp255 behavior.
+  Behavioral reference only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `put_px_rgba` (programmable alpha test, `clamp8`
+  blend channels). Behavioral reference only; no code copied.
+- Adopted: alpha-test decode into `DrawState` + software/Vulkan discard
+  (push-constant func/ref, pipeline-keyed), additive-clamp at 255 in the
+  software rasterizer, verified by `blend_factor_table`/`clear_and_write_mask`/
+  `alpha_test_decode` red-first gate plus software and Vulkan parity cases.
+  Pre-existing software/Vulkan overflow wrapped mod 256 (magenta band in
+  the event scene); both backends now agree with the references.

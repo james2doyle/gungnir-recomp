@@ -72,6 +72,16 @@ public final class GungnirActivity extends SDLActivity {
     }
 
     @Override
+    protected org.libsdl.app.SDLSurface createSDLSurface(android.content.Context context) {
+        // The guest clears alpha to zero over fullscreen regions (CLEAR mode
+        // alpha-only passes); a translucent surface would composite those
+        // pixels to black. Force the holder opaque: RGB is authoritative.
+        org.libsdl.app.SDLSurface surface = super.createSDLSurface(context);
+        surface.getHolder().setFormat(android.graphics.PixelFormat.OPAQUE);
+        return surface;
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);

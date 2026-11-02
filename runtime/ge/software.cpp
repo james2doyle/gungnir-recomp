@@ -73,7 +73,9 @@ std::uint32_t blend_channel(std::uint32_t source, std::uint32_t destination, Ble
     const std::uint32_t d = channel(destination, shift);
     switch (equation) {
     case BlendEquation::Add:
-        return (s * sf(source_factor, true) + d * sf(destination_factor, false)) / 255u;
+        // Clamp: factors can sum past 1.0 (One, Fix, doubled alpha), and the
+        // framebuffer holds 8 bits per channel (both reference impls clamp).
+        return std::min(255u, (s * sf(source_factor, true) + d * sf(destination_factor, false)) / 255u);
     case BlendEquation::Subtract:
         return std::max(0, static_cast<int>(s * sf(source_factor, true)) -
                                static_cast<int>(d * sf(destination_factor, false))) /

@@ -2,6 +2,10 @@
 
 layout(push_constant) uniform PushConstants {
     vec2 viewport;
+    // Alpha test: func < 0 disables, otherwise a GE compare code 0-7 and
+    // the reference in 0-1.
+    int atest_func;
+    float atest_ref;
 } pc;
 
 layout(location = 0) in vec2 in_position;

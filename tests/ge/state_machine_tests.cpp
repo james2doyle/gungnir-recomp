@@ -299,6 +299,28 @@ void clear_and_write_mask() {
     check(kept[0].state.write_mask == 0xFFFFFF00u, "PMASK latched as the write mask");
 }
 
+void alpha_test_decode() {
+    // 0x22 enables the test, 0xDB carries func/ref/mask. Previously this
+    // only logged alpha_test_unsupported and rendered unconditionally.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.command(command(CommandKind::State, 1u, 0x22u), view(memory));
+    machine.command(command(CommandKind::State, (6u | (128u << 8u) | (0xFFu << 16u)), 0xDBu),
+                    view(memory));
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    check(!draws.empty(), "alpha-tested draw emits");
+    if (draws.empty()) return;
+    check(draws[0].state.alpha_test, "alpha test enabled decoded");
+    check(draws[0].state.alpha_function == CompareFunc::Greater, "alpha func decoded");
+    check(draws[0].state.alpha_reference == 128u, "alpha reference decoded");
+}
+
 void bounded_texture_retention() {
     Memory memory(0x200000u);
     write_through_triangle(memory, 0x1000u);
@@ -369,6 +391,7 @@ int main() {
     scissor_and_gaps();
     blend_factor_table();
     clear_and_write_mask();
+    alpha_test_decode();
     bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";

@@ -268,6 +268,9 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.cull = in.cull;
         out.front_face = in.front_face;
         out.blend = in.blend;
+        out.alpha_test = in.alpha_test;
+        out.alpha_function = in.alpha_function;
+        out.alpha_reference = in.alpha_reference;
         out.write_mask = in.write_mask;
         out.texture = in.texture;
         out.texture_key = in.texture_key;

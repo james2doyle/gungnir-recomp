@@ -55,6 +55,9 @@ struct VulkanDrawState {
     CullMode cull{CullMode::None};
     FrontFace front_face{FrontFace::Clockwise};
     BlendState blend{};
+    bool alpha_test{};
+    CompareFunc alpha_function{CompareFunc::Greater};
+    std::uint8_t alpha_reference{};
     const TextureImage *texture{};
     std::uint64_t texture_key{};
     bool linear{};

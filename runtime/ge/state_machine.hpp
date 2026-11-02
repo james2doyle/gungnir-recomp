@@ -35,6 +35,9 @@ struct DrawState {
     CullMode cull{CullMode::None};
     FrontFace front_face{FrontFace::Clockwise};
     BlendState blend{};
+    bool alpha_test{};
+    CompareFunc alpha_function{CompareFunc::Greater};
+    std::uint8_t alpha_reference{};
     bool texture_enabled{};
     bool linear{};
     bool wrap_u{};

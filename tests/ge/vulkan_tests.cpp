@@ -330,6 +330,60 @@ void parity_tests() {
     check(backend.render_headless_draws(mask_calls, vulkan, error), error.c_str());
     compare_frames(mask_software, vulkan, 1, false, "write mask preserves masked channels");
 
+    // Alpha test: fragments below the reference are discarded on both
+    // backends. Pre-fix the Vulkan path had no discard and kept everything.
+    // Both targets clear black so a correct discard matches exactly.
+    Framebuffer atest_software(32, 32);
+    atest_software.clear(rgba8(0, 0, 0));
+    RasterState atest_state;
+    atest_state.alpha_test = true;
+    atest_state.alpha_function = CompareFunc::Greater;
+    atest_state.alpha_reference = 200;
+    SoftwareRasterizer atest_rasterizer(atest_software, atest_state);
+    std::array<ScreenVertex, 3> atest_sw;
+    for (std::size_t i = 0; i < 3; ++i) {
+        atest_sw[i] = {};
+        atest_sw[i].x = blend_positions[i][0];
+        atest_sw[i].y = blend_positions[i][1];
+        atest_sw[i].z = 0.5f;
+        atest_sw[i].inv_w = 1.0f;
+        atest_sw[i].color = {0.0f, 1.0f, 0.0f, 128.0f / 255.0f};
+    }
+    atest_rasterizer.draw_triangle(atest_sw[0], atest_sw[1], atest_sw[2]);
+    std::array<VulkanDrawVertex, 3> atest_vk;
+    for (std::size_t i = 0; i < 3; ++i)
+        atest_vk[i] = {blend_positions[i][0], blend_positions[i][1], 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 128.0f / 255.0f};
+    VulkanDrawState vk_atest;
+    vk_atest.alpha_test = true;
+    vk_atest.alpha_function = CompareFunc::Greater;
+    vk_atest.alpha_reference = 200;
+    check(backend.render_headless_draw(atest_vk, blend_indices, vk_atest, vulkan, error), error.c_str());
+    compare_frames(atest_software, vulkan, 1, false, "alpha test discards below reference");
+
+    // Additive overflow: software clamps at white; the Vulkan path must
+    // agree (UNORM blend clamps) rather than wrap mod 256. Two white-over-
+    // white passes separate clamp (255) from wrap (253) beyond tolerance.
+    // A solid-white quad avoids rasterizer interpolation differences.
+    const Quad white = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                  rgba8(255, 255, 255)});
+    Framebuffer clamp_software(32, 32);
+    clamp_software.clear(rgba8(0, 0, 0));
+    RasterState clamp_state;
+    clamp_state.blend.enabled = true;
+    clamp_state.blend.source = BlendFactor::One;
+    clamp_state.blend.destination = BlendFactor::One;
+    clamp_state.blend.equation = BlendEquation::Add;
+    SoftwareRasterizer clamp_rasterizer(clamp_software, clamp_state);
+    draw_quad_software(clamp_rasterizer, white);
+    draw_quad_software(clamp_rasterizer, white);
+    VulkanDrawState vk_clamp;
+    vk_clamp.blend = clamp_state.blend;
+    const std::array<VulkanDrawCall, 2> clamp_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(white.vk), white.indices, vk_clamp},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(white.vk), white.indices, vk_clamp}};
+    check(backend.render_headless_draws(clamp_calls, vulkan, error), error.c_str());
+    compare_frames(clamp_software, vulkan, 1, false, "additive overflow clamps on both");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

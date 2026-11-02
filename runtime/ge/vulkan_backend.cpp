@@ -140,7 +140,30 @@ std::uint64_t draw_pipeline_key(const VulkanDrawState &state) {
     if ((state.write_mask & 0xFF0000u) != 0xFF0000u) channels |= 4u;
     if ((state.write_mask & 0xFF000000u) != 0xFF000000u) channels |= 8u;
     key |= channels << 22u;
+    // Alpha test: enabled + func + reference all select the pipeline.
+    if (state.alpha_test) {
+        key |= 1ull << 26u;
+        key |= static_cast<std::uint64_t>(state.alpha_function) << 27u;
+        key |= static_cast<std::uint64_t>(state.alpha_reference) << 30u;
+    }
     return key;
+}
+
+// FIX blend factors read per-draw constants. Both present paths (headless
+// readback and swapchain) must set them; the shared parity test covers the
+// helper through either path.
+inline void maybe_set_blend_constants(VkCommandBuffer commands, const BlendState &blend) {
+    if (!blend.enabled ||
+        (blend.source != BlendFactor::Fix && blend.destination != BlendFactor::Fix))
+        return;
+    // FIX reads BLENDFIXEDA (source) or B (destination); when both sides are
+    // FIX with different registers the source wins (named gap).
+    const std::uint32_t fixed =
+        blend.source == BlendFactor::Fix ? blend.fixed_source : blend.fixed_destination;
+    const float constants[4] = {static_cast<float>(fixed & 255u) / 255.0f,
+                                static_cast<float>((fixed >> 8u) & 255u) / 255.0f,
+                                static_cast<float>((fixed >> 16u) & 255u) / 255.0f, 1.0f};
+    vkCmdSetBlendConstants(commands, constants);
 }
 
 bool result_ok(VkResult result, const char *operation, std::string &error) {
@@ -732,9 +755,9 @@ struct VulkanBackend::Impl {
         pipeline_layout_info.setLayoutCount = 1;
         pipeline_layout_info.pSetLayouts = &draw_descriptor_layout;
         VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset = 0;
-        push.size = sizeof(float) * 2u;
+        push.size = sizeof(float) * 4u;
         pipeline_layout_info.pushConstantRangeCount = 1;
         pipeline_layout_info.pPushConstantRanges = &push;
         if (!result_ok(vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &draw_pipeline_layout),
@@ -1520,7 +1543,8 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
     VkViewport viewport{0.0f, 0.0f, static_cast<float>(impl_->config.width), static_cast<float>(impl_->config.height),
                         0.0f, 1.0f};
     vkCmdSetViewport(impl_->command_buffer, 0, 1, &viewport);
-    const float push_constants[2] = {static_cast<float>(impl_->config.width), static_cast<float>(impl_->config.height)};
+    const float push_viewport[2] = {static_cast<float>(impl_->config.width),
+                                       static_cast<float>(impl_->config.height)};
     for (std::size_t i = 0; i < calls.size(); ++i) {
         if (pipelines[i] == VK_NULL_HANDLE || descriptors[i] == VK_NULL_HANDLE) continue;
         int x0 = calls[i].state.scissor_x1 == 0 && calls[i].state.scissor_y1 == 0 ? 0 : calls[i].state.scissor_x0;
@@ -1535,8 +1559,19 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         y1 = std::clamp(y1, 0, impl_->config.height);
         if (x1 <= x0 || y1 <= y0) continue;
         vkCmdBindPipeline(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
-        vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof push_constants, push_constants);
+        // Push-constant layout must match mesh.vert/mesh.frag: viewport
+        // floats, then the alpha-test func as int bits and ref as float.
+        const std::int32_t atest_func = calls[i].state.alpha_test
+                                            ? static_cast<std::int32_t>(calls[i].state.alpha_function)
+                                            : -1;
+        const float atest_ref = static_cast<float>(calls[i].state.alpha_reference) / 255.0f;
+        std::uint32_t push_words[4]{};
+        std::memcpy(&push_words[0], &push_viewport[0], 2u * sizeof(float));
+        std::memcpy(&push_words[2], &atest_func, sizeof(std::int32_t));
+        std::memcpy(&push_words[3], &atest_ref, sizeof(float));
+        vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof push_words, push_words);
         vkCmdBindDescriptorSets(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl_->draw_pipeline_layout, 0,
                                 1, &descriptors[i], 0, nullptr);
         const VkDeviceSize vertex_bind_offset = vertex_offsets[i] * sizeof(VulkanDrawVertex);
@@ -1545,19 +1580,7 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         vkCmdBindIndexBuffer(impl_->command_buffer, impl_->draw_index_buffer, index_bind_offset, VK_INDEX_TYPE_UINT16);
         VkRect2D scissor{{x0, y0}, {static_cast<std::uint32_t>(x1 - x0), static_cast<std::uint32_t>(y1 - y0)}};
         vkCmdSetScissor(impl_->command_buffer, 0, 1, &scissor);
-        if (calls[i].state.blend.enabled &&
-            (calls[i].state.blend.source == BlendFactor::Fix ||
-             calls[i].state.blend.destination == BlendFactor::Fix)) {
-            // FIX reads BLENDFIXEDA (source) or B (destination); when both
-            // sides are FIX with different registers the source wins (named gap).
-            const std::uint32_t fixed = calls[i].state.blend.source == BlendFactor::Fix
-                                            ? calls[i].state.blend.fixed_source
-                                            : calls[i].state.blend.fixed_destination;
-            const float constants[4] = {static_cast<float>(fixed & 255u) / 255.0f,
-                                        static_cast<float>((fixed >> 8u) & 255u) / 255.0f,
-                                        static_cast<float>((fixed >> 16u) & 255u) / 255.0f, 1.0f};
-            vkCmdSetBlendConstants(impl_->command_buffer, constants);
-        }
+        maybe_set_blend_constants(impl_->command_buffer, calls[i].state.blend);
         vkCmdDrawIndexed(impl_->command_buffer, static_cast<std::uint32_t>(calls[i].indices.size()), 1, 0, 0, 0);
     }
     vkCmdEndRenderPass(impl_->command_buffer);
@@ -1777,7 +1800,7 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
     VkViewport viewport{static_cast<float>(fitted.x), static_cast<float>(fitted.y),
                         static_cast<float>(fitted.width), static_cast<float>(fitted.height), 0.0f, 1.0f};
     vkCmdSetViewport(impl_->command_buffer, 0, 1, &viewport);
-    const float push_constants[2] = {static_cast<float>(virtual_width), static_cast<float>(virtual_height)};
+    const float push_viewport[2] = {static_cast<float>(virtual_width), static_cast<float>(virtual_height)};
     for (std::size_t i = 0; i < calls.size(); ++i) {
         if (pipelines[i] == VK_NULL_HANDLE || descriptors[i] == VK_NULL_HANDLE) continue;
         const bool scissor_unset = calls[i].state.scissor_x1 == 0 && calls[i].state.scissor_y1 == 0;
@@ -1796,8 +1819,17 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         const int x1 = rect.x1;
         const int y1 = rect.y1;
         vkCmdBindPipeline(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
-        vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           sizeof push_constants, push_constants);
+        const std::int32_t swap_atest_func = calls[i].state.alpha_test
+                                                 ? static_cast<std::int32_t>(calls[i].state.alpha_function)
+                                                 : -1;
+        const float swap_atest_ref = static_cast<float>(calls[i].state.alpha_reference) / 255.0f;
+        std::uint32_t swap_push_words[4]{};
+        std::memcpy(&swap_push_words[0], &push_viewport[0], 2u * sizeof(float));
+        std::memcpy(&swap_push_words[2], &swap_atest_func, sizeof(std::int32_t));
+        std::memcpy(&swap_push_words[3], &swap_atest_ref, sizeof(float));
+        vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof swap_push_words, swap_push_words);
         vkCmdBindDescriptorSets(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl_->draw_pipeline_layout,
                                 0, 1, &descriptors[i], 0, nullptr);
         const VkDeviceSize vertex_bind_offset = vertex_offsets[i] * sizeof(VulkanDrawVertex);
@@ -1807,6 +1839,7 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
                              VK_INDEX_TYPE_UINT16);
         VkRect2D scissor{{x0, y0}, {static_cast<std::uint32_t>(x1 - x0), static_cast<std::uint32_t>(y1 - y0)}};
         vkCmdSetScissor(impl_->command_buffer, 0, 1, &scissor);
+        maybe_set_blend_constants(impl_->command_buffer, calls[i].state.blend);
         vkCmdDrawIndexed(impl_->command_buffer, static_cast<std::uint32_t>(calls[i].indices.size()), 1, 0, 0, 0);
     }
     vkCmdEndRenderPass(impl_->command_buffer);

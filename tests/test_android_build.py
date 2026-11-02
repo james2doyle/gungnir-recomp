@@ -48,6 +48,15 @@ def usable_java_home():
 
 
 class TestAndroidBuildSkeleton(unittest.TestCase):
+    def test_activity_surface_is_opaque(self):
+        # The guest clears alpha to zero over fullscreen regions (CLEAR mode
+        # alpha-only passes); a translucent SurfaceView would composite those
+        # regions to black. The activity must force the SDL surface opaque.
+        activity = (ANDROID / "app" / "src" / "main" / "java" / "com" / "gungnir" / "recomp"
+                    / "GungnirActivity.java").read_text()
+        self.assertIn("createSDLSurface", activity, "activity owns the SDL surface creation")
+        self.assertIn("PixelFormat.OPAQUE", activity, "surface holder forced opaque")
+
     def test_wrapper_is_sha_pinned(self):
         self.assertTrue(WRAPPER.is_file(), "gradle-wrapper.properties exists")
         text = WRAPPER.read_text()

@@ -140,7 +140,17 @@ void blending() {
     framebuffer.clear(rgba8(0, 0, 0));
     rasterizer.state().blend.source = BlendFactor::DoubleSrcAlpha;
     rasterizer.state().blend.destination = BlendFactor::Zero;
-    // Write mask: bits set keep the destination. RGB-only source over
+    full_screen(rasterizer, rgba8(255, 0, 0, 128));
+    check(framebuffer.color_at(0, 0) == rgba8(255, 0, 0, 128), "doubled source alpha saturates");
+
+    // Additive overflow clamps instead of wrapping mod 256 (both reference
+    // impls clamp). White over white stays white instead of wrapping.
+    framebuffer.clear(rgba8(0, 0, 0));
+    rasterizer.state().blend.source = BlendFactor::One;
+    rasterizer.state().blend.destination = BlendFactor::One;
+    rasterizer.state().blend.equation = BlendEquation::Add;
+    full_screen(rasterizer, rgba8(255, 255, 255));
+    check(framebuffer.color_at(0, 0) == rgba8(255, 255, 255, 255), "additive blend clamps at white");
     // blue keeps blue's alpha; a full-keep mask leaves the target alone.
     framebuffer.clear(rgba8(0, 0, 255, 128));
     rasterizer.state().blend.enabled = false;

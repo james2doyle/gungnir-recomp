@@ -449,7 +449,13 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.blend.fixed_source = reg_param(0xE0u);
         draw.state.blend.fixed_destination = reg_param(0xE1u);
     }
-    if (reg_on(0x22u)) gap("alpha_test_unsupported");
+    draw.state.alpha_test = reg_on(0x22u) && !draw.state.clear;
+    if (draw.state.alpha_test) {
+        const std::uint32_t alpha = reg_param(0xDBu);
+        draw.state.alpha_function = compare_from_ge(alpha & 7u);
+        draw.state.alpha_reference = static_cast<std::uint8_t>((alpha >> 8u) & 0xFFu);
+        // Alpha mask (bits 16-23) not applied yet (named gap if ever observed).
+    }
     if (reg_on(0x17u) && !layout_.through && (reg_param(0x50u) & 1u) == 0u) gap("flat_shading_unsupported");
     resolve_texture(memory, draw.state);
 
