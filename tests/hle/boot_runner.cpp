@@ -407,13 +407,32 @@ int main(int argc, char **argv) {
                         ? static_cast<gungnir::ge::TextureFormat>(draw.state.draw_format)
                         : gungnir::ge::TextureFormat::Rgba8888);
                 gungnir::ge::SoftwareRasterizer rasterizer(entry.surface, state);
-                for (std::size_t i = 0; i + 2u < draw.indices.size(); i += 3u) {
-                    const auto a = draw.indices[i];
-                    const auto b = draw.indices[i + 1u];
-                    const auto c = draw.indices[i + 2u];
-                    if (a >= draw.vertices.size() || b >= draw.vertices.size() || c >= draw.vertices.size())
-                        continue;
-                    rasterizer.draw_triangle(draw.vertices[a], draw.vertices[b], draw.vertices[c]);
+                switch (draw.primitive) {
+                case gungnir::ge::Primitive::Points:
+                    for (const std::uint16_t a : draw.indices) {
+                        if (a >= draw.vertices.size()) continue;
+                        rasterizer.draw_point(draw.vertices[a]);
+                    }
+                    break;
+                case gungnir::ge::Primitive::Lines:
+                case gungnir::ge::Primitive::LineStrip:
+                    for (std::size_t i = 0; i + 1u < draw.indices.size(); i += 2u) {
+                        const auto a = draw.indices[i];
+                        const auto b = draw.indices[i + 1u];
+                        if (a >= draw.vertices.size() || b >= draw.vertices.size()) continue;
+                        rasterizer.draw_line(draw.vertices[a], draw.vertices[b]);
+                    }
+                    break;
+                default:
+                    for (std::size_t i = 0; i + 2u < draw.indices.size(); i += 3u) {
+                        const auto a = draw.indices[i];
+                        const auto b = draw.indices[i + 1u];
+                        const auto c = draw.indices[i + 2u];
+                        if (a >= draw.vertices.size() || b >= draw.vertices.size() || c >= draw.vertices.size())
+                            continue;
+                        rasterizer.draw_triangle(draw.vertices[a], draw.vertices[b], draw.vertices[c]);
+                    }
+                    break;
                 }
                 entry.dirty = true;
             }

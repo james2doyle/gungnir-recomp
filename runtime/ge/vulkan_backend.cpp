@@ -152,6 +152,13 @@ std::uint64_t draw_pipeline_key(const VulkanDrawState &state) {
     key |= static_cast<std::uint64_t>(state.tex_func) << 39u;
     if (state.tex_rgba) key |= 1ull << 42u;
     if (state.color_double) key |= 1ull << 43u;
+    // Topology: triangle, line-list, or point-list pipelines.
+    const std::uint64_t topology = state.primitive == Primitive::Points
+                                       ? 2u
+                                       : (state.primitive == Primitive::Lines || state.primitive == Primitive::LineStrip
+                                              ? 1u
+                                              : 0u);
+    key |= topology << 44u;
     return key;
 }
 
@@ -828,7 +835,11 @@ struct VulkanBackend::Impl {
 
         VkPipelineInputAssemblyStateCreateInfo input_assembly{};
         input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        input_assembly.topology = state.primitive == Primitive::Points   ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
+                                  : state.primitive == Primitive::Lines ||
+                                          state.primitive == Primitive::LineStrip
+                                      ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+                                      : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
         VkPipelineViewportStateCreateInfo viewport_state{};
         viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;

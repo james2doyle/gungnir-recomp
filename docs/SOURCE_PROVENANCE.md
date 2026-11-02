@@ -422,6 +422,25 @@ is modelled because the title only reads GPI.
   the known fade delta); the change is preventive for areas using
   decal/replace/blend/add.
 
+### GE points/lines reference review (2026-11-02)
+
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `draw_line_vtx`/`draw_point` (all primitives
+  rasterised, perspective divide per vertex, fog/alpha/depth per pixel).
+  Behavioral reference only; no code copied.
+- `highcmd/chinatown-wars-psp-recomp` software path: line/point
+  rasterization instead of gaps. Behavioral reference only; no code
+  copied.
+- Adopted: emit Points as indexed vertices, Lines as pairs and
+  LineStrip as segment lists at draw time (behind-camera verts skipped
+  with named w-nonpositive gaps; no culling on lines); Vulkan
+  point/line-list topologies keyed into the pipeline; software path
+  already rasterized lines/points. Verified by a line-strip emit
+  contract (observed red: gap, no draw) plus old gap-pin updates and
+  a horizontal-line Vulkan parity case (observed red: mashed image).
+  The game's rain is a 256-segment line draw now rasterized instead
+  of dropped; the every-frame primitive_unsupported:lines gap is gone.
+
 ### GE framebuffer-format reference review (2026-11-02)
 
 - `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):

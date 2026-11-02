@@ -72,6 +72,10 @@ struct VulkanDrawState {
     std::uint32_t tex_env{};
     // Draw-target pixel format (FBPPIXFORMAT 0xD2).
     TextureFormat fb_format{TextureFormat::Rgba8888};
+    // Primitive topology: strips/fans arrive pre-expanded as triangle
+    // lists, line strips as segment lists; points/lines need their own
+    // pipeline topology.
+    Primitive primitive{Primitive::Triangles};
     // Guest draw buffer (FBP 0x9C offset) this draw targets. The backend
     // renders only the display buffer's group (legacy: everything).
     std::uint32_t draw_buffer{};

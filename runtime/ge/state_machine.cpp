@@ -444,6 +444,7 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     draw.state.cull = state.cull;
     draw.state.front_face = state.front_face;
     draw.state.draw_buffer = reg_param(0x9Cu) & 0x00FFFFFFu;
+
     draw.state.draw_format = reg_param(0xD2u) & 7u;
     draw.state.clear = (reg_param(0xD3u) & 1u) != 0u;
     if (draw.state.clear) {
@@ -562,9 +563,35 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         break;
     }
     case Primitive::Points:
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (!layout_.through && clips[i].clip[3] <= 0.0f) {
+                gap("point_w_nonpositive");
+                continue;
+            }
+            draw.indices.push_back(append_screen(clips[i]));
+        }
+        break;
     case Primitive::Lines:
+        for (std::uint32_t i = 0; i + 1u < count; i += 2u) {
+            if (!layout_.through && (clips[i].clip[3] <= 0.0f || clips[i + 1u].clip[3] <= 0.0f)) {
+                gap("line_w_nonpositive");
+                continue;
+            }
+            draw.indices.push_back(append_screen(clips[i]));
+            draw.indices.push_back(append_screen(clips[i + 1u]));
+        }
+        break;
     case Primitive::LineStrip:
-        gap(std::string("primitive_unsupported:") + primitive_name(command.primitive));
+        // Expanded to a segment list here so the rasterizers only ever
+        // see point/line-list topology.
+        for (std::uint32_t i = 0; i + 1u < count; ++i) {
+            if (!layout_.through && (clips[i].clip[3] <= 0.0f || clips[i + 1u].clip[3] <= 0.0f)) {
+                gap("line_w_nonpositive");
+                continue;
+            }
+            draw.indices.push_back(append_screen(clips[i]));
+            draw.indices.push_back(append_screen(clips[i + 1u]));
+        }
         break;
     case Primitive::Invalid:
         gap("primitive_invalid");

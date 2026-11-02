@@ -204,14 +204,15 @@ void scissor_and_gaps() {
     machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
     machine.command(command(CommandKind::Primitive, (1u << 16u) | 4u, 0x04u), view(memory));
 
-    check(draws.size() == 1u, "line primitive is not a Vulkan draw");
+    check(draws.size() == 2u, "lines primitive emits a draw");
     check(draws[0].state.scissor_x0 == 20 && draws[0].state.scissor_y0 == 100 &&
               draws[0].state.scissor_x1 == 221 && draws[0].state.scissor_y1 == 201,
         "scissor decoded");
     check(draws[0].state.blend.enabled && draws[0].state.blend.source == BlendFactor::SrcAlpha &&
               draws[0].state.blend.destination == BlendFactor::OneMinusSrcAlpha,
         "blend decoded");
-    check(!gaps.empty(), "unsupported primitive is a named gap");
+    for (const std::string &gap : gaps)
+        check(gap.find("primitive_unsupported") == std::string::npos, "lines are no longer a gap");
 }
 
 void blend_factor_table() {
@@ -364,6 +365,32 @@ void fog_decode() {
     if (world_draws.empty()) return;
     check(world_draws[0].state.fog_enabled, "transform-mode fog enabled decoded");
     check(world_draws[0].state.fog_color == 0x0000FF00u, "fog color latched");
+}
+
+void line_strip_emits() {
+    // Points/lines used to be a named gap (primitive_unsupported) and were
+    // dropped; they now emit draws the rasterizers can consume.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    std::vector<std::string> gaps;
+    machine.set_gap_sink([&gaps](const std::string &message) { gaps.push_back(message); });
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (2u << 16u) | 3u, 0x04u), view(memory));
+    check(draws.size() == 1u, "one line-strip draw");
+    if (draws.empty()) return;
+    check(draws[0].primitive == Primitive::LineStrip, "line-strip primitive preserved");
+    check(draws[0].indices.size() == 4u, "strip of 3 expands to two segments");
+    if (draws[0].indices.size() == 4u)
+        check(draws[0].indices[0] == 0u && draws[0].indices[1] == 1u && draws[0].indices[2] == 2u &&
+                  draws[0].indices[3] == 3u,
+              "segments walk the strip in order");
+    for (const std::string &gap : gaps)
+        check(gap.find("primitive_unsupported") == std::string::npos, "no unsupported-primitive gap");
 }
 
 void texwrap_decode() {
@@ -524,6 +551,7 @@ int main() {
     alpha_test_decode();
     fog_decode();
     texwrap_decode();
+    line_strip_emits();
     texfunc_decode();
     bounded_texture_retention();
     if (failures != 0) {

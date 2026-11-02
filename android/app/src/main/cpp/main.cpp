@@ -285,6 +285,7 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.tex_env = in.tex_env;
         out.fb_format = in.draw_format <= 3u ? static_cast<gungnir::ge::TextureFormat>(in.draw_format)
                                             : gungnir::ge::TextureFormat::Rgba8888;
+        out.primitive = source.primitive;
         out.write_mask = in.write_mask;
         out.texture = in.texture;
         out.texture_key = in.texture_key;

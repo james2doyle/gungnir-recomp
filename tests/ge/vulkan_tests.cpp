@@ -568,6 +568,32 @@ void parity_tests() {
     check(backend.render_headless_draws(fmt_calls, vulkan, error, 0x300u), error.c_str());
     compare_frames(*fmt_router.display(0x300u), vulkan, 1, false, "5650 display target quantizes on both");
 
+    // Lines: a horizontal white line must match between backends.
+    // Pre-fix the Vulkan path had triangle-only topology and the state
+    // machine dropped lines entirely.
+    Framebuffer line_software(32, 32);
+    line_software.clear(rgba8(0, 0, 0));
+    RasterState line_state;
+    SoftwareRasterizer line_rasterizer(line_software, line_state);
+    ScreenVertex line_a = {};
+    line_a.x = 0.0f;
+    // y=16.25 sits unambiguously inside row 16 (an exact integer y lies
+    // on a row boundary, where GPU tie-breaking differs by a row).
+    line_a.y = 16.25f;
+    line_a.z = 0.5f;
+    line_a.inv_w = 1.0f;
+    line_a.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    ScreenVertex line_b = line_a;
+    line_b.x = 32.0f;
+    line_rasterizer.draw_line(line_a, line_b);
+    const std::array<VulkanDrawVertex, 2> line_vk{{{0.0f, 16.25f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f},
+                                                  {32.0f, 16.25f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f}}};
+    const std::array<std::uint16_t, 2> line_indices{0, 1};
+    VulkanDrawState vk_line;
+    vk_line.primitive = Primitive::Lines;
+    check(backend.render_headless_draw(line_vk, line_indices, vk_line, vulkan, error, 0u), error.c_str());
+    compare_frames(line_software, vulkan, 1, false, "horizontal line matches software");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;
