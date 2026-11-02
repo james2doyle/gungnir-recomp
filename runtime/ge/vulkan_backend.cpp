@@ -617,7 +617,7 @@ struct VulkanBackend::Impl {
         texture = GpuTexture{};
     }
 
-    bool create_gpu_texture(const TextureImage &source, bool linear, bool wrap_u, bool wrap_v, GpuTexture &texture,
+    bool create_gpu_texture(const TextureImage &source, bool linear, bool clamp_u, bool clamp_v, GpuTexture &texture,
                             std::string &error) {
         if (source.width <= 0 || source.height <= 0 ||
             source.pixels.size() != static_cast<std::size_t>(source.width) * static_cast<std::size_t>(source.height)) {
@@ -645,8 +645,8 @@ struct VulkanBackend::Impl {
         sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         sampler_info.magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         sampler_info.minFilter = sampler_info.magFilter;
-        sampler_info.addressModeU = wrap_u ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler_info.addressModeV = wrap_v ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_info.addressModeU = clamp_u ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.addressModeV = clamp_v ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
         sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         sampler_info.maxLod = 0.0f;
@@ -930,7 +930,7 @@ struct VulkanBackend::Impl {
             return &found->second;
         }
         GpuTexture texture;
-        if (!create_gpu_texture(*state.texture, state.linear, state.wrap_u, state.wrap_v, texture, error)) return nullptr;
+        if (!create_gpu_texture(*state.texture, state.linear, state.clamp_u, state.clamp_v, texture, error)) return nullptr;
         texture.bytes = static_cast<std::size_t>(state.texture->width) *
                         static_cast<std::size_t>(state.texture->height) * sizeof(std::uint32_t);
         texture_bytes += texture.bytes;

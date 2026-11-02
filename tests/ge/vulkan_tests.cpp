@@ -402,6 +402,57 @@ void parity_tests() {
     check(backend.render_headless_draw(fog_quad.vk, fog_quad.indices, vk_fog, vulkan, error), error.c_str());
     compare_frames(fog_software, vulkan, 1, false, "fog mixes toward the fog color on both");
 
+    // Repeat wrap with out-of-range UVs: the game's world quads carry
+    // scaled/offset UVs like (1.75, -4.13). Software repeats; pre-fix the
+    // Vulkan sampler clamped (clamp flags were fed to repeat-semantics
+    // params), stretching edge texels instead of tiling.
+    std::vector<std::uint8_t> wrap_data(2u * 2u * 4u);
+    const std::uint32_t wrap_colors[4] = {rgba8(255, 0, 0), rgba8(0, 255, 0), rgba8(0, 0, 255),
+                                          rgba8(255, 255, 255)};
+    for (int i = 0; i < 4; ++i) {
+        wrap_data[static_cast<std::size_t>(i) * 4u] = static_cast<std::uint8_t>(wrap_colors[i] & 0xFFu);
+        wrap_data[static_cast<std::size_t>(i) * 4u + 1u] =
+            static_cast<std::uint8_t>((wrap_colors[i] >> 8u) & 0xFFu);
+        wrap_data[static_cast<std::size_t>(i) * 4u + 2u] =
+            static_cast<std::uint8_t>((wrap_colors[i] >> 16u) & 0xFFu);
+        wrap_data[static_cast<std::size_t>(i) * 4u + 3u] = 255u;
+    }
+    TextureState wrap_state;
+    wrap_state.format = TextureFormat::Rgba8888;
+    wrap_state.width = 2;
+    wrap_state.height = 2;
+    wrap_state.buffer_width = 2;
+    wrap_state.clamp_u = false;
+    wrap_state.clamp_v = false;
+    wrap_state.linear = false;
+    const Texture wrap_texture(wrap_state, wrap_data);
+    TextureImage wrap_image;
+    wrap_image.width = 2;
+    wrap_image.height = 2;
+    wrap_texture.decode(wrap_image.pixels);
+    Quad wrap_quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                rgba8(255, 255, 255)});
+    const std::array<std::array<float, 2>, 4> wrap_uvs{{{0.0f, 0.0f}, {2.0f, 0.0f}, {2.0f, 2.0f}, {0.0f, 2.0f}}};
+    for (std::size_t i = 0; i < 4; ++i) {
+        wrap_quad.sw[i].texcoord = {wrap_uvs[i][0], wrap_uvs[i][1], 1.0f};
+        wrap_quad.vk[i].u = wrap_uvs[i][0];
+        wrap_quad.vk[i].v = wrap_uvs[i][1];
+    }
+    Framebuffer wrap_software(32, 32);
+    wrap_software.clear(rgba8(0, 0, 0));
+    RasterState wrap_raster_state;
+    wrap_raster_state.texture_enabled = true;
+    wrap_raster_state.texture = &wrap_texture;
+    SoftwareRasterizer wrap_rasterizer(wrap_software, wrap_raster_state);
+    draw_quad_software(wrap_rasterizer, wrap_quad);
+    VulkanDrawState vk_wrap;
+    vk_wrap.texture = &wrap_image;
+    vk_wrap.texture_key = wrap_texture.content_key();
+    vk_wrap.clamp_u = false;
+    vk_wrap.clamp_v = false;
+    check(backend.render_headless_draw(wrap_quad.vk, wrap_quad.indices, vk_wrap, vulkan, error), error.c_str());
+    compare_frames(wrap_software, vulkan, 1, false, "repeat wrap tiles out-of-range UVs on both");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

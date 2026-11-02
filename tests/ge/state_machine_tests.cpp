@@ -366,6 +366,44 @@ void fog_decode() {
     check(world_draws[0].state.fog_color == 0x0000FF00u, "fog color latched");
 }
 
+void texwrap_decode() {
+    // TEXWRAP (0xC7) bit 0 clamps U, bit 8 clamps V; clear repeats. The
+    // flags ride DrawState as clamp_u/v (true = clamp, matching the
+    // reference tex_coord). A prior bug fed them into repeat-semantics
+    // Vulkan sampler params, inverting wrap on the GPU path.
+    const auto textured_draw = [](std::uint32_t wrap) {
+        Memory memory;
+        write_through_triangle(memory, 0x1000u);
+        for (int i = 0; i < 4; ++i)
+            memory.store32(0x3000u + static_cast<std::uint32_t>(i) * 4u, 0xFF000000u);
+        StateMachine machine;
+        std::vector<Draw> draws;
+        machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+        const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+            machine.command(command(kind, argument, opcode), view(memory));
+        };
+        send(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u), 0x12u);
+        send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+        send(CommandKind::State, 1u, 0x1Eu);
+        send(CommandKind::State, 0x3000u, 0xA0u);
+        send(CommandKind::State, 2u, 0xA8u);
+        send(CommandKind::State, 0x0101u, 0xB8u);
+        send(CommandKind::State, 3u, 0xC3u);
+        send(CommandKind::State, 0u, 0xC2u);
+        send(CommandKind::State, wrap, 0xC7u);
+        send(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u);
+        return draws;
+    };
+    auto repeat = textured_draw(0u);
+    check(!repeat.empty() && repeat[0].state.texture != nullptr, "repeat-mode textured draw emits");
+    if (!repeat.empty()) check(!repeat[0].state.clamp_u && !repeat[0].state.clamp_v, "wrap 0x00 repeats both axes");
+    auto clamp = textured_draw(0x0101u);
+    check(!clamp.empty() && clamp[0].state.texture != nullptr, "clamp-mode textured draw emits");
+    if (!clamp.empty()) check(clamp[0].state.clamp_u && clamp[0].state.clamp_v, "wrap 0x0101 clamps both axes");
+    auto split = textured_draw(0x0100u);
+    if (!split.empty()) check(!split[0].state.clamp_u && split[0].state.clamp_v, "wrap 0x0100 clamps V only");
+}
+
 void bounded_texture_retention() {
     Memory memory(0x200000u);
     write_through_triangle(memory, 0x1000u);
@@ -438,6 +476,7 @@ int main() {
     clear_and_write_mask();
     alpha_test_decode();
     fog_decode();
+    texwrap_decode();
     bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";

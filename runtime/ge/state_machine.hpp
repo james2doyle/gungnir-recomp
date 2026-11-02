@@ -40,8 +40,9 @@ struct DrawState {
     std::uint8_t alpha_reference{};
     bool texture_enabled{};
     bool linear{};
-    bool wrap_u{};
-    bool wrap_v{};
+    // TEXWRAP (0xC7) clamp flags: true means clamp to edge, false repeats.
+    bool clamp_u{};
+    bool clamp_v{};
     const TextureImage *texture{};
     const Texture *texture_cpu{};
     std::shared_ptr<const TextureImage> texture_storage;

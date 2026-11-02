@@ -350,3 +350,26 @@ is modelled because the title only reads GPI.
   a Vulkan parity case. Real-corpus event and battle frames enable fog on
   most draws but with end=20000/slope=1e-4 the factor is 1 everywhere, so
   they render identically (no wash introduced, no regression).
+
+### GE TEXSCALE/wrap reference review (2026-11-02)
+
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `TEXSCALEU/V` (0x48/0x49) + `TEXOFFSETU/V`
+  (0x4A/0x4B) applied to mode-0 UVs in texel units
+  (`(u*scale+off)*tex_w`, perspective divide at the pixel),
+  `tex_coord` (TEXWRAP 0xC7 bit set = clamp, clear = power-of-2 repeat).
+  Behavioral reference only; no code copied.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` (through UVs stay texels, normalized at
+  raster by texture w/h; transform UVs normalized; `texClampU/V`
+  select clamp vs wrap). Behavioral reference only; no code copied.
+- Finding: vertex-stage TEXSCALE/OFFSET was already correct (frame JSON
+  shows scaled UVs like 1.75/-4.13; software math is equivalent to the
+  references). The actual defect was the Vulkan wrap mode: `clamp_u/v`
+  (TEXWRAP semantics) were fed into `REPEAT`-semantics sampler params,
+  so repeat draws clamped to edges and clamp draws repeated on both
+  Vulkan paths (device + headless). Renamed `wrap_u/v` to `clamp_u/v`
+  across `DrawState`/`VulkanDrawState`/sampler/Android bridge and fixed
+  the address modes. Verified by a repeat-wrap parity case with 0..2 UVs
+  (observed red: Vulkan stretched edges), plus a no-regression software
+  re-render (byte-identical) and PPSSPP side-by-side.

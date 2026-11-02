@@ -219,6 +219,7 @@ TransformState StateMachine::transform_state() const {
     state.viewport.offset_y = static_cast<float>(reg_param(0x4Du) & 0xFFFFu) / 16.0f;
     state.texture_map.enabled = reg_on(0x1Eu);
     state.texture_map.scale = {reg_float(0x48u), reg_float(0x49u)};
+
     state.texture_map.offset = {reg_float(0x4Au), reg_float(0x4Bu)};
     const std::uint32_t map = reg_param(0xC0u);
     state.texture_map.mode = (map & 3u) == 1u ? TextureMode::Matrix : TextureMode::Uv;
@@ -359,8 +360,8 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     state.texture_cpu_storage = cpu;
     state.texture_key = key;
     state.linear = texture_state.linear;
-    state.wrap_u = texture_state.clamp_u;
-    state.wrap_v = texture_state.clamp_v;
+    state.clamp_u = texture_state.clamp_u;
+    state.clamp_v = texture_state.clamp_v;
     return state.texture;
 }
 

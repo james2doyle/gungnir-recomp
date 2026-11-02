@@ -277,8 +277,8 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.texture = in.texture;
         out.texture_key = in.texture_key;
         out.linear = in.linear;
-        out.wrap_u = in.wrap_u;
-        out.wrap_v = in.wrap_v;
+        out.clamp_u = in.clamp_u;
+        out.clamp_v = in.clamp_v;
         calls.push_back({owned[i].vertices, owned[i].indices, out});
     }
     return backend.render_swapchain_draws(calls, error);
