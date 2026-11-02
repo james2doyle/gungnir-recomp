@@ -101,11 +101,14 @@ void through_triangle() {
     machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
                            0x12u), view(memory));
     machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::State, 1u, 0x23u), view(memory));  // ZTESTENABLE
     machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
 
     check(draws.size() == 1u, "one through-mode draw");
     if (draws.size() != 1u) return;
     const Draw &draw = draws[0];
+    check(draw.state.depth_test == false,
+        "through draws ignore the game depth-test enable (Yakumo parity)");
     check(draw.vertices.size() == 3u, "three screen vertices");
     check(draw.indices.size() == 3u, "three indices");
     check(close(draw.vertices[0].x, 10.0f) && close(draw.vertices[0].y, 20.0f),

@@ -64,8 +64,22 @@ void mix_u32(std::uint64_t &hash, std::uint32_t value) {
 }
 
 void mix_span(std::uint64_t &hash, std::span<const std::uint8_t> bytes) {
+    // Battle scenes hash megabytes of texture bytes per frame (one full hash
+    // per draw with no reuse), so the bulk path mixes 8 bytes per multiply.
+    // Lane values differ from the old byte loop, which is fine: content keys
+    // are runtime-only (snapshots persist GE registers, never these keys).
     mix_u32(hash, static_cast<std::uint32_t>(bytes.size()));
-    for (const std::uint8_t byte : bytes) mix_byte(hash, byte);
+    const std::uint8_t *data = bytes.data();
+    std::size_t size = bytes.size();
+    while (size >= 8u) {
+        std::uint64_t lane = 0u;
+        std::memcpy(&lane, data, sizeof(lane));
+        hash ^= lane;
+        hash *= 1099511628211ull;
+        data += 8u;
+        size -= 8u;
+    }
+    for (std::size_t i = 0; i < size; ++i) mix_byte(hash, data[i]);
 }
 
 std::uint32_t palette_color(std::uint32_t index, std::uint32_t format, std::span<const std::uint8_t> clut) {

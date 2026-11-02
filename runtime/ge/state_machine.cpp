@@ -438,7 +438,9 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.scissor_x1 = static_cast<int>(kDisplayWidth);
         draw.state.scissor_y1 = static_cast<int>(kDisplayHeight);
     }
-    draw.state.depth_test = reg_on(0x23u);
+    // PSP through draws (UI, sprites) never depth-test: the enable follows
+    // test_enabled AND NOT through (Yakumo StateMappingVulkan parity).
+    draw.state.depth_test = reg_on(0x23u) && !layout_.through;
     draw.state.depth_write = !reg_on(0xE7u);
     draw.state.depth_function = compare_from_ge(reg_param(0xDEu));
     draw.state.cull = state.cull;

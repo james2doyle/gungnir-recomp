@@ -278,6 +278,38 @@ void cache_keys() {
           "invalidate notifies the backend upload seam");
 }
 
+void large_content_keys() {
+    // Battle-sized texture (512x512 RGBA8, like the scene that profiled at
+    // 83% CPU in content_key): the key must stay sensitive to a single byte
+    // anywhere in the span, including word tails and odd sizes.
+    TextureState state = texture_state(TextureFormat::Rgba8888, 512, 512, 512);
+    std::vector<std::uint8_t> data(512u * 512u * 4u, 0u);
+    for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<std::uint8_t>((i * 31u + 7u) & 0xFFu);
+    const std::uint64_t key = Texture(state, data).content_key();
+    check(key == Texture(state, data).content_key(), "large content key is deterministic");
+
+    for (const std::size_t offset : {std::size_t{0}, data.size() / 2u, data.size() - 1u, data.size() - 7u}) {
+        std::vector<std::uint8_t> changed = data;
+        changed[offset] ^= 0xFFu;
+        check(Texture(state, changed).content_key() != key, "single texel byte changes the large content key");
+    }
+    std::vector<std::uint8_t> grown = data;
+    grown.push_back(0u);
+    check(Texture(state, grown).content_key() != key, "length changes the large content key");
+    // Odd sizes exercise the sub-word tail: every tail byte must matter.
+    for (const std::size_t extra : {std::size_t{1}, std::size_t{3}, std::size_t{7}, std::size_t{9}}) {
+        std::vector<std::uint8_t> odd(data.begin(), data.begin() + 1000u + extra);
+        const std::uint64_t odd_key = Texture(state, odd).content_key();
+        std::vector<std::uint8_t> odd_changed = odd;
+        odd_changed.back() ^= 0xFFu;
+        check(Texture(state, odd_changed).content_key() != odd_key, "tail byte changes the odd-size content key");
+    }
+    std::vector<std::uint8_t> empty;
+    const std::uint64_t empty_key = Texture(state, empty).content_key();
+    check(empty_key == Texture(state, empty).content_key(), "empty content key is deterministic");
+    check(empty_key != key, "empty content differs from full content");
+}
+
 void range_invalidation() {
     std::vector<std::uint8_t> data(2u * 2u * 4u, 0u);
     store_u32(data, 0u, rgba8(255u, 0u, 0u));
@@ -311,6 +343,7 @@ int main() {
         swizzle_blocks();
         buffer_width_and_sampling();
         cache_keys();
+        large_content_keys();
         range_invalidation();
         std::cout << "ge_texture_tests: OK\n";
         return 0;

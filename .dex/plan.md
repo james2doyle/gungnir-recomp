@@ -1,9 +1,9 @@
 # Gungnir Recomp — Master Plan
 
 **Target:** Gungnir (USA) — *Gungnir: Inferno of the Demon Lance and the War of Heroes*, ULUS-10592
-**Goal:** Static recompilation of the game's Allegrex code to native C++, running on Android — from the user's own `game.chd` to a boot on an adb-connected device.
-**First milestone (locked):** title screen rendered on device + menu input navigable (touch + gamepad).
-**Plan date:** 2026-10-30. Source: 14-project discovery survey (see §3).
+**Goal:** Static recompilation of the game's Allegrex code to native C++, running on Android — from the user's own `game.chd` to real gameplay on an adb-connected device.
+**Current milestone (locked):** M4 QA close-out (gameplay into battles verified on device; dated QA reports pending) with battle-scene performance work feeding M5.
+**Plan date:** 2026-10-30; amended 2026-11-02 (T15 done, T16–T18 filed, M4 scope achieved). Source: 14-project discovery survey (see §3).
 
 ---
 
@@ -311,6 +311,27 @@ records what it used.
 **Refs:** plan §8.3, hst-decomp (evidence labels and milestone ratchet), azazel6 (evidence labels); the device scripts and QA templates already in `docs/qa/`.
 **Gotchas:** §7A.4 (public claims vs tree), §7E.1 (Android platform variance).
 
+### T15 — Host save states (complete)
+**Depends on:** T6 (kernel/HLE), T7 (GE state), T9 (Android shell)
+**Work (done 2026-11-01, subtasks T15a–T15e):** own TLV snapshot container (magic GSNP v1) capturing RAM/CPU/clock, threads/kernel objects/timers, HLE state with derived rebuild; CLI `--snapshot-out/--snapshot-in`; Android Menu rows + JNI + intent; `docs/SNAPSHOT.md`; device QA record. Restored runs must match continuous runs report-for-report; independent restores byte-identical. PPSSPP used as behavioral reference only, never a link target.
+**Docs checkpoint:** `docs/SNAPSHOT.md`, `docs/qa/` session report.
+**Refs:** Yakumo (state shape), PPSSPP (behavioral oracle only).
+
+### T16 — Widescreen rendering: 16:9 and ultrawide (planned)
+**Depends on:** T7, M4
+**Work:** T16a projection widening + presentation; T16b fill-screen presentation (stretch, crop or fit). Research tasks complete; implementation pending.
+**Test cases:** host projection unit tests + device visual QA per mode, no gameplay-logic change (logic rate untouched — see T17).
+
+### T17 — 60 fps support: pacing, interpolation and logic rate (planned)
+**Depends on:** M4
+**Work:** T17a frame pacing, interpolation and logic rate. Research complete. Battle-scene profiling feeds this task: 2026-11-02 simpleperf showed per-draw full-texture content hashing at ~83% CPU (fixed with a word-at-a-time hash, follow-up is a versioned texture cache); frame-rate evidence is gathered per scene on device, never from thumbnails.
+**Test cases:** paced-frame timing tests + device fps evidence per scene (battle, event, menu).
+
+### T18 — Text legibility: crisp font rendering at phone resolution (planned)
+**Depends on:** T8, M4
+**Work:** T18a sampling, HD atlas and replacement pipeline for dialog/UI text. Research complete; implementation pending.
+**Test cases:** atlas regen round-trip + device legibility QA (no glyph collisions, ink-width asserts hold).
+
 ## 6. Milestones
 
 | ID | Name | Entry criteria | Exit criteria | Docs checkpoint |
@@ -319,8 +340,8 @@ records what it used.
 | **M1** | Pipeline dry-run on synthetic fixtures | M0 | T4 done: synthetic fixtures trace-equal interpreter vs AOT on Linux; VFPU fuzz clean | `ARCHITECTURE.md`, `TESTING.md` |
 | **M2** | Game analyzed, AOT generated | M1 + T3 intake gates pass on the local disc | T5 done: census gates pass, chunked TUs compile, dispatch-coverage report clean | `ANALYSIS.md`, `BRINGUP.md` opened |
 | **M3** | Linux desktop bounded boot | M2 | T6+T7 done: bounded boot passes module init + first frame on Linux; GE fixtures pass on Vulkan | `HLE.md`, `RENDERER.md`, `SHADERS.md` |
-| **M4** | **Title screen on adb device (first milestone)** | M3 + T9–T12 done | TC-14.1: documented pipeline reaches title screen + menu input (touch + gamepad) on device; audio/saves may be stubbed; logs itemize all gaps; **manual QA report accepted for every device in the matrix (§8.3), incl. one Adreno device (TC-14.2)** | `BUILDING.md`, `ANDROID.md`, `INPUT.md`, `PROGRESS.md`, `QA.md` + `qa/` session reports |
-| **M5** | Hardening (post-milestone) | M4 | Audio complete (ATRAC/SAS), saves, perf ≥ full speed on target handheld, texture replacement + text upscaling polished, driver picker, shader presets shipped; **manual QA accepted incl. custom-driver session, rumble, suspend/resume, 30-min soak (T14)** | `AUDIO.md`, `SAVEDATA.md`, `TEXTURE_REPLACEMENT.md`, `ANDROID_DRIVERS.md`, `qa/` reports |
+| **M4** | **Title screen on adb device (first milestone)** | M3 + T9–T12 done | TC-14.1: documented pipeline reaches title screen + menu input (touch + gamepad) on device, and play extends into real battles with working in-game saves and host save states; **manual QA report accepted for every device in the matrix (§8.3), incl. one Adreno device (TC-14.2)** | `BUILDING.md`, `ANDROID.md`, `INPUT.md`, `PROGRESS.md`, `QA.md` + `qa/` session reports |
+| **M5** | Hardening (post-milestone) | M4 | Audio complete (ATRAC/SAS), saves (memstick + states, PPSSPP-interchangeable), battle scenes at full speed on target handheld (T17), widescreen + crisp text (T16/T18), texture replacement + text upscaling polished, driver picker, shader presets shipped; **manual QA accepted incl. custom-driver session, rumble, suspend/resume, 30-min soak (T14)** | `AUDIO.md`, `SAVEDATA.md`, `TEXTURE_REPLACEMENT.md`, `ANDROID_DRIVERS.md`, `qa/` reports |
 
 Milestone discipline (hst-decomp ratchet): every milestone is *measured*, recorded in `data/milestones.json` with criterion + evidence, and a drop in any figure is **visible, never quietly lowered**. Additionally, **no device-facing milestone closes on automation alone** — the §8.3 QA matrix must be complete and signed off, and all red-first evidence (bug → reproducing test → fix) must be present for every defect found during the milestone.
 
@@ -440,6 +461,7 @@ T1 ──► T2 ──► T4 ──┬──► T5 ──► T6 ──┬──�
               └─────────────┴──► T7 ─┼──► T8 ──┤
                                      └──► T9 ──► T10 ──┤
                                             └──► T11 ──┘
+T13 ──► T14 (M4 QA close-out) ──► T15 (host save states, done) ──► M5: T16 (widescreen) + T17 (60 fps) + T18 (text)
 ```
 
 Start: **T1 (scaffolding + IP guardrails)** — nothing else may begin until `repository_check` is green and `game.chd` is mechanically untrackable.
