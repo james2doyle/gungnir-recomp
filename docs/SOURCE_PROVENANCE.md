@@ -373,3 +373,28 @@ is modelled because the title only reads GPI.
   the address modes. Verified by a repeat-wrap parity case with 0..2 UVs
   (observed red: Vulkan stretched edges), plus a no-regression software
   re-render (byte-identical) and PPSSPP side-by-side.
+
+### GE backface-culling reference review (2026-11-02)
+
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `clip_and_draw`
+  (`if (cullOn) { if (cullCCW ? area < 0 : area > 0) return; }`,
+  `cullCCW = R[0x9B] & 1`, screen space y-down). Behavioral reference
+  only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `raster_tri` ("the rasterizer only draws
+  triangles whose SUBMITTED order has positive cross product (CCW in
+  y-down screen space)", `if (area < 0.0f) return`). Behavioral reference
+  only; no code copied.
+- Finding: our `cull_triangle` tested the inverted winding
+  (`CW ? area > 0 : area < 0`), culling valid front faces. The event
+  scene's world draws were dropped at emit time (shared by the software
+  and Vulkan paths), leaving the game's own fade quads over an empty
+  background — the reported missing terrain. Fixed the comparison;
+  the vertex `culling()` pins now encode the reference convention
+  (observed red before the fix). The Vulkan `frontFace` mapping was
+  already correct, which is why through-mode sprites still showed on
+  device while transform ground vanished on both paths. Verified by the
+  corrected unit pins plus a no-cull bypass render that restored the
+  dirt/ground patches, with device re-verification and PPSSPP
+  side-by-side at commit time.

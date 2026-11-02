@@ -448,7 +448,10 @@ bool VertexPipeline::cull_triangle(const ScreenVertex &a, const ScreenVertex &b,
                                    CullMode mode, FrontFace front_face) {
     if (mode == CullMode::None) return false;
     const float area = signed_area(a, b, c);
-    const bool front = front_face == FrontFace::Clockwise ? area > 0.0f : area < 0.0f;
+    // Screen space is y-down: positive area is counter-clockwise. FFACE
+    // (0x9B bit 0) selects which winding is front; both reference impls
+    // cull `cullCCW ? area < 0 : area > 0`.
+    const bool front = front_face == FrontFace::Clockwise ? area < 0.0f : area > 0.0f;
     return mode == CullMode::Back ? !front : front;
 }
 

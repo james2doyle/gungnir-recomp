@@ -243,26 +243,33 @@ void clipping() {
 }
 
 void culling() {
+    // Screen space is y-down: a positive signed area is counter-clockwise,
+    // which is front when FFACE (0x9B) selects counter-clockwise; a
+    // negative area is front under clockwise. Both reference impls cull
+    // `cullCCW ? area < 0 : area > 0`.
     ScreenVertex a{0.0f, 0.0f};
     ScreenVertex b{10.0f, 0.0f};
     ScreenVertex c{0.0f, 10.0f};
-    check(signed_area(a, b, c) > 0.0f, "screen triangle is clockwise");
-    check(!VertexPipeline::cull_triangle(a, b, c, CullMode::None, FrontFace::Clockwise), "no culling keeps faces");
-    check(!VertexPipeline::cull_triangle(a, b, c, CullMode::Back, FrontFace::Clockwise), "back cull keeps front");
-    check(VertexPipeline::cull_triangle(a, b, c, CullMode::Front, FrontFace::Clockwise), "front cull drops front");
-    check(VertexPipeline::cull_triangle(a, b, c, CullMode::Back, FrontFace::CounterClockwise),
-          "clockwise is back under counter-clockwise winding");
+    check(signed_area(a, b, c) > 0.0f, "screen triangle has positive area");
+    check(!VertexPipeline::cull_triangle(a, b, c, CullMode::None, FrontFace::CounterClockwise),
+          "no culling keeps faces");
+    check(!VertexPipeline::cull_triangle(a, b, c, CullMode::Back, FrontFace::CounterClockwise),
+          "back cull keeps front");
+    check(VertexPipeline::cull_triangle(a, b, c, CullMode::Front, FrontFace::CounterClockwise),
+          "front cull drops front");
+    check(VertexPipeline::cull_triangle(a, b, c, CullMode::Back, FrontFace::Clockwise),
+          "positive area is back under clockwise winding");
 
     ScreenVertex reverse{0.0f, 10.0f};
-    check(VertexPipeline::cull_triangle(a, reverse, b, CullMode::Back, FrontFace::Clockwise),
-          "counter-clockwise is back under clockwise winding");
-    check(!VertexPipeline::cull_triangle(a, reverse, b, CullMode::Front, FrontFace::Clockwise),
+    check(VertexPipeline::cull_triangle(a, reverse, b, CullMode::Back, FrontFace::CounterClockwise),
+          "negative area is back under counter-clockwise winding");
+    check(!VertexPipeline::cull_triangle(a, reverse, b, CullMode::Front, FrontFace::CounterClockwise),
           "front cull keeps back faces");
 
-    ScreenVertex degenerate{5.0f, 5.0f};
-    check(VertexPipeline::cull_triangle(a, degenerate, b, CullMode::Back, FrontFace::Clockwise),
+    ScreenVertex degenerate{0.0f, 0.0f};
+    check(VertexPipeline::cull_triangle(a, degenerate, degenerate, CullMode::Back, FrontFace::Clockwise),
           "degenerate triangles are culled");
-    check(!VertexPipeline::cull_triangle(a, degenerate, b, CullMode::None, FrontFace::Clockwise),
+    check(!VertexPipeline::cull_triangle(a, degenerate, degenerate, CullMode::None, FrontFace::Clockwise),
           "no culling keeps degenerate triangles");
 }
 
