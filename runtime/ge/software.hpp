@@ -89,6 +89,9 @@ struct RasterState {
     // Write mask: bits set = keep destination (PMASK 0xE8/0xE9, or the
     // CLEAR-mode bits). Zero means a full write.
     std::uint32_t write_mask{};
+    // Fog: mix toward fog_color (RGB) by the per-vertex fog factor.
+    bool fog_enabled{};
+    std::uint32_t fog_color{};
 
     bool operator==(const RasterState &) const = default;
 };
@@ -134,6 +137,7 @@ private:
         float inv_w{1.0f};
         std::array<float, 3> texcoord{0.0f, 0.0f, 1.0f};
         std::array<float, 4> color{1.0f, 1.0f, 1.0f, 1.0f};
+        float fog{1.0f};
     };
 
     void shade_pixel(int x, int y, const Fragment &fragment);

@@ -42,6 +42,7 @@ struct VulkanDrawVertex {
     float a{1.0f};
     float w{1.0f};
     float q{1.0f};
+    float fog{1.0f};
 };
 
 struct VulkanDrawState {
@@ -67,6 +68,8 @@ struct VulkanDrawState {
     // the pipeline color write mask; anything else falls back to a full
     // write (named gap, logged at pipeline build).
     std::uint32_t write_mask{};
+    bool fog_enabled{};
+    std::uint32_t fog_color{};
 };
 
 struct VulkanDrawCall {
@@ -110,7 +113,8 @@ inline VulkanDrawVertex to_vulkan_vertex(const ScreenVertex &vertex) {
             vertex.color[2],
             vertex.color[3],
             vertex.inv_w != 0.0f ? 1.0f / vertex.inv_w : 1.0f,
-            vertex.texcoord[2]};
+            vertex.texcoord[2],
+            vertex.fog};
 }
 
 class VulkanBackend {

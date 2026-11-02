@@ -335,6 +335,7 @@ ClipVertex VertexPipeline::transform(const Vertex &vertex) const {
             out.color = vertex.color;
         else
             material_fallback();
+        out.fog = 1.0f;
         return out;
     }
 
@@ -388,6 +389,30 @@ ClipVertex VertexPipeline::transform(const Vertex &vertex) const {
                         vertex.texcoord[1] * state_.texture_map.scale[1] + state_.texture_map.offset[1], 1.0f};
     } else {
         out.texcoord = {vertex.texcoord[0], vertex.texcoord[1], 1.0f};
+    }
+    // Fog from view-space depth: 1 = no fog, 0 = full fog (PPSSPP
+    // convention). Through-mode and disabled fog both yield 1.
+    if (state_.fog_enabled) {
+        const float view_z = view_world_.transform(position).z;
+        const float end = state_.fog_end;
+        const float slope = state_.fog_slope;
+        float factor = 1.0f;
+        if (std::isinf(end) || std::isnan(end)) {
+            // Games leave fog enabled with inf/nan end to force a constant
+            // factor (PPSSPP TransformUnit: required for Outrun skies).
+            bool full = std::signbit(end) ? true : false;
+            if (std::signbit(slope)) full = !full;
+            if (slope == 0.0f) full = true;
+            factor = full ? 0.0f : 1.0f;
+        } else {
+            float use_slope = slope;
+            if (std::isinf(use_slope) || std::isnan(use_slope))
+                use_slope = std::signbit(use_slope) ? -262144.0f : 262144.0f;
+            factor = (view_z + end) * use_slope;
+        }
+        out.fog = std::clamp(factor, 0.0f, 1.0f);
+    } else {
+        out.fog = 1.0f;
     }
     return out;
 }

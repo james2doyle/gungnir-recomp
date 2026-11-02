@@ -321,6 +321,51 @@ void alpha_test_decode() {
     check(draws[0].state.alpha_reference == 128u, "alpha reference decoded");
 }
 
+void fog_decode() {
+    // 0x1F enables fog, 0xCD end / 0xCE slope / 0xCF color. Transform-mode
+    // only: through draws never fog even with the enable set.
+    auto encode_f24 = [](float value) {
+        std::uint32_t bits = 0u;
+        std::memcpy(&bits, &value, sizeof bits);
+        return bits >> 8u;
+    };
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.command(command(CommandKind::State, 1u, 0x1Fu), view(memory));
+    machine.command(command(CommandKind::State, encode_f24(1.0f), 0xCDu), view(memory));
+    machine.command(command(CommandKind::State, encode_f24(1.0f), 0xCEu), view(memory));
+    machine.command(command(CommandKind::State, 0x0000FF00u, 0xCFu), view(memory));
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    check(!draws.empty(), "fogged draw emits");
+    if (draws.empty()) return;
+    check(!draws[0].state.fog_enabled, "through-mode draw never fogs");
+
+    // Transform-mode with the enable set latches the flag and the color.
+    Memory world;
+    write_through_triangle(world, 0x1000u);
+    StateMachine transform_machine;
+    std::vector<Draw> world_draws;
+    transform_machine.set_draw_sink([&world_draws](const Draw &draw) { world_draws.push_back(draw); });
+    transform_machine.command(command(CommandKind::State, 1u, 0x1Fu), view(world));
+    transform_machine.command(command(CommandKind::State, encode_f24(1.0f), 0xCDu), view(world));
+    transform_machine.command(command(CommandKind::State, encode_f24(1.0f), 0xCEu), view(world));
+    transform_machine.command(command(CommandKind::State, 0x0000FF00u, 0xCFu), view(world));
+    transform_machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u), 0x12u),
+                              view(world));
+    transform_machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(world));
+    transform_machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(world));
+    check(!world_draws.empty(), "transform-mode fogged draw emits");
+    if (world_draws.empty()) return;
+    check(world_draws[0].state.fog_enabled, "transform-mode fog enabled decoded");
+    check(world_draws[0].state.fog_color == 0x0000FF00u, "fog color latched");
+}
+
 void bounded_texture_retention() {
     Memory memory(0x200000u);
     write_through_triangle(memory, 0x1000u);
@@ -392,6 +437,7 @@ int main() {
     blend_factor_table();
     clear_and_write_mask();
     alpha_test_decode();
+    fog_decode();
     bounded_texture_retention();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";

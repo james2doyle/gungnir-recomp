@@ -384,6 +384,24 @@ void parity_tests() {
     check(backend.render_headless_draws(clamp_calls, vulkan, error), error.c_str());
     compare_frames(clamp_software, vulkan, 1, false, "additive overflow clamps on both");
 
+    // Fog: full fog turns white into the fog color on both backends.
+    Quad fog_quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                               rgba8(255, 255, 255)});
+    for (auto &vertex : fog_quad.sw) vertex.fog = 0.0f;
+    for (auto &vertex : fog_quad.vk) vertex.fog = 0.0f;
+    Framebuffer fog_software(32, 32);
+    fog_software.clear(rgba8(0, 0, 0));
+    RasterState fog_state;
+    fog_state.fog_enabled = true;
+    fog_state.fog_color = 0x0000FF00u;
+    SoftwareRasterizer fog_rasterizer(fog_software, fog_state);
+    draw_quad_software(fog_rasterizer, fog_quad);
+    VulkanDrawState vk_fog;
+    vk_fog.fog_enabled = true;
+    vk_fog.fog_color = 0x0000FF00u;
+    check(backend.render_headless_draw(fog_quad.vk, fog_quad.indices, vk_fog, vulkan, error), error.c_str());
+    compare_frames(fog_software, vulkan, 1, false, "fog mixes toward the fog color on both");
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

@@ -265,6 +265,9 @@ TransformState StateMachine::transform_state() const {
     for (std::size_t i = 0; i < bones_.size(); ++i) {
         for (std::size_t j = 0; j < 12u; ++j) state.bones[i].m[j] = bones_[i][j];
     }
+    state.fog_enabled = reg_on(0x1Fu) && !layout_.through;
+    state.fog_end = reg_float(0xCDu);
+    state.fog_slope = reg_float(0xCEu);
     if (reg_on(0x1Du) && !layout_.through) {
         state.cull = CullMode::Back;
         state.front_face = (reg_param(0x9Bu) & 1u) != 0u ? FrontFace::CounterClockwise : FrontFace::Clockwise;
@@ -456,6 +459,8 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.alpha_reference = static_cast<std::uint8_t>((alpha >> 8u) & 0xFFu);
         // Alpha mask (bits 16-23) not applied yet (named gap if ever observed).
     }
+    draw.state.fog_enabled = reg_on(0x1Fu) && !draw.state.clear && !layout_.through;
+    draw.state.fog_color = reg_param(0xCFu);
     if (reg_on(0x17u) && !layout_.through && (reg_param(0x50u) & 1u) == 0u) gap("flat_shading_unsupported");
     resolve_texture(memory, draw.state);
 
@@ -533,6 +538,9 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
             tl.color = tr.color = bl.color = br.color = bottom_right.color;
             tl.z = tr.z = bl.z = br.z = bottom_right.z;
             tl.inv_w = tr.inv_w = bl.inv_w = br.inv_w = 1.0f;
+            // Sprites shade flat: single fog factor from the second vertex
+            // (both reference impls use b.fog for the whole sprite).
+            tl.fog = tr.fog = bl.fog = br.fog = bottom_right.fog;
             const auto base = static_cast<std::uint16_t>(draw.vertices.size());
             draw.vertices.insert(draw.vertices.end(), {tl, tr, bl, br});
             draw.indices.insert(draw.indices.end(),

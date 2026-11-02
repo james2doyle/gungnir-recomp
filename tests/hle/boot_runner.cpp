@@ -277,6 +277,8 @@ int main(int argc, char **argv) {
                           << ", \"blend_eq\": " << static_cast<int>(draw.state.blend.equation)
                           << ", \"fix\": [\"0x" << std::hex << draw.state.blend.fixed_source
                           << "\", \"0x" << draw.state.blend.fixed_destination << std::dec << "\"]"
+                          << ", \"fog\": " << (draw.state.fog_enabled ? "true" : "false")
+                          << ", \"fog_color\": \"0x" << std::hex << draw.state.fog_color << std::dec << "\""
                           << ", \"depth\": [" << (draw.state.depth_test ? "true" : "false") << ", "
                           << (draw.state.depth_write ? "true" : "false") << "]"
                           << ", \"cull\": " << static_cast<int>(draw.state.cull);
@@ -300,6 +302,13 @@ int main(int argc, char **argv) {
                         if (vi != 0u) frame_out << ", ";
                         frame_out << "[" << v.color[0] << "," << v.color[1] << "," << v.color[2] << ","
                                   << v.color[3] << "]";
+                    }
+                    frame_out << "]";
+                    frame_out << ", \"fogs\": [";
+                    for (std::size_t vi = 0; vi < uv_count; ++vi) {
+                        const gungnir::ge::ScreenVertex &v = draw.vertices[vi];
+                        if (vi != 0u) frame_out << ", ";
+                        frame_out << v.fog;
                     }
                     frame_out << "]";
                 }
@@ -363,6 +372,8 @@ int main(int argc, char **argv) {
                 state.alpha_test = draw.state.alpha_test;
                 state.alpha_function = draw.state.alpha_function;
                 state.alpha_reference = draw.state.alpha_reference;
+                state.fog_enabled = draw.state.fog_enabled;
+                state.fog_color = draw.state.fog_color;
                 state.write_mask = draw.state.write_mask;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;

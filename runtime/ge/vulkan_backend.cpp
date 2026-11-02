@@ -146,6 +146,7 @@ std::uint64_t draw_pipeline_key(const VulkanDrawState &state) {
         key |= static_cast<std::uint64_t>(state.alpha_function) << 27u;
         key |= static_cast<std::uint64_t>(state.alpha_reference) << 30u;
     }
+    if (state.fog_enabled) key |= 1ull << 38u;
     return key;
 }
 
@@ -757,7 +758,10 @@ struct VulkanBackend::Impl {
         VkPushConstantRange push{};
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.offset = 0;
-        push.size = sizeof(float) * 4u;
+        // Push layout mirrors the SPIR-V offsets: viewport (0), atest
+        // func/ref (8/12), fog enable (16), fog color vec3 at 32
+        // (16-byte aligned). 12 words cover through offset 44.
+        push.size = sizeof(float) * 12u;
         pipeline_layout_info.pushConstantRangeCount = 1;
         pipeline_layout_info.pPushConstantRanges = &push;
         if (!result_ok(vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &draw_pipeline_layout),
@@ -801,18 +805,19 @@ struct VulkanBackend::Impl {
         stages[1].pName = "main";
 
         VkVertexInputBindingDescription binding{0, sizeof(VulkanDrawVertex), VK_VERTEX_INPUT_RATE_VERTEX};
-        VkVertexInputAttributeDescription attributes[6]{};
+        VkVertexInputAttributeDescription attributes[7]{};
         attributes[0] = VkVertexInputAttributeDescription{0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(VulkanDrawVertex, x)};
         attributes[1] = VkVertexInputAttributeDescription{1, 0, VK_FORMAT_R32_SFLOAT, offsetof(VulkanDrawVertex, z)};
         attributes[2] = VkVertexInputAttributeDescription{2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(VulkanDrawVertex, u)};
         attributes[3] = VkVertexInputAttributeDescription{3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(VulkanDrawVertex, r)};
         attributes[4] = VkVertexInputAttributeDescription{4, 0, VK_FORMAT_R32_SFLOAT, offsetof(VulkanDrawVertex, w)};
         attributes[5] = VkVertexInputAttributeDescription{5, 0, VK_FORMAT_R32_SFLOAT, offsetof(VulkanDrawVertex, q)};
+        attributes[6] = VkVertexInputAttributeDescription{6, 0, VK_FORMAT_R32_SFLOAT, offsetof(VulkanDrawVertex, fog)};
         VkPipelineVertexInputStateCreateInfo vertex_input{};
         vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertex_input.vertexBindingDescriptionCount = 1;
         vertex_input.pVertexBindingDescriptions = &binding;
-        vertex_input.vertexAttributeDescriptionCount = 6;
+        vertex_input.vertexAttributeDescriptionCount = 7;
         vertex_input.pVertexAttributeDescriptions = attributes;
 
         VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -1560,15 +1565,22 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         if (x1 <= x0 || y1 <= y0) continue;
         vkCmdBindPipeline(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
         // Push-constant layout must match mesh.vert/mesh.frag: viewport
-        // floats, then the alpha-test func as int bits and ref as float.
+        // floats, alpha-test func as int bits + ref, fog enable + color.
+        // vec3 fog_color is 16-byte aligned at offset 32.
         const std::int32_t atest_func = calls[i].state.alpha_test
                                             ? static_cast<std::int32_t>(calls[i].state.alpha_function)
                                             : -1;
         const float atest_ref = static_cast<float>(calls[i].state.alpha_reference) / 255.0f;
-        std::uint32_t push_words[4]{};
+        const std::int32_t fog_enable = calls[i].state.fog_enabled ? 1 : 0;
+        const float fog_color[3] = {static_cast<float>(calls[i].state.fog_color & 255u) / 255.0f,
+                                    static_cast<float>((calls[i].state.fog_color >> 8u) & 255u) / 255.0f,
+                                    static_cast<float>((calls[i].state.fog_color >> 16u) & 255u) / 255.0f};
+        std::uint32_t push_words[12]{};
         std::memcpy(&push_words[0], &push_viewport[0], 2u * sizeof(float));
         std::memcpy(&push_words[2], &atest_func, sizeof(std::int32_t));
         std::memcpy(&push_words[3], &atest_ref, sizeof(float));
+        std::memcpy(&push_words[4], &fog_enable, sizeof(std::int32_t));
+        std::memcpy(&push_words[8], &fog_color[0], 3u * sizeof(float));
         vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof push_words, push_words);
@@ -1823,10 +1835,16 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
                                                  ? static_cast<std::int32_t>(calls[i].state.alpha_function)
                                                  : -1;
         const float swap_atest_ref = static_cast<float>(calls[i].state.alpha_reference) / 255.0f;
-        std::uint32_t swap_push_words[4]{};
+        const std::int32_t swap_fog_enable = calls[i].state.fog_enabled ? 1 : 0;
+        const float swap_fog_color[3] = {static_cast<float>(calls[i].state.fog_color & 255u) / 255.0f,
+                                         static_cast<float>((calls[i].state.fog_color >> 8u) & 255u) / 255.0f,
+                                         static_cast<float>((calls[i].state.fog_color >> 16u) & 255u) / 255.0f};
+        std::uint32_t swap_push_words[12]{};
         std::memcpy(&swap_push_words[0], &push_viewport[0], 2u * sizeof(float));
         std::memcpy(&swap_push_words[2], &swap_atest_func, sizeof(std::int32_t));
         std::memcpy(&swap_push_words[3], &swap_atest_ref, sizeof(float));
+        std::memcpy(&swap_push_words[4], &swap_fog_enable, sizeof(std::int32_t));
+        std::memcpy(&swap_push_words[8], &swap_fog_color[0], 3u * sizeof(float));
         vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof swap_push_words, swap_push_words);

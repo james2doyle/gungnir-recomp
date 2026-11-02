@@ -54,6 +54,10 @@ struct DrawState {
     bool clear{};
     // PMASK bits set = keep destination (PSP reset 0 = full write).
     std::uint32_t write_mask{};
+    // Fog (0x1F/0xCD/0xCE/0xCF): enabled for transform-mode non-clear
+    // draws, color is the raw 0xCF register (RGB, alpha ignored).
+    bool fog_enabled{};
+    std::uint32_t fog_color{};
 };
 
 struct Draw {

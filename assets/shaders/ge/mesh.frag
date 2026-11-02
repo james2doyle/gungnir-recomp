@@ -4,12 +4,15 @@ layout(push_constant) uniform PushConstants {
     vec2 viewport;
     int atest_func;
     float atest_ref;
+    int fog_enable;
+    vec3 fog_color;
 } pc;
 
 layout(binding = 0) uniform sampler2D texture_sampler;
 
 layout(location = 0) in vec3 in_texcoord;
 layout(location = 1) in vec4 in_color;
+layout(location = 2) in float in_fog;
 
 layout(location = 0) out vec4 out_color;
 
@@ -29,4 +32,8 @@ void main() {
     vec4 texel = texture(texture_sampler, in_texcoord.xy / max(in_texcoord.z, 1e-6));
     out_color = texel * in_color;
     if (!alpha_pass(out_color.a)) discard;
+    if (pc.fog_enable != 0) {
+        float fog = clamp(in_fog, 0.0, 1.0);
+        out_color.rgb = mix(pc.fog_color, out_color.rgb, fog);
+    }
 }

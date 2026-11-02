@@ -177,6 +177,10 @@ struct TransformState {
     CullMode cull{CullMode::None};
     FrontFace front_face{FrontFace::Clockwise};
     std::array<Mat43, 8> bones{};
+    // Fog (0x1F/0xCD/0xCE): view-space depth factor, 1 = no fog.
+    bool fog_enabled{};
+    float fog_end{};
+    float fog_slope{1.0f};
     VertexLayout layout{};
     bool through{};
 

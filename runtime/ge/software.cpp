@@ -199,6 +199,23 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
 
     if (state_.alpha_test && !compare(state_.alpha_function, channel(source, 24), state_.alpha_reference)) return;
 
+    if (state_.fog_enabled) {
+        const float clamped = std::clamp(fragment.fog, 0.0f, 1.0f);
+        const int fog8 = static_cast<int>(std::lround(clamped * 256.0f));
+        if (fog8 < 256) {
+            const int fr = static_cast<int>(state_.fog_color & 255u);
+            const int fg = static_cast<int>((state_.fog_color >> 8u) & 255u);
+            const int fb = static_cast<int>((state_.fog_color >> 16u) & 255u);
+            const int sr = static_cast<int>(channel(source, 0));
+            const int sg = static_cast<int>(channel(source, 8));
+            const int sb = static_cast<int>(channel(source, 16));
+            source = rgba8(static_cast<std::uint32_t>(fr + (((sr - fr) * fog8) >> 8)),
+                           static_cast<std::uint32_t>(fg + (((sg - fg) * fog8) >> 8)),
+                           static_cast<std::uint32_t>(fb + (((sb - fb) * fog8) >> 8)),
+                           channel(source, 24));
+        }
+    }
+
     const std::uint16_t z =
         static_cast<std::uint16_t>(std::lround(std::clamp(fragment.z, 0.0f, 65535.0f)));
     if (state_.depth_test && !compare(state_.depth_function, z, target_.depth[index])) return;
@@ -258,6 +275,7 @@ void SoftwareRasterizer::draw_triangle(const ScreenVertex &a, const ScreenVertex
             Fragment fragment;
             fragment.z = l0 * a.z + l1 * b.z + l2 * c.z;
             fragment.inv_w = inverse_w;
+            fragment.fog = l0 * a.fog + l1 * b.fog + l2 * c.fog;
             for (int i = 0; i < 3; ++i)
                 fragment.texcoord[i] = (l0 * a.texcoord[i] * a.inv_w + l1 * b.texcoord[i] * b.inv_w +
                                         l2 * c.texcoord[i] * c.inv_w) *
@@ -308,6 +326,7 @@ void SoftwareRasterizer::draw_line(const ScreenVertex &a, const ScreenVertex &b)
         Fragment fragment;
         fragment.z = a.z + (b.z - a.z) * t;
         fragment.inv_w = inverse_w;
+        fragment.fog = a.fog + (b.fog - a.fog) * t;
         for (int i = 0; i < 3; ++i)
             fragment.texcoord[i] = (a.texcoord[i] * a.inv_w + (b.texcoord[i] * b.inv_w - a.texcoord[i] * a.inv_w) * t) * w;
         for (int i = 0; i < 4; ++i)
@@ -323,6 +342,7 @@ void SoftwareRasterizer::draw_point(const ScreenVertex &point) {
     fragment.inv_w = point.inv_w;
     fragment.texcoord = point.texcoord;
     fragment.color = point.color;
+    fragment.fog = point.fog;
     shade_pixel(static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), fragment);
 }
 

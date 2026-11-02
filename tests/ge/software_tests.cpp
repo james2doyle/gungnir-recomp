@@ -194,6 +194,27 @@ void scissor_and_alpha_test() {
     check(framebuffer.color_at(1, 1) == rgba8(0, 255, 0, 128), "alpha test keeps a fragment above the reference");
 }
 
+void fog_mix() {
+    // Fog mixes toward the fog color by the per-vertex factor (1 = no fog).
+    // Full fog turns white into the fog color; no fog leaves it alone.
+    Framebuffer framebuffer(1, 1);
+    framebuffer.clear(rgba8(0, 0, 0));
+    RasterState state;
+    state.fog_enabled = true;
+    state.fog_color = 0x0000FF00u;
+    SoftwareRasterizer rasterizer(framebuffer, state);
+    ScreenVertex a = vertex(-100.0f, -100.0f, 0.5f, rgba8(255, 255, 255));
+    ScreenVertex b = vertex(100.0f, -100.0f, 0.5f, rgba8(255, 255, 255));
+    ScreenVertex c = vertex(0.0f, 100.0f, 0.5f, rgba8(255, 255, 255));
+    a.fog = b.fog = c.fog = 0.0f;
+    rasterizer.draw_triangle(a, b, c);
+    check(framebuffer.color_at(0, 0) == rgba8(0, 255, 0), "full fog yields the fog color");
+    framebuffer.clear(rgba8(0, 0, 0));
+    a.fog = b.fog = c.fog = 1.0f;
+    rasterizer.draw_triangle(a, b, c);
+    check(framebuffer.color_at(0, 0) == rgba8(255, 255, 255), "no fog keeps the source");
+}
+
 void stencil_lite() {
     Framebuffer framebuffer(2, 2);
     framebuffer.clear(rgba8(0, 0, 0), 0xFFFFu, 0u);
@@ -284,6 +305,7 @@ int main() {
         blending();
         scissor_and_alpha_test();
         stencil_lite();
+        fog_mix();
         texture_sampling();
         golden_and_determinism();
         std::cout << "ge_software_tests: OK\n";

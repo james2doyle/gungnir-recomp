@@ -327,3 +327,26 @@ is modelled because the title only reads GPI.
   `alpha_test_decode` red-first gate plus software and Vulkan parity cases.
   Pre-existing software/Vulkan overflow wrapped mod 256 (magenta band in
   the event scene); both backends now agree with the references.
+
+### GE fog reference review (2026-11-02)
+
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `transform_attrs`
+  (`fog = clamp((viewZ + f24(0xCD)) * f24(0xCE))`, 1 = no fog),
+  `setup_pipe` (`fog = !clear && !through && on(0x1F)`, color `0xCF`),
+  pixel mix toward fog color with alpha unaffected, fog interpolated
+  linearly in screen space. Behavioral reference only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` (fog factor from view-space depth, inf/nan
+  fog-end forces a constant factor per PPSSPP TransformUnit, 256 = no fog,
+  linear interpolation, mix `fr + ((r - fr) * fog) >> 8`). Behavioral
+  reference only; no code copied.
+- Adopted: fog decode (`0x1F`/`0xCD`/`0xCE`/`0xCF`) into `TransformState`
+  (per-vertex factor, through-mode yields 1) and `DrawState`
+  (enable + raw color, clears/through disable), linear fog interpolation in
+  the software rasterizer with the 256-denominator mix, Vulkan fog varying
+  + push-constant enable/color (vec3 16-byte aligned at offset 32,
+  pipeline-keyed), verified by `fog_decode`/`fog_mix` red-first gates plus
+  a Vulkan parity case. Real-corpus event and battle frames enable fog on
+  most draws but with end=20000/slope=1e-4 the factor is 1 everywhere, so
+  they render identically (no wash introduced, no regression).
