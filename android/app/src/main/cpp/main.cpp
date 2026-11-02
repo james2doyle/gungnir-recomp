@@ -268,12 +268,15 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.scissor_y0 = in.scissor_y0;
         out.scissor_x1 = in.scissor_x1;
         out.scissor_y1 = in.scissor_y1;
-        out.depth_test = in.depth_test && !in.clear;
-        // Vertex-driven clears carry the depth in vertex z; the GREATER
-        // test would reject the clear value against a stale plane, so
-        // write it straight through (subject to the 0xD3 depth bit).
+        // Clear draws keep the depth test enabled with ALWAYS: Vulkan
+        // disables depth writes whenever the test is off, so test-off /
+        // write-on would leave the plane at the render-pass clear value
+        // and reject every GREATER-tested draw. Vertex z carries the
+        // clear depth; the 0xD3 depth bit still gates the write.
+        out.depth_test = in.clear ? true : in.depth_test;
+        out.depth_function =
+            in.clear ? gungnir::ge::CompareFunc::Always : in.depth_function;
         out.depth_write = in.clear ? in.clear_depth_write : in.depth_write;
-        out.depth_function = in.depth_function;
         out.cull = in.cull;
         out.front_face = in.front_face;
         out.blend = in.blend;
