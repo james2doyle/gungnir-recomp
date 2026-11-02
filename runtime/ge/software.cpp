@@ -289,8 +289,12 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
                                      state_.blend.fixed_destination));
     }
     // Write mask: bits set keep the destination (CLEAR alpha clears and
-    // PMASK depth/stencil primes rely on this).
+    // PMASK depth/stencil primes rely on this). 16-bit draw targets
+    // quantize on write (pack then unpack), matching the references.
     target_.color[index] = (source & ~state_.write_mask) | (target_.color[index] & state_.write_mask);
+    if (state_.fb_format != TextureFormat::Rgba8888)
+        target_.color[index] =
+            unpack_framebuffer(pack_framebuffer(target_.color[index], state_.fb_format), state_.fb_format);
 }
 
 void SoftwareRasterizer::draw_triangle(const ScreenVertex &a, const ScreenVertex &b, const ScreenVertex &c) {

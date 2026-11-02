@@ -19,15 +19,17 @@ constexpr std::uint32_t kVramBase = 0x04000000u;
 struct TargetEntry {
     Framebuffer surface;
     bool dirty = false;
+    TextureFormat format{TextureFormat::Rgba8888};
 };
 
 class TargetSet {
 public:
     TargetSet(int width, int height);
 
-    // Surface for a draw-buffer offset, created on demand. The caller
-    // marks entry.dirty after rasterizing into surface.
-    TargetEntry &draw_to(std::uint32_t draw_buffer);
+    // Surface for a draw-buffer offset in the given pixel format
+    // (first draw wins on format mismatch). The caller marks
+    // entry.dirty after rasterizing into surface.
+    TargetEntry &draw_to(std::uint32_t draw_buffer, TextureFormat format);
     [[nodiscard]] bool has(std::uint32_t draw_buffer) const;
     // Display surface: the target matching the display offset, else
     // target 0, else the first surface, else nullptr.

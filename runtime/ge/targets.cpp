@@ -6,10 +6,11 @@ namespace gungnir::ge {
 
 TargetSet::TargetSet(int width, int height) : width_(width), height_(height) {}
 
-TargetEntry &TargetSet::draw_to(std::uint32_t draw_buffer) {
+TargetEntry &TargetSet::draw_to(std::uint32_t draw_buffer, TextureFormat format) {
     auto found = targets_.find(draw_buffer);
     if (found != targets_.end()) return found->second;
     TargetEntry &entry = targets_.emplace(draw_buffer, TargetEntry{Framebuffer(width_, height_)}).first->second;
+    entry.format = format;
     // Fresh surfaces start cleared opaque black, matching the legacy
     // single-framebuffer render path.
     entry.surface.clear(0xFF000000u);

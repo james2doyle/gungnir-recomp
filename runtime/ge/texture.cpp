@@ -322,4 +322,45 @@ std::size_t TextureRangeIndex::invalidate_write(std::uint32_t address, std::uint
     return keys.size();
 }
 
+std::uint16_t pack_framebuffer(std::uint32_t color, TextureFormat format) {
+    const std::uint32_t r = (color >> 0u) & 255u;
+    const std::uint32_t g = (color >> 8u) & 255u;
+    const std::uint32_t b = (color >> 16u) & 255u;
+    const std::uint32_t a = (color >> 24u) & 255u;
+    switch (format) {
+    case TextureFormat::Rgb565:
+        return static_cast<std::uint16_t>(((r >> 3u) & 31u) | (((g >> 2u) & 63u) << 5u) |
+                                          (((b >> 3u) & 31u) << 11u));
+    case TextureFormat::Rgba5551:
+        return static_cast<std::uint16_t>(((r >> 3u) & 31u) | (((g >> 3u) & 31u) << 5u) |
+                                          (((b >> 3u) & 31u) << 10u) | (((a >> 7u) & 1u) << 15u));
+    case TextureFormat::Rgba4444:
+        return static_cast<std::uint16_t>(((r >> 4u) & 15u) | (((g >> 4u) & 15u) << 4u) |
+                                          (((b >> 4u) & 15u) << 8u) | (((a >> 4u) & 15u) << 12u));
+    default:
+        return 0u;
+    }
+}
+
+std::uint32_t unpack_framebuffer(std::uint16_t value, TextureFormat format) {
+    switch (format) {
+    case TextureFormat::Rgb565:
+        return rgba8(static_cast<std::uint32_t>((value & 31u) * 255u / 31u),
+                     static_cast<std::uint32_t>(((value >> 5u) & 63u) * 255u / 63u),
+                     static_cast<std::uint32_t>(((value >> 11u) & 31u) * 255u / 31u));
+    case TextureFormat::Rgba5551:
+        return rgba8(static_cast<std::uint32_t>((value & 31u) * 255u / 31u),
+                     static_cast<std::uint32_t>(((value >> 5u) & 31u) * 255u / 31u),
+                     static_cast<std::uint32_t>(((value >> 10u) & 31u) * 255u / 31u),
+                     ((value >> 15u) & 1u) != 0u ? 255u : 0u);
+    case TextureFormat::Rgba4444:
+        return rgba8(static_cast<std::uint32_t>((value & 15u) * 255u / 15u),
+                     static_cast<std::uint32_t>(((value >> 4u) & 15u) * 255u / 15u),
+                     static_cast<std::uint32_t>(((value >> 8u) & 15u) * 255u / 15u),
+                     static_cast<std::uint32_t>(((value >> 12u) & 15u) * 255u / 15u));
+    default:
+        return 0u;
+    }
+}
+
 } // namespace gungnir::ge

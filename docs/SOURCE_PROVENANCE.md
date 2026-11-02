@@ -422,6 +422,25 @@ is modelled because the title only reads GPI.
   the known fade delta); the change is preventive for areas using
   decal/replace/blend/add.
 
+### GE framebuffer-format reference review (2026-11-02)
+
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `unpack_color` (`*255/31`, `*255/63`, 4444 `*17`)
+  and `pack_fb`/`MEM_W16` write path. Behavioral reference only; no
+  code copied.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `pack_fb` + per-format framebuffer writes.
+  Behavioral reference only; no code copied.
+- Adopted: `pack_framebuffer`/`unpack_framebuffer` matching the 3rd's
+  scaling exactly; per-target format in `TargetSet` (first draw wins),
+  software write quantization, Vulkan headless readback conversion
+  (first draw wins); swapchain stays RGBA8 (16-bit banding on device
+  named gap). Corpus finding: every observed draw and the display
+  buffer are RGBA8888, so this is a proven no-op on current scenes
+  (byte-identical renders). Verified by a 5650 `TargetSet` unit case
+  ((128,128,128) to (131,129,131), observed red) and a 5650 Vulkan
+  parity case (observed red with conversion neutered).
+
 ### GE render-target reference review (2026-11-02)
 
 - `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):

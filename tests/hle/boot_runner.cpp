@@ -259,6 +259,7 @@ int main(int argc, char **argv) {
                           << ", \"indices\": " << draw.indices.size()
                           << ", \"primitive\": \"" << gungnir::ge::primitive_name(draw.primitive) << "\""
                           << ", \"target\": \"0x" << std::hex << draw.state.draw_buffer << std::dec << "\""
+                          << ", \"fb_format\": " << draw.state.draw_format
                           << ", \"clear\": " << (draw.state.clear ? "true" : "false")
                           << ", \"mask\": \"0x" << std::hex << draw.state.write_mask << std::dec << "\""
                           << ", \"scissor\": [" << draw.state.scissor_x0 << ", " << draw.state.scissor_y0
@@ -386,6 +387,9 @@ int main(int argc, char **argv) {
                 state.color_double = draw.state.color_double;
                 state.tex_env = draw.state.tex_env;
                 state.write_mask = draw.state.write_mask;
+                state.fb_format = draw.state.draw_format <= 3u
+                                      ? static_cast<gungnir::ge::TextureFormat>(draw.state.draw_format)
+                                      : gungnir::ge::TextureFormat::Rgba8888;
                 // Render-to-texture: when the texture address overlaps a
                 // dirty target surface with matching params, sample the
                 // surface instead of the (stale) RAM decode.
@@ -397,7 +401,11 @@ int main(int argc, char **argv) {
                 }
                 state.texture_enabled = texture != nullptr;
                 state.texture = texture;
-                gungnir::ge::TargetEntry &entry = targets.draw_to(draw.state.draw_buffer);
+                gungnir::ge::TargetEntry &entry = targets.draw_to(
+                    draw.state.draw_buffer,
+                    draw.state.draw_format <= 3u
+                        ? static_cast<gungnir::ge::TextureFormat>(draw.state.draw_format)
+                        : gungnir::ge::TextureFormat::Rgba8888);
                 gungnir::ge::SoftwareRasterizer rasterizer(entry.surface, state);
                 for (std::size_t i = 0; i + 2u < draw.indices.size(); i += 3u) {
                     const auto a = draw.indices[i];

@@ -39,20 +39,20 @@ void full_screen(SoftwareRasterizer &rasterizer, std::uint32_t color) {
 void routing() {
     TargetSet targets(32, 32);
     {
-        TargetEntry &entry = targets.draw_to(0x100u);
+        TargetEntry &entry = targets.draw_to(0x100u, TextureFormat::Rgba8888);
         SoftwareRasterizer rasterizer(entry.surface);
         full_screen(rasterizer, rgba8(255, 0, 0));
         entry.dirty = true;
     }
     {
-        TargetEntry &entry = targets.draw_to(0x200u);
+        TargetEntry &entry = targets.draw_to(0x200u, TextureFormat::Rgba8888);
         SoftwareRasterizer rasterizer(entry.surface);
         full_screen(rasterizer, rgba8(0, 255, 0));
         entry.dirty = true;
     }
     check(targets.has(0x100u) && targets.has(0x200u), "both targets exist");
-    check(targets.draw_to(0x100u).surface.color_at(0, 0) == rgba8(255, 0, 0), "target 0x100 holds red");
-    check(targets.draw_to(0x200u).surface.color_at(0, 0) == rgba8(0, 255, 0), "target 0x200 holds green");
+    check(targets.draw_to(0x100u, TextureFormat::Rgba8888).surface.color_at(0, 0) == rgba8(255, 0, 0), "target 0x100 holds red");
+    check(targets.draw_to(0x200u, TextureFormat::Rgba8888).surface.color_at(0, 0) == rgba8(0, 255, 0), "target 0x200 holds green");
     const Framebuffer *selected = targets.display(0x200u);
     check(selected != nullptr && selected->color_at(0, 0) == rgba8(0, 255, 0),
           "display select returns the matching target");
@@ -64,7 +64,7 @@ void routing() {
 void rtt_sampling() {
     TargetSet targets(32, 32);
     {
-        TargetEntry &entry = targets.draw_to(0u);
+        TargetEntry &entry = targets.draw_to(0u, TextureFormat::Rgba8888);
         SoftwareRasterizer rasterizer(entry.surface);
         full_screen(rasterizer, rgba8(255, 0, 0));
         entry.dirty = true;
@@ -91,9 +91,25 @@ void rtt_sampling() {
     clean.height = 32;
     clean.buffer_width = 32;
     TargetSet fresh(32, 32);
-    fresh.draw_to(0u);
+    fresh.draw_to(0u, TextureFormat::Rgba8888);
     check(!fresh.sample_target(kVramBase, clean).has_value(),
           "clean target does not override RAM");
+}
+
+void fb_format_5650() {
+    // 16-bit targets quantize on write: (128, 128, 128) becomes
+    // (131, 129, 131) through the 565 pack/unpack round-trip.
+    TargetSet targets(32, 32);
+    TargetEntry &entry = targets.draw_to(0u, TextureFormat::Rgb565);
+    RasterState state;
+    state.fb_format = TextureFormat::Rgb565;
+    SoftwareRasterizer rasterizer(entry.surface, state);
+    const ScreenVertex a = vertex(-100.0f, -100.0f, rgba8(128, 128, 128));
+    const ScreenVertex b = vertex(100.0f, -100.0f, rgba8(128, 128, 128));
+    const ScreenVertex c = vertex(0.0f, 100.0f, rgba8(128, 128, 128));
+    rasterizer.draw_triangle(a, b, c);
+    check(targets.draw_to(0u, TextureFormat::Rgb565).surface.color_at(0, 0) == rgba8(131, 129, 131),
+          "5650 target quantizes gray");
 }
 
 } // namespace
@@ -102,6 +118,7 @@ int main() {
     try {
         routing();
         rtt_sampling();
+        fb_format_5650();
         std::cout << "ge_targets_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

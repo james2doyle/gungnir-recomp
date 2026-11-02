@@ -1465,6 +1465,9 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
     for (const VulkanDrawCall &call : calls)
         if (call.state.draw_buffer == display_buffer) display_calls.push_back(call);
     if (!display_calls.empty()) calls = display_calls;
+    // 16-bit display targets quantize on write: convert the RGBA8
+    // readback through pack/unpack (first draw wins, like TargetSet).
+    const TextureFormat display_format = calls.empty() ? TextureFormat::Rgba8888 : calls[0].state.fb_format;
     if (!impl_ || !impl_->initialized || !impl_->config.headless) {
         error = "headless_backend_not_initialized";
         return false;
@@ -1639,6 +1642,20 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
     frame.height = impl_->config.height;
     frame.rgba.assign(static_cast<std::uint8_t *>(data), static_cast<std::uint8_t *>(data) + size);
     vkUnmapMemory(impl_->device, impl_->readback_memory);
+    if (display_format != TextureFormat::Rgba8888) {
+        for (std::size_t o = 0; o + 3u < frame.rgba.size(); o += 4u) {
+            const std::uint32_t pixel = static_cast<std::uint32_t>(frame.rgba[o]) |
+                                        (static_cast<std::uint32_t>(frame.rgba[o + 1u]) << 8u) |
+                                        (static_cast<std::uint32_t>(frame.rgba[o + 2u]) << 16u) |
+                                        (static_cast<std::uint32_t>(frame.rgba[o + 3u]) << 24u);
+            const std::uint32_t quantized = unpack_framebuffer(pack_framebuffer(pixel, display_format),
+                                                               display_format);
+            frame.rgba[o] = static_cast<std::uint8_t>(quantized & 255u);
+            frame.rgba[o + 1u] = static_cast<std::uint8_t>((quantized >> 8u) & 255u);
+            frame.rgba[o + 2u] = static_cast<std::uint8_t>((quantized >> 16u) & 255u);
+            frame.rgba[o + 3u] = static_cast<std::uint8_t>((quantized >> 24u) & 255u);
+        }
+    }
     impl_->evict_textures();
     return true;
 }

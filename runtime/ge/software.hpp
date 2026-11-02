@@ -100,6 +100,9 @@ struct RasterState {
     // Write mask: bits set = keep destination (PMASK 0xE8/0xE9, or the
     // CLEAR-mode bits). Zero means a full write.
     std::uint32_t write_mask{};
+    // Draw-target pixel format (FBPPIXFORMAT 0xD2): 5650/5551/4444
+    // targets quantize on write; RGBA8888 stores exactly.
+    TextureFormat fb_format{TextureFormat::Rgba8888};
     // Fog: mix toward fog_color (RGB) by the per-vertex fog factor.
     bool fog_enabled{};
     std::uint32_t fog_color{};

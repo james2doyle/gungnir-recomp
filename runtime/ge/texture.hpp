@@ -36,6 +36,11 @@ constexpr std::uint32_t rgba8(std::uint32_t red, std::uint32_t green, std::uint3
     return (red & 255u) | ((green & 255u) << 8u) | ((blue & 255u) << 16u) | ((alpha & 255u) << 24u);
 }
 
+// Framebuffer pixel formats (FBPPIXFORMAT 0xD2 codes 0-2): pack an RGBA8
+// pixel down and unpack it back, emulating 16-bit target precision.
+[[nodiscard]] std::uint16_t pack_framebuffer(std::uint32_t color, TextureFormat format);
+[[nodiscard]] std::uint32_t unpack_framebuffer(std::uint16_t value, TextureFormat format);
+
 struct TextureState {
     TextureFormat format{TextureFormat::Rgba8888};
     bool swizzled{};

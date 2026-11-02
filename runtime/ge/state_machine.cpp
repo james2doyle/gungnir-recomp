@@ -444,6 +444,7 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     draw.state.cull = state.cull;
     draw.state.front_face = state.front_face;
     draw.state.draw_buffer = reg_param(0x9Cu) & 0x00FFFFFFu;
+    draw.state.draw_format = reg_param(0xD2u) & 7u;
     draw.state.clear = (reg_param(0xD3u) & 1u) != 0u;
     if (draw.state.clear) {
         const std::uint32_t clear = reg_param(0xD3u);

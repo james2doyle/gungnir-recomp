@@ -527,13 +527,13 @@ void parity_tests() {
     const Quad green_quad =
         make_quad({rgba8(0, 255, 0), rgba8(0, 255, 0), rgba8(0, 255, 0), rgba8(0, 255, 0)});
     {
-        TargetEntry &entry = router.draw_to(0x100u);
+        TargetEntry &entry = router.draw_to(0x100u, TextureFormat::Rgba8888);
         SoftwareRasterizer rasterizer(entry.surface);
         draw_quad_software(rasterizer, red_quad);
         entry.dirty = true;
     }
     {
-        TargetEntry &entry = router.draw_to(0x200u);
+        TargetEntry &entry = router.draw_to(0x200u, TextureFormat::Rgba8888);
         SoftwareRasterizer rasterizer(entry.surface);
         draw_quad_software(rasterizer, green_quad);
         entry.dirty = true;
@@ -548,6 +548,25 @@ void parity_tests() {
     check(backend.render_headless_draws(target_calls, vulkan, error, 0x100u), error.c_str());
     check(router.display(0x100u) != nullptr, "software display target exists");
     compare_frames(*router.display(0x100u), vulkan, 1, false, "display target holds only its draws");
+
+    // 16-bit display target: (128, 128, 128) quantizes to
+    // (131, 129, 131) on both backends.
+    const Quad gray_quad =
+        make_quad({rgba8(128, 128, 128), rgba8(128, 128, 128), rgba8(128, 128, 128), rgba8(128, 128, 128)});
+    TargetSet fmt_router(32, 32);
+    TargetEntry &fmt_entry = fmt_router.draw_to(0x300u, TextureFormat::Rgb565);
+    RasterState fmt_state;
+    fmt_state.fb_format = TextureFormat::Rgb565;
+    SoftwareRasterizer fmt_rasterizer(fmt_entry.surface, fmt_state);
+    draw_quad_software(fmt_rasterizer, gray_quad);
+    fmt_entry.dirty = true;
+    VulkanDrawState vk_fmt;
+    vk_fmt.draw_buffer = 0x300u;
+    vk_fmt.fb_format = TextureFormat::Rgb565;
+    const std::array<VulkanDrawCall, 1> fmt_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(gray_quad.vk), gray_quad.indices, vk_fmt}};
+    check(backend.render_headless_draws(fmt_calls, vulkan, error, 0x300u), error.c_str());
+    compare_frames(*fmt_router.display(0x300u), vulkan, 1, false, "5650 display target quantizes on both");
 
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
