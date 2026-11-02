@@ -146,6 +146,7 @@ add_library(gungnir_ge STATIC
     runtime/ge/frame_queue.cpp
     runtime/ge/software.cpp
     runtime/ge/state_machine.cpp
+    runtime/ge/targets.cpp
     runtime/ge/texture.cpp
     runtime/ge/vertex.cpp)
 target_include_directories(gungnir_ge PUBLIC runtime)
@@ -173,6 +174,11 @@ set_target_properties(ge_software_tests PROPERTIES
 add_executable(ge_state_machine_tests tests/ge/state_machine_tests.cpp)
 target_link_libraries(ge_state_machine_tests PRIVATE gungnir_ge)
 set_target_properties(ge_state_machine_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
+add_executable(ge_targets_tests tests/ge/targets_tests.cpp)
+target_link_libraries(ge_targets_tests PRIVATE gungnir_ge)
+set_target_properties(ge_targets_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
 # --- Texture containers (T8a) ---------------------------------------------

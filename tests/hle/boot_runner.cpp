@@ -10,6 +10,7 @@
 
 #include "audio/audio_sink.hpp"
 #include "ge/software.hpp"
+#include "ge/targets.hpp"
 #include "hle/hle_media.hpp"
 #include "input/input_state.hpp"
 #include "session/game_session.hpp"
@@ -269,7 +270,9 @@ int main(int argc, char **argv) {
                         if ((pixel & 0xFFFFFFu) != 0u) ++nonzero;
                     frame_out << ", \"texture\": [" << draw.state.texture->width << ", "
                               << draw.state.texture->height << "]"
-                              << ", \"tex_nonzero\": " << nonzero;
+                              << ", \"tex_nonzero\": " << nonzero
+                              << ", \"tex_addr\": \"0x" << std::hex << draw.state.texture_address << std::dec << "\""
+                              << ", \"tex_size\": " << draw.state.texture_size;
                 }
                 frame_out << ", \"blend\": " << (draw.state.blend.enabled ? "true" : "false")
                           << ", \"blend_factors\": [" << static_cast<int>(draw.state.blend.source) << ", "
@@ -357,8 +360,12 @@ int main(int argc, char **argv) {
         }
 
         if (!ppm_path.empty() && !selected_frame.empty()) {
-            gungnir::ge::Framebuffer framebuffer(480, 272);
-            framebuffer.clear(0xFF000000u);
+            gungnir::ge::TargetSet targets(480, 272);
+            // The display buffer selects the presented surface.
+            const std::uint32_t display_offset =
+                result.first_frame_buf >= gungnir::ge::kVramBase
+                    ? result.first_frame_buf - gungnir::ge::kVramBase
+                    : 0u;
             for (const gungnir::ge::Draw &draw : selected_frame) {
                 gungnir::ge::RasterState state;
                 state.scissor_x0 = draw.state.scissor_x0;
@@ -379,10 +386,19 @@ int main(int argc, char **argv) {
                 state.color_double = draw.state.color_double;
                 state.tex_env = draw.state.tex_env;
                 state.write_mask = draw.state.write_mask;
-                state.texture_enabled = draw.state.texture_cpu != nullptr;
-                state.texture_enabled = draw.state.texture_cpu != nullptr;
-                state.texture = draw.state.texture_cpu;
-                gungnir::ge::SoftwareRasterizer rasterizer(framebuffer, state);
+                // Render-to-texture: when the texture address overlaps a
+                // dirty target surface with matching params, sample the
+                // surface instead of the (stale) RAM decode.
+                const gungnir::ge::Texture *texture = draw.state.texture_cpu;
+                std::optional<gungnir::ge::CpuTexture> rtt;
+                if (texture != nullptr && draw.state.texture_address != 0u) {
+                    rtt = targets.sample_target(draw.state.texture_address, texture->state());
+                    if (rtt.has_value() && rtt->texture.has_value()) texture = &rtt->texture.value();
+                }
+                state.texture_enabled = texture != nullptr;
+                state.texture = texture;
+                gungnir::ge::TargetEntry &entry = targets.draw_to(draw.state.draw_buffer);
+                gungnir::ge::SoftwareRasterizer rasterizer(entry.surface, state);
                 for (std::size_t i = 0; i + 2u < draw.indices.size(); i += 3u) {
                     const auto a = draw.indices[i];
                     const auto b = draw.indices[i + 1u];
@@ -391,13 +407,16 @@ int main(int argc, char **argv) {
                         continue;
                     rasterizer.draw_triangle(draw.vertices[a], draw.vertices[b], draw.vertices[c]);
                 }
+                entry.dirty = true;
             }
+            const gungnir::ge::Framebuffer *shown = targets.display(display_offset);
+            if (shown == nullptr) usage("no display surface rendered");
             std::ofstream ppm(ppm_path, std::ios::binary);
             if (!ppm) usage("cannot open ppm output");
             ppm << "P6\n480 272\n255\n";
             for (int y = 0; y < 272; ++y) {
                 for (int x = 0; x < 480; ++x) {
-                    const std::uint32_t pixel = framebuffer.color_at(x, y);
+                    const std::uint32_t pixel = shown->color_at(x, y);
                     const char rgb[3] = {static_cast<char>(pixel & 0xFFu),
                                          static_cast<char>((pixel >> 8u) & 0xFFu),
                                          static_cast<char>((pixel >> 16u) & 0xFFu)};

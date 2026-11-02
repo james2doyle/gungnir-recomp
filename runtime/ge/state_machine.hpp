@@ -57,6 +57,11 @@ struct DrawState {
     // targets, whether CLEAR mode (0xD3 bit 0) turns it into a clear, and
     // the color write mask (PMASK 0xE8/0xE9, or the clear bits).
     std::uint32_t draw_buffer{};
+    // Guest address + size backing this draw's texture (0 when untextured).
+    // Used to detect render-to-texture reads and to invalidate stale
+    // decoded textures when a draw target overlaps them.
+    std::uint32_t texture_address{};
+    std::size_t texture_size{};
     bool clear{};
     // PMASK bits set = keep destination (PSP reset 0 = full write).
     std::uint32_t write_mask{};

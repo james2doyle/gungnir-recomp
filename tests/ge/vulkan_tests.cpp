@@ -5,6 +5,7 @@
 #include "ge/vulkan_shaders.hpp"
 
 #include "ge/software.hpp"
+#include "ge/targets.hpp"
 #include "ge/texture.hpp"
 
 #if defined(GUNGNIR_HAVE_SDL3)
@@ -187,16 +188,16 @@ void parity_tests() {
     draw_quad_software(software_rasterizer, solid);
     VulkanFrame vulkan;
     const VulkanDrawState solid_state;
-    check(backend.render_headless_draw(solid.vk, solid.indices, solid_state, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(solid.vk, solid.indices, solid_state, vulkan, error, 0u), error.c_str());
     compare_frames(software, vulkan, 1, false, "solid colour quad matches software");
     const std::size_t first_pipeline_count = backend.pipeline_count();
     check(first_pipeline_count == 1u, "one pipeline for one draw state");
-    check(backend.render_headless_draw(solid.vk, solid.indices, solid_state, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(solid.vk, solid.indices, solid_state, vulkan, error, 0u), error.c_str());
     check(backend.pipeline_count() == first_pipeline_count, "repeated state reuses the pipeline");
     VulkanDrawState cull_state;
     cull_state.cull = CullMode::Back;
     cull_state.front_face = FrontFace::Clockwise;
-    check(backend.render_headless_draw(solid.vk, solid.indices, cull_state, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(solid.vk, solid.indices, cull_state, vulkan, error, 0u), error.c_str());
     check(backend.pipeline_count() == first_pipeline_count + 1u, "cull state creates one additional pipeline");
 
     const Quad near = make_quad({rgba8(0, 0, 255), rgba8(0, 0, 255), rgba8(0, 0, 255), rgba8(0, 0, 255)}, 50.0f);
@@ -217,7 +218,7 @@ void parity_tests() {
     const std::array<VulkanDrawCall, 2> depth_calls{
         VulkanDrawCall{std::span<const VulkanDrawVertex>(far.vk), far.indices, vk_depth},
         VulkanDrawCall{std::span<const VulkanDrawVertex>(near.vk), near.indices, vk_depth}};
-    check(backend.render_headless_draws(depth_calls, vulkan, error), error.c_str());
+    check(backend.render_headless_draws(depth_calls, vulkan, error, 0u), error.c_str());
     compare_frames(depth_software, vulkan, 1, false, "depth ordering matches software");
 
     Framebuffer blend_software(32, 32);
@@ -245,7 +246,7 @@ void parity_tests() {
     VulkanDrawState vk_blend;
     vk_blend.blend = blend_state.blend;
     const std::array<std::uint16_t, 3> blend_indices{0, 1, 2};
-    check(backend.render_headless_draw(blend_vk, blend_indices, vk_blend, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(blend_vk, blend_indices, vk_blend, vulkan, error, 0u), error.c_str());
     compare_frames(blend_software, vulkan, 1, true, "source-alpha blend matches software");
     check(backend.pipeline_count() == before_blend + 1u, "blend state creates one additional pipeline");
 
@@ -282,7 +283,7 @@ void parity_tests() {
     const std::array<VulkanDrawCall, 2> modulate_calls{
         VulkanDrawCall{std::span<const VulkanDrawVertex>(red_base.vk), red_base.indices, vk_red},
         VulkanDrawCall{std::span<const VulkanDrawVertex>(modulate_vk), blend_indices, vk_modulate}};
-    check(backend.render_headless_draws(modulate_calls, vulkan, error), error.c_str());
+    check(backend.render_headless_draws(modulate_calls, vulkan, error, 0u), error.c_str());
     compare_frames(modulate_software, vulkan, 1, false, "other-color modulate matches software");
     check(modulate_software.color_at(0, 0) == rgba8(255, 0, 0), "modulate keeps the red base");
 
@@ -298,7 +299,7 @@ void parity_tests() {
     fix_rasterizer.draw_triangle(modulate_sw[0], modulate_sw[1], modulate_sw[2]);
     VulkanDrawState vk_fix;
     vk_fix.blend = fix_state.blend;
-    check(backend.render_headless_draw(modulate_vk, blend_indices, vk_fix, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(modulate_vk, blend_indices, vk_fix, vulkan, error, 0u), error.c_str());
     compare_frames(fix_software, vulkan, 1, false, "FIX blend matches software");
 
     // Write mask: an alpha-only clear sprite over red must preserve red.
@@ -327,7 +328,7 @@ void parity_tests() {
     const std::array<VulkanDrawCall, 2> mask_calls{
         VulkanDrawCall{std::span<const VulkanDrawVertex>(red_base.vk), red_base.indices, vk_red},
         VulkanDrawCall{std::span<const VulkanDrawVertex>(mask_vk), blend_indices, vk_mask}};
-    check(backend.render_headless_draws(mask_calls, vulkan, error), error.c_str());
+    check(backend.render_headless_draws(mask_calls, vulkan, error, 0u), error.c_str());
     compare_frames(mask_software, vulkan, 1, false, "write mask preserves masked channels");
 
     // Alpha test: fragments below the reference are discarded on both
@@ -357,7 +358,7 @@ void parity_tests() {
     vk_atest.alpha_test = true;
     vk_atest.alpha_function = CompareFunc::Greater;
     vk_atest.alpha_reference = 200;
-    check(backend.render_headless_draw(atest_vk, blend_indices, vk_atest, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(atest_vk, blend_indices, vk_atest, vulkan, error, 0u), error.c_str());
     compare_frames(atest_software, vulkan, 1, false, "alpha test discards below reference");
 
     // Additive overflow: software clamps at white; the Vulkan path must
@@ -381,7 +382,7 @@ void parity_tests() {
     const std::array<VulkanDrawCall, 2> clamp_calls{
         VulkanDrawCall{std::span<const VulkanDrawVertex>(white.vk), white.indices, vk_clamp},
         VulkanDrawCall{std::span<const VulkanDrawVertex>(white.vk), white.indices, vk_clamp}};
-    check(backend.render_headless_draws(clamp_calls, vulkan, error), error.c_str());
+    check(backend.render_headless_draws(clamp_calls, vulkan, error, 0u), error.c_str());
     compare_frames(clamp_software, vulkan, 1, false, "additive overflow clamps on both");
 
     // Fog: full fog turns white into the fog color on both backends.
@@ -399,7 +400,7 @@ void parity_tests() {
     VulkanDrawState vk_fog;
     vk_fog.fog_enabled = true;
     vk_fog.fog_color = 0x0000FF00u;
-    check(backend.render_headless_draw(fog_quad.vk, fog_quad.indices, vk_fog, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(fog_quad.vk, fog_quad.indices, vk_fog, vulkan, error, 0u), error.c_str());
     compare_frames(fog_software, vulkan, 1, false, "fog mixes toward the fog color on both");
 
     // Repeat wrap with out-of-range UVs: the game's world quads carry
@@ -450,7 +451,7 @@ void parity_tests() {
     vk_wrap.texture_key = wrap_texture.content_key();
     vk_wrap.clamp_u = false;
     vk_wrap.clamp_v = false;
-    check(backend.render_headless_draw(wrap_quad.vk, wrap_quad.indices, vk_wrap, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(wrap_quad.vk, wrap_quad.indices, vk_wrap, vulkan, error, 0u), error.c_str());
     compare_frames(wrap_software, vulkan, 1, false, "repeat wrap tiles out-of-range UVs on both");
 
     // Texture functions: each combine must agree between backends.
@@ -514,9 +515,39 @@ void parity_tests() {
         vk_func.tex_rgba = func_case.rgba;
         vk_func.color_double = func_case.dbl;
         vk_func.tex_env = func_case.env;
-        check(backend.render_headless_draw(quad.vk, quad.indices, vk_func, vulkan, error), error.c_str());
+        check(backend.render_headless_draw(quad.vk, quad.indices, vk_func, vulkan, error, 0u), error.c_str());
         compare_frames(func_software, vulkan, 1, false, func_case.name);
     }
+
+    // Render targets: two FBP addresses land on different surfaces; the
+    // display buffer selects which one presents. Pre-target-routing the
+    // backend mashed everything into one image.
+    TargetSet router(32, 32);
+    const Quad red_quad = make_quad({rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0), rgba8(255, 0, 0)});
+    const Quad green_quad =
+        make_quad({rgba8(0, 255, 0), rgba8(0, 255, 0), rgba8(0, 255, 0), rgba8(0, 255, 0)});
+    {
+        TargetEntry &entry = router.draw_to(0x100u);
+        SoftwareRasterizer rasterizer(entry.surface);
+        draw_quad_software(rasterizer, red_quad);
+        entry.dirty = true;
+    }
+    {
+        TargetEntry &entry = router.draw_to(0x200u);
+        SoftwareRasterizer rasterizer(entry.surface);
+        draw_quad_software(rasterizer, green_quad);
+        entry.dirty = true;
+    }
+    VulkanDrawState vk_tred;
+    vk_tred.draw_buffer = 0x100u;
+    VulkanDrawState vk_tgreen;
+    vk_tgreen.draw_buffer = 0x200u;
+    const std::array<VulkanDrawCall, 2> target_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(red_quad.vk), red_quad.indices, vk_tred},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(green_quad.vk), green_quad.indices, vk_tgreen}};
+    check(backend.render_headless_draws(target_calls, vulkan, error, 0x100u), error.c_str());
+    check(router.display(0x100u) != nullptr, "software display target exists");
+    compare_frames(*router.display(0x100u), vulkan, 1, false, "display target holds only its draws");
 
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
@@ -532,7 +563,7 @@ void parity_tests() {
     vk_scissor.scissor_y0 = 8;
     vk_scissor.scissor_x1 = 24;
     vk_scissor.scissor_y1 = 24;
-    check(backend.render_headless_draw(solid.vk, solid.indices, vk_scissor, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(solid.vk, solid.indices, vk_scissor, vulkan, error, 0u), error.c_str());
     compare_frames(scissor_software, vulkan, 1, false, "scissor rectangle matches software");
 
     const std::vector<std::uint8_t> texture_data{0u, 1u, 2u, 3u};
@@ -570,7 +601,7 @@ void parity_tests() {
     vk_texture.texture = &texture_image;
     const std::uint64_t texture_key = texture.content_key();
     vk_texture.texture_key = texture_key;
-    check(backend.render_headless_draw(textured.vk, textured.indices, vk_texture, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(textured.vk, textured.indices, vk_texture, vulkan, error, 0u), error.c_str());
     compare_frames(texture_software, vulkan, 1, false, "CLUT-decoded texture matches software");
     TextureRangeIndex ranges;
     ranges.track(0x04088000u, 0x1000u, texture_key);
@@ -590,7 +621,7 @@ void parity_tests() {
     texture_rasterizer.state().texture = &changed_texture;
     draw_quad_software(texture_rasterizer, textured);
     vk_texture.texture = &changed_image;
-    check(backend.render_headless_draw(textured.vk, textured.indices, vk_texture, vulkan, error), error.c_str());
+    check(backend.render_headless_draw(textured.vk, textured.indices, vk_texture, vulkan, error, 0u), error.c_str());
     compare_frames(texture_software, vulkan, 1, false, "invalidated texture re-uploads and matches software");
 
     backend.shutdown();
@@ -685,7 +716,7 @@ void many_textures() {
         state.texture_key = 0x1000u + i;
         const std::string contract = "the texture descriptor pool holds " +
             std::to_string(images.size()) + " live textures (failed at " + std::to_string(i) + ")";
-        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error), contract.c_str());
+        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error, 0u), contract.c_str());
     }
     backend.shutdown();
 }
@@ -723,7 +754,7 @@ void bounded_gpu_texture_cache() {
         VulkanDrawState state;
         state.texture = &images[i];
         state.texture_key = 0x8000u + i;
-        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error), error);
+        check(backend.render_headless_draw(quad.vk, quad.indices, state, frame, error, 0u), error);
         check(backend.texture_count() <= config.texture_cache_limit,
               "the GPU texture cache keeps at most its configured entry count (frame " + std::to_string(i) +
                   " held " + std::to_string(backend.texture_count()) + ")");

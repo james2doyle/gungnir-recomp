@@ -421,3 +421,26 @@ is modelled because the title only reads GPI.
   event render keeps PPSSPP layout (vs-ppsspp-texfunc.png shows only
   the known fade delta); the change is preventive for areas using
   decal/replace/blend/add.
+
+### GE render-target reference review (2026-11-02)
+
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `current_target()` (per-draw-buffer
+  surfaces keyed by FBP/FBW/ZBUF) + `fboTexAddr` render-to-texture
+  sampling. Behavioral reference only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `ge.fbp/ge.fbw` + guest-VRAM writes.
+  Behavioral reference only; no code copied.
+- Adopted: `TargetSet` routes draws by FBP offset into per-target
+  software surfaces with display select on flip
+  (sceDisplay framebuffer offset, target 0, then first surface), and
+  the Vulkan present paths filter calls to the display buffer's group
+  (legacy render-all fallback when the display buffer is undrawn).
+  Corpus finding: every observed draw targets FBP 0 and all 43 texture
+  addresses live in RAM — no render-to-texture reads occur, so routing
+  is a proven no-op on current scenes (byte-identical renders) and RTT
+  sampling is implemented on the software path (exact RGBA8888 match)
+  with GPU RTT as a named gap. Verified by `ge_targets_tests`
+  (routing/display/RTT, observed red on stubs), a display-target
+  Vulkan parity case (observed red: mashed image), and PPSSPP
+  side-by-side.

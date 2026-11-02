@@ -1451,13 +1451,20 @@ bool VulkanBackend::render_headless(VulkanFrame &frame, std::string &error) {
 
 bool VulkanBackend::render_headless_draw(std::span<const VulkanDrawVertex> vertices,
                                          std::span<const std::uint16_t> indices, const VulkanDrawState &state,
-                                         VulkanFrame &frame, std::string &error) {
+                                         VulkanFrame &frame, std::string &error, std::uint32_t display_buffer) {
     const std::array<VulkanDrawCall, 1> calls{{{vertices, indices, state}}};
-    return render_headless_draws(calls, frame, error);
+    return render_headless_draws(calls, frame, error, display_buffer);
 }
 
 bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls, VulkanFrame &frame,
-                                          std::string &error) {
+                                          std::string &error, std::uint32_t display_buffer) {
+    // Route by draw buffer: only the display target's group renders.
+    // When nothing targets the display buffer, render everything (legacy).
+    std::vector<VulkanDrawCall> display_calls;
+    display_calls.reserve(calls.size());
+    for (const VulkanDrawCall &call : calls)
+        if (call.state.draw_buffer == display_buffer) display_calls.push_back(call);
+    if (!display_calls.empty()) calls = display_calls;
     if (!impl_ || !impl_->initialized || !impl_->config.headless) {
         error = "headless_backend_not_initialized";
         return false;
@@ -1710,7 +1717,15 @@ bool VulkanBackend::render_swapchain(std::string &error) {
                      error);
 }
 
-bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error) {
+bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error,
+                                          std::uint32_t display_buffer) {
+    // Route by draw buffer: only the display target's group presents.
+    // When nothing targets the display buffer, present everything (legacy).
+    std::vector<VulkanDrawCall> display_calls;
+    display_calls.reserve(calls.size());
+    for (const VulkanDrawCall &call : calls)
+        if (call.state.draw_buffer == display_buffer) display_calls.push_back(call);
+    if (!display_calls.empty()) calls = display_calls;
     if (!impl_ || !impl_->initialized || impl_->config.headless || impl_->swapchain == VK_NULL_HANDLE) {
         error = "swapchain_backend_not_initialized";
         return false;

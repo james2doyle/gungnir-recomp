@@ -1,5 +1,6 @@
 #include "ge/frame_queue.hpp"
 #include "ge/state_machine.hpp"
+#include "ge/targets.hpp"
 #include "ge/vulkan_backend.hpp"
 #include "hle/hle_media.hpp"
 
@@ -242,6 +243,11 @@ std::string intent_string(const char *key) {
 
 bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
                          const std::vector<gungnir::ge::Draw> &draws, std::string &error) {
+    // The display buffer selects the presented target; anything else is
+    // offscreen (sampled via render-to-texture or ignored).
+    const std::uint32_t framebuffer = gungnir::hle::display_state().framebuffer;
+    const std::uint32_t display_offset =
+        framebuffer >= gungnir::ge::kVramBase ? framebuffer - gungnir::ge::kVramBase : 0u;
     struct OwnedDraw {
         std::vector<gungnir::ge::VulkanDrawVertex> vertices;
         std::vector<std::uint16_t> indices;
@@ -283,9 +289,10 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.linear = in.linear;
         out.clamp_u = in.clamp_u;
         out.clamp_v = in.clamp_v;
+        out.draw_buffer = in.draw_buffer;
         calls.push_back({owned[i].vertices, owned[i].indices, out});
     }
-    return backend.render_swapchain_draws(calls, error);
+    return backend.render_swapchain_draws(calls, error, display_offset);
 }
 
 gungnir::platform::GameDataResult check_game_data() {
@@ -990,7 +997,7 @@ int main(int, char **) {
             state.scissor_x1 = 480;
             state.scissor_y1 = 272;
             const std::array<gungnir::ge::VulkanDrawCall, 1> calls{{{vertices, indices, state}}};
-            rendered = backend.render_swapchain_draws(calls, error);
+            rendered = backend.render_swapchain_draws(calls, error, 0u);
         } else if (have_guest_frame) {
             rendered = present_guest_frame(backend, guest_draws, error);
         } else {

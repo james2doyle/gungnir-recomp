@@ -369,6 +369,8 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     state.linear = texture_state.linear;
     state.clamp_u = texture_state.clamp_u;
     state.clamp_v = texture_state.clamp_v;
+    state.texture_address = address;
+    state.texture_size = data_size;
     return state.texture;
 }
 

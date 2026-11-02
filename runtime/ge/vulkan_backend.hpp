@@ -70,6 +70,9 @@ struct VulkanDrawState {
     bool tex_rgba{};
     bool color_double{};
     std::uint32_t tex_env{};
+    // Guest draw buffer (FBP 0x9C offset) this draw targets. The backend
+    // renders only the display buffer's group (legacy: everything).
+    std::uint32_t draw_buffer{};
     // Write mask: bits set = keep destination. Channel-exact masks map to
     // the pipeline color write mask; anything else falls back to a full
     // write (named gap, logged at pipeline build).
@@ -154,12 +157,15 @@ public:
     bool initialize(const Config &config, std::string &error);
     bool render_headless(VulkanFrame &frame, std::string &error);
     bool render_headless_draw(std::span<const VulkanDrawVertex> vertices, std::span<const std::uint16_t> indices,
-                              const VulkanDrawState &state, VulkanFrame &frame, std::string &error);
-    bool render_headless_draws(std::span<const VulkanDrawCall> calls, VulkanFrame &frame, std::string &error);
+                              const VulkanDrawState &state, VulkanFrame &frame, std::string &error,
+                              std::uint32_t display_buffer);
+    bool render_headless_draws(std::span<const VulkanDrawCall> calls, VulkanFrame &frame, std::string &error,
+                               std::uint32_t display_buffer);
     bool render_swapchain(std::string &error);
     // Presents a frame built from guest GE draws. An empty call list clears
     // the swapchain without drawing the synthetic triangle.
-    bool render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error);
+    bool render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error,
+                               std::uint32_t display_buffer);
     bool recreate_swapchain(int width, int height, std::string &error);
     bool recreate_surface(std::string &error);
     void invalidate_texture(std::uint64_t key);
