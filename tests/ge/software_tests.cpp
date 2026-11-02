@@ -274,6 +274,47 @@ void texture_sampling() {
     check(framebuffer.color_at(1, 1) == rgba8(255, 255, 255), "texture samples the bottom-right texel");
 }
 
+void texture_functions() {
+    // 1x1 RGBA8888 texel (64, 128, 192, 128). White opaque vertices.
+    std::vector<std::uint8_t> data{64u, 128u, 192u, 128u};
+    TextureState texture_state;
+    texture_state.format = TextureFormat::Rgba8888;
+    texture_state.width = 1;
+    texture_state.height = 1;
+    texture_state.buffer_width = 1;
+    const Texture texture(texture_state, data);
+
+    Framebuffer framebuffer(1, 1);
+    RasterState state;
+    state.texture_enabled = true;
+    state.texture = &texture;
+    SoftwareRasterizer rasterizer(framebuffer, state);
+    const auto render = [&](TextureFunc func, bool rgba, bool dbl, std::uint32_t env, std::uint32_t color) {
+        framebuffer.clear(rgba8(0, 0, 0));
+        rasterizer.state().tex_func = func;
+        rasterizer.state().tex_rgba = rgba;
+        rasterizer.state().color_double = dbl;
+        rasterizer.state().tex_env = env;
+        full_screen(rasterizer, color);
+        return framebuffer.color_at(0, 0);
+    };
+    const std::uint32_t white = rgba8(255, 255, 255);
+    check(render(TextureFunc::Modulate, false, false, 0u, white) == rgba8(64, 128, 192), "modulate multiplies");
+    check(render(TextureFunc::Modulate, true, false, 0u, white) == rgba8(64, 128, 192, 128),
+          "modulate RGBA takes texel alpha");
+    check(render(TextureFunc::Decal, false, false, 0u, white) == rgba8(64, 128, 192), "decal replaces color");
+    check(render(TextureFunc::Decal, true, false, 0u, white) == rgba8(159, 191, 223),
+          "decal RGBA mixes by texel alpha");
+    check(render(TextureFunc::Replace, true, false, 0u, white) == rgba8(64, 128, 192, 128),
+          "replace takes the texel");
+    check(render(TextureFunc::Blend, false, false, 0x0000FFu, white) == rgba8(255, 127, 63),
+          "blend mixes toward the env color");
+    check(render(TextureFunc::Add, false, false, 0u, rgba8(100, 100, 100)) == rgba8(164, 228, 255),
+          "add sums and clamps");
+    check(render(TextureFunc::Modulate, false, true, 0u, rgba8(100, 100, 100)) == rgba8(50, 101, 151),
+          "color double doubles before dividing");
+}
+
 void golden_and_determinism() {
     const auto render = []() {
         Framebuffer framebuffer(8, 8);
@@ -307,6 +348,7 @@ int main() {
         stencil_lite();
         fog_mix();
         texture_sampling();
+        texture_functions();
         golden_and_determinism();
         std::cout << "ge_software_tests: OK\n";
         return 0;

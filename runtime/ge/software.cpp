@@ -192,9 +192,61 @@ void SoftwareRasterizer::shade_pixel(int x, int y, const Fragment &fragment) {
         float q = fragment.texcoord[2];
         if (q == 0.0f) q = 1.0f;
         const std::uint32_t texel = state_.texture->sample(fragment.texcoord[0] / q, fragment.texcoord[1] / q);
-        source = rgba8(channel(source, 0) * channel(texel, 0) / 255u, channel(source, 8) * channel(texel, 8) / 255u,
-                       channel(source, 16) * channel(texel, 16) / 255u,
-                       channel(source, 24) * channel(texel, 24) / 255u);
+        const int sr = static_cast<int>(channel(source, 0));
+        const int sg = static_cast<int>(channel(source, 8));
+        const int sb = static_cast<int>(channel(source, 16));
+        const int sa = static_cast<int>(channel(source, 24));
+        const int tr = static_cast<int>(channel(texel, 0));
+        const int tg = static_cast<int>(channel(texel, 8));
+        const int tb = static_cast<int>(channel(texel, 16));
+        const int ta = static_cast<int>(channel(texel, 24));
+        const int dbl = state_.color_double ? 2 : 1;
+        const auto clamp_channel = [](int value) {
+            return static_cast<std::uint32_t>(std::clamp(value, 0, 255));
+        };
+        int r = sr, g = sg, b = sb, a = sa;
+        switch (state_.tex_func) {
+        case TextureFunc::Modulate:
+            r = (sr + 1) * tr * dbl / 256;
+            g = (sg + 1) * tg * dbl / 256;
+            b = (sb + 1) * tb * dbl / 256;
+            if (state_.tex_rgba) a = (sa + 1) * ta / 256;
+            break;
+        case TextureFunc::Decal:
+            if (state_.tex_rgba) {
+                r = ((sr + 1) * (255 - ta) + (tr + 1) * ta) * dbl / 256;
+                g = ((sg + 1) * (255 - ta) + (tg + 1) * ta) * dbl / 256;
+                b = ((sb + 1) * (255 - ta) + (tb + 1) * ta) * dbl / 256;
+            } else {
+                r = tr * dbl;
+                g = tg * dbl;
+                b = tb * dbl;
+            }
+            break;
+        case TextureFunc::Blend: {
+            const int er = static_cast<int>(state_.tex_env & 255u);
+            const int eg = static_cast<int>((state_.tex_env >> 8u) & 255u);
+            const int eb = static_cast<int>((state_.tex_env >> 16u) & 255u);
+            r = ((255 - tr) * sr + tr * er + 255) * dbl / 256;
+            g = ((255 - tg) * sg + tg * eg + 255) * dbl / 256;
+            b = ((255 - tb) * sb + tb * eb + 255) * dbl / 256;
+            if (state_.tex_rgba) a = (sa + 1) * ta / 256;
+            break;
+        }
+        case TextureFunc::Replace:
+            r = tr * dbl;
+            g = tg * dbl;
+            b = tb * dbl;
+            if (state_.tex_rgba) a = ta;
+            break;
+        case TextureFunc::Add:
+            r = sr + tr * dbl;
+            g = sg + tg * dbl;
+            b = sb + tb * dbl;
+            if (state_.tex_rgba) a = (sa + 1) * ta / 256;
+            break;
+        }
+        source = rgba8(clamp_channel(r), clamp_channel(g), clamp_channel(b), clamp_channel(a));
     }
 
     if (state_.alpha_test && !compare(state_.alpha_function, channel(source, 24), state_.alpha_reference)) return;

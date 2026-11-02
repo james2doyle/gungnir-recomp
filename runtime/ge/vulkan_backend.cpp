@@ -147,6 +147,11 @@ std::uint64_t draw_pipeline_key(const VulkanDrawState &state) {
         key |= static_cast<std::uint64_t>(state.alpha_reference) << 30u;
     }
     if (state.fog_enabled) key |= 1ull << 38u;
+    // Texture combine: func + RGBA/double flags select the shader path.
+    // The env color travels as a push constant, like fog color.
+    key |= static_cast<std::uint64_t>(state.tex_func) << 39u;
+    if (state.tex_rgba) key |= 1ull << 42u;
+    if (state.color_double) key |= 1ull << 43u;
     return key;
 }
 
@@ -760,8 +765,9 @@ struct VulkanBackend::Impl {
         push.offset = 0;
         // Push layout mirrors the SPIR-V offsets: viewport (0), atest
         // func/ref (8/12), fog enable (16), fog color vec3 at 32
-        // (16-byte aligned). 12 words cover through offset 44.
-        push.size = sizeof(float) * 12u;
+        // (16-byte aligned), tex func (44), tex env bits (48).
+        // 13 words cover through offset 52.
+        push.size = sizeof(float) * 13u;
         pipeline_layout_info.pushConstantRangeCount = 1;
         pipeline_layout_info.pPushConstantRanges = &push;
         if (!result_ok(vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &draw_pipeline_layout),
@@ -1565,7 +1571,8 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         if (x1 <= x0 || y1 <= y0) continue;
         vkCmdBindPipeline(impl_->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines[i]);
         // Push-constant layout must match mesh.vert/mesh.frag: viewport
-        // floats, alpha-test func as int bits + ref, fog enable + color.
+        // floats, alpha-test func as int bits + ref, fog enable + color,
+        // tex func pack (func | rgba<<3 | double<<4) + env bits.
         // vec3 fog_color is 16-byte aligned at offset 32.
         const std::int32_t atest_func = calls[i].state.alpha_test
                                             ? static_cast<std::int32_t>(calls[i].state.alpha_function)
@@ -1575,12 +1582,17 @@ bool VulkanBackend::render_headless_draws(std::span<const VulkanDrawCall> calls,
         const float fog_color[3] = {static_cast<float>(calls[i].state.fog_color & 255u) / 255.0f,
                                     static_cast<float>((calls[i].state.fog_color >> 8u) & 255u) / 255.0f,
                                     static_cast<float>((calls[i].state.fog_color >> 16u) & 255u) / 255.0f};
-        std::uint32_t push_words[12]{};
+        const std::int32_t tex_func = static_cast<std::int32_t>(calls[i].state.tex_func) |
+                                      (calls[i].state.tex_rgba ? 8 : 0) |
+                                      (calls[i].state.color_double ? 16 : 0);
+        std::uint32_t push_words[13]{};
         std::memcpy(&push_words[0], &push_viewport[0], 2u * sizeof(float));
         std::memcpy(&push_words[2], &atest_func, sizeof(std::int32_t));
         std::memcpy(&push_words[3], &atest_ref, sizeof(float));
         std::memcpy(&push_words[4], &fog_enable, sizeof(std::int32_t));
         std::memcpy(&push_words[8], &fog_color[0], 3u * sizeof(float));
+        std::memcpy(&push_words[11], &tex_func, sizeof(std::int32_t));
+        push_words[12] = calls[i].state.tex_env;
         vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof push_words, push_words);
@@ -1839,12 +1851,17 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         const float swap_fog_color[3] = {static_cast<float>(calls[i].state.fog_color & 255u) / 255.0f,
                                          static_cast<float>((calls[i].state.fog_color >> 8u) & 255u) / 255.0f,
                                          static_cast<float>((calls[i].state.fog_color >> 16u) & 255u) / 255.0f};
-        std::uint32_t swap_push_words[12]{};
+        const std::int32_t swap_tex_func = static_cast<std::int32_t>(calls[i].state.tex_func) |
+                                           (calls[i].state.tex_rgba ? 8 : 0) |
+                                           (calls[i].state.color_double ? 16 : 0);
+        std::uint32_t swap_push_words[13]{};
         std::memcpy(&swap_push_words[0], &push_viewport[0], 2u * sizeof(float));
         std::memcpy(&swap_push_words[2], &swap_atest_func, sizeof(std::int32_t));
         std::memcpy(&swap_push_words[3], &swap_atest_ref, sizeof(float));
         std::memcpy(&swap_push_words[4], &swap_fog_enable, sizeof(std::int32_t));
         std::memcpy(&swap_push_words[8], &swap_fog_color[0], 3u * sizeof(float));
+        std::memcpy(&swap_push_words[11], &swap_tex_func, sizeof(std::int32_t));
+        swap_push_words[12] = calls[i].state.tex_env;
         vkCmdPushConstants(impl_->command_buffer, impl_->draw_pipeline_layout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof swap_push_words, swap_push_words);

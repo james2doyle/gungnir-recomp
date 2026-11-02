@@ -39,6 +39,11 @@ struct DrawState {
     CompareFunc alpha_function{CompareFunc::Greater};
     std::uint8_t alpha_reference{};
     bool texture_enabled{};
+    // Texture combine (TEXFUNC 0xC9 / TEXENVCOLOR 0xCA).
+    TextureFunc tex_func{TextureFunc::Modulate};
+    bool tex_rgba{};
+    bool color_double{};
+    std::uint32_t tex_env{};
     bool linear{};
     // TEXWRAP (0xC7) clamp flags: true means clamp to edge, false repeats.
     bool clamp_u{};

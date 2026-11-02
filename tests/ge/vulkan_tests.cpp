@@ -453,6 +453,71 @@ void parity_tests() {
     check(backend.render_headless_draw(wrap_quad.vk, wrap_quad.indices, vk_wrap, vulkan, error), error.c_str());
     compare_frames(wrap_software, vulkan, 1, false, "repeat wrap tiles out-of-range UVs on both");
 
+    // Texture functions: each combine must agree between backends.
+    // Pre-fix both paths only modulated, so decal/replace/blend/add
+    // mismatched any game using them (observed red below via software).
+    std::vector<std::uint8_t> func_data(2u * 2u * 4u);
+    const std::uint32_t func_colors[4] = {rgba8(64, 128, 192, 128), rgba8(255, 0, 0), rgba8(0, 255, 0),
+                                          rgba8(0, 0, 255)};
+    for (int i = 0; i < 4; ++i) {
+        func_data[static_cast<std::size_t>(i) * 4u] = static_cast<std::uint8_t>(func_colors[i] & 0xFFu);
+        func_data[static_cast<std::size_t>(i) * 4u + 1u] =
+            static_cast<std::uint8_t>((func_colors[i] >> 8u) & 0xFFu);
+        func_data[static_cast<std::size_t>(i) * 4u + 2u] =
+            static_cast<std::uint8_t>((func_colors[i] >> 16u) & 0xFFu);
+        func_data[static_cast<std::size_t>(i) * 4u + 3u] =
+            static_cast<std::uint8_t>((func_colors[i] >> 24u) & 0xFFu);
+    }
+    TextureState func_state;
+    func_state.format = TextureFormat::Rgba8888;
+    func_state.width = 2;
+    func_state.height = 2;
+    func_state.buffer_width = 2;
+    func_state.clamp_u = true;
+    func_state.clamp_v = true;
+    const Texture func_texture(func_state, func_data);
+    TextureImage func_image;
+    func_image.width = 2;
+    func_image.height = 2;
+    func_texture.decode(func_image.pixels);
+    struct FuncCase {
+        TextureFunc func;
+        bool rgba;
+        bool dbl;
+        std::uint32_t env;
+        const char *name;
+    };
+    const std::array<FuncCase, 5> func_cases{{{TextureFunc::Decal, true, false, 0u, "decal RGBA"},
+                                             {TextureFunc::Blend, false, false, 0x0000FFu, "blend env"},
+                                             {TextureFunc::Replace, true, false, 0u, "replace RGBA"},
+                                             {TextureFunc::Add, false, false, 0u, "add"},
+                                             {TextureFunc::Modulate, false, true, 0u, "modulate double"}}};
+    for (const FuncCase &func_case : func_cases) {
+        const Quad quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                     rgba8(255, 255, 255)},
+                                    0.5f, true);
+        Framebuffer func_software(32, 32);
+        func_software.clear(rgba8(0, 0, 0));
+        RasterState func_raster_state;
+        func_raster_state.texture_enabled = true;
+        func_raster_state.texture = &func_texture;
+        func_raster_state.tex_func = func_case.func;
+        func_raster_state.tex_rgba = func_case.rgba;
+        func_raster_state.color_double = func_case.dbl;
+        func_raster_state.tex_env = func_case.env;
+        SoftwareRasterizer func_rasterizer(func_software, func_raster_state);
+        draw_quad_software(func_rasterizer, quad);
+        VulkanDrawState vk_func;
+        vk_func.texture = &func_image;
+        vk_func.texture_key = func_texture.content_key();
+        vk_func.tex_func = func_case.func;
+        vk_func.tex_rgba = func_case.rgba;
+        vk_func.color_double = func_case.dbl;
+        vk_func.tex_env = func_case.env;
+        check(backend.render_headless_draw(quad.vk, quad.indices, vk_func, vulkan, error), error.c_str());
+        compare_frames(func_software, vulkan, 1, false, func_case.name);
+    }
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

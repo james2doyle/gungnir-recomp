@@ -9,6 +9,10 @@ layout(push_constant) uniform PushConstants {
     // Fog: enable flag + fog color (RGB, 0-1). Alpha unaffected.
     int fog_enable;
     vec3 fog_color;
+    // Texture combine (fragment only): low 3 bits func, bit 3 RGBA,
+    // bit 4 double; tex_env holds TEXENVCOLOR as raw bits.
+    int tex_func;
+    uint tex_env;
 } pc;
 
 layout(location = 0) in vec2 in_position;

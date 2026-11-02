@@ -273,6 +273,10 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         out.alpha_reference = in.alpha_reference;
         out.fog_enabled = in.fog_enabled;
         out.fog_color = in.fog_color;
+        out.tex_func = in.tex_func;
+        out.tex_rgba = in.tex_rgba;
+        out.color_double = in.color_double;
+        out.tex_env = in.tex_env;
         out.write_mask = in.write_mask;
         out.texture = in.texture;
         out.texture_key = in.texture_key;

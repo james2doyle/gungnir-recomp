@@ -287,7 +287,14 @@ std::vector<ScreenVertex> StateMachine::transform_vertices(
 
 const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, DrawState &state) {
     if (!reg_on(0x1Eu) || (reg_on(0xD3u) && (reg_param(0xD3u) & 1u) != 0u)) return nullptr;
-    if ((reg_param(0xC9u) & 7u) != 0u) gap("tex_func_not_modulate");
+    // Texture function (TEXFUNC 0xC9): low 3 bits select the combine
+    // (codes 4-7 are all add), bit 8 selects RGBA mode, bit 16 doubles
+    // the color result. Blend (2) reads TEXENVCOLOR (0xCA).
+    const std::uint32_t tex_func = reg_param(0xC9u);
+    state.tex_func = static_cast<TextureFunc>(std::min<std::uint32_t>(tex_func & 7u, 4u));
+    state.tex_rgba = (tex_func & 0x100u) != 0u;
+    state.color_double = (tex_func & 0x10000u) != 0u;
+    state.tex_env = reg_param(0xCAu);
     if ((reg_param(0xC0u) & 3u) != 0u) gap("tex_map_mode");
     const std::uint32_t format = reg_param(0xC3u) & 15u;
     if (format > 7u) {

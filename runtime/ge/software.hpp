@@ -51,6 +51,12 @@ enum class BlendFactor : std::uint8_t {
 
 enum class BlendEquation : std::uint8_t { Add, Subtract, ReverseSubtract, Min, Max };
 
+// GE texture function (TEXFUNC 0xC9 low 3 bits): how the texel combines
+// with the vertex color. Bit 8 selects RGBA mode (texture alpha feeds
+// the result alpha); bit 16 doubles the color result. Blend reads the
+// TEXENVCOLOR register (0xCA).
+enum class TextureFunc : std::uint8_t { Modulate, Decal, Blend, Replace, Add };
+
 struct BlendState {
     bool enabled{};
     BlendFactor source{BlendFactor::One};
@@ -84,6 +90,11 @@ struct RasterState {
     std::uint8_t alpha_reference{};
     StencilState stencil{};
     BlendState blend{};
+    // Texture combine (TEXFUNC 0xC9 / TEXENVCOLOR 0xCA).
+    TextureFunc tex_func{TextureFunc::Modulate};
+    bool tex_rgba{};
+    bool color_double{};
+    std::uint32_t tex_env{};
     bool texture_enabled{};
     const Texture *texture{};
     // Write mask: bits set = keep destination (PMASK 0xE8/0xE9, or the

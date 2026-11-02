@@ -398,3 +398,26 @@ is modelled because the title only reads GPI.
   corrected unit pins plus a no-cull bypass render that restored the
   dirt/ground patches, with device re-verification and PPSSPP
   side-by-side at commit time.
+
+### GE texture-function reference review (2026-11-02)
+
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit, `runtime/LICENSE`):
+  `runtime/src/rt/ge.c` `shade` (funcs 0-3 + 4-7 as add, bit 8 RGBA,
+  bit 16 color-double, TEXENVCOLOR blend with `+255` rounding, decal
+  keeps vertex alpha). Behavioral reference only; no code copied.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0):
+  `runtime/src/ge_render.cpp` `sample`/`shade_t` (same combine table,
+  `(cr+1)*tr*dbl/256` modulate, `clamp255` after). Behavioral reference
+  only; no code copied.
+- Adopted: full TEXFUNC decode (0xC9 low 3 bits with 4-7 aliasing to
+  add, RGBA, color-double; 0xCA env color) into `DrawState`, software
+  combine matching the references (this also aligns modulate to
+  `(s+1)*t/256` from our old `s*t/255`), Vulkan combine in
+  255-space in the fragment shader via push-constant func pack + env
+  bits (pipeline-keyed). Verified by `texfunc_decode` plus per-func
+  software goldens and Vulkan parity per func (all observed red:
+  decode 3 failures, software golden on old code, decal parity
+  159-vs-64 on the old shader). Real corpus uses modulate-only, so the
+  event render keeps PPSSPP layout (vs-ppsspp-texfunc.png shows only
+  the known fade delta); the change is preventive for areas using
+  decal/replace/blend/add.

@@ -374,6 +374,10 @@ int main(int argc, char **argv) {
                 state.alpha_reference = draw.state.alpha_reference;
                 state.fog_enabled = draw.state.fog_enabled;
                 state.fog_color = draw.state.fog_color;
+                state.tex_func = draw.state.tex_func;
+                state.tex_rgba = draw.state.tex_rgba;
+                state.color_double = draw.state.color_double;
+                state.tex_env = draw.state.tex_env;
                 state.write_mask = draw.state.write_mask;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;
                 state.texture_enabled = draw.state.texture_cpu != nullptr;

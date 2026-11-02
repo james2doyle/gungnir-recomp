@@ -6,6 +6,10 @@ layout(push_constant) uniform PushConstants {
     float atest_ref;
     int fog_enable;
     vec3 fog_color;
+    // Texture combine: low 3 bits func (0-4), bit 3 RGBA mode,
+    // bit 4 color double; env holds TEXENVCOLOR as raw bits.
+    int tex_func;
+    uint tex_env;
 } pc;
 
 layout(binding = 0) uniform sampler2D texture_sampler;
@@ -30,7 +34,36 @@ bool alpha_pass(float a) {
 
 void main() {
     vec4 texel = texture(texture_sampler, in_texcoord.xy / max(in_texcoord.z, 1e-6));
-    out_color = texel * in_color;
+    // Mirror the software combine in 255-space so both backends agree
+    // to float epsilon (the parity gate allows 1 LSB).
+    vec3 vc = floor(in_color.rgb * 255.0 + 0.5);
+    vec3 tc = floor(texel.rgb * 255.0 + 0.5);
+    float va = floor(in_color.a * 255.0 + 0.5);
+    float ta = floor(texel.a * 255.0 + 0.5);
+    vec3 env = vec3(float(pc.tex_env & 255u), float((pc.tex_env >> 8u) & 255u),
+                    float((pc.tex_env >> 16u) & 255u));
+    int func = pc.tex_func & 7;
+    bool rgba = (pc.tex_func & 8) != 0;
+    float dbl = ((pc.tex_func & 16) != 0) ? 2.0 : 1.0;
+    vec3 rgb = vc;
+    float alpha = va;
+    if (func == 0) {
+        rgb = (vc + 1.0) * tc * dbl / 256.0;
+        if (rgba) alpha = (va + 1.0) * ta / 256.0;
+    } else if (func == 1) {
+        if (rgba) rgb = ((vc + 1.0) * (255.0 - ta) + (tc + 1.0) * ta) * dbl / 256.0;
+        else rgb = tc * dbl;
+    } else if (func == 2) {
+        rgb = ((255.0 - tc) * vc + tc * env + 255.0) * dbl / 256.0;
+        if (rgba) alpha = (va + 1.0) * ta / 256.0;
+    } else if (func == 3) {
+        rgb = tc * dbl;
+        if (rgba) alpha = ta;
+    } else {
+        rgb = vc + tc * dbl;
+        if (rgba) alpha = (va + 1.0) * ta / 256.0;
+    }
+    out_color = vec4(clamp(rgb, 0.0, 255.0) / 255.0, clamp(alpha, 0.0, 255.0) / 255.0);
     if (!alpha_pass(out_color.a)) discard;
     if (pc.fog_enable != 0) {
         float fog = clamp(in_fog, 0.0, 1.0);
