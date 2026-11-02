@@ -118,7 +118,17 @@ VkCullModeFlags to_vk_cull(CullMode mode) {
 }
 
 VkFrontFace to_vk_front_face(FrontFace face) {
-    return face == FrontFace::Clockwise ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    // PSP GE cull winding lives in y-down screen space, and our vertex
+    // shader maps it to NDC with a positive (orientation-preserving) scale,
+    // but Vulkan evaluates triangle facing as if y were up. Without a
+    // mirroring viewport flip, guest-clockwise triangles read as
+    // counter-clockwise to the rasterizer, so backface culling removes the
+    // game's front faces and culled draws vanish entirely (cull-None draws
+    // are unaffected, which is the telltale). Mirror the selected front
+    // face to keep the same triangles the GE would keep. An equivalent fix
+    // is a negative-height flipping Vulkan viewport plus a negated shader
+    // NDC y (Yakumo's vulkan_renderer does exactly that and documents why).
+    return face == FrontFace::Clockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
 }
 
 VkStencilOp to_vk_stencil_op(StencilOp op) {

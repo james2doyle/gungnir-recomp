@@ -634,6 +634,225 @@ void parity_tests() {
               stencil_software.stencil_at(0, 0) == 1u,
           "always passes and writes the reference");
 
+    // Ground-strip combo (battle draws 73-class): textured triangle strip
+    // (expanded to a triangle list at emit, primitive stays strips) with
+    // stencil Always/REPLACE, depth Greater, and SrcAlpha blend. The
+    // terrain renders on host software but was missing on device.
+    {
+        TextureState strip_state;
+        strip_state.format = TextureFormat::Rgba8888;
+        strip_state.width = 8;
+        strip_state.height = 8;
+        strip_state.buffer_width = 8;
+        std::vector<std::uint8_t> strip_pixels(8u * 8u * 4u);
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 8; ++x) {
+                const bool light = ((x + y) & 1) == 0;
+                const std::size_t o = static_cast<std::size_t>(y * 8 + x) * 4u;
+                strip_pixels[o] = light ? 139u : 90u;
+                strip_pixels[o + 1u] = light ? 90u : 60u;
+                strip_pixels[o + 2u] = light ? 43u : 30u;
+                strip_pixels[o + 3u] = 255u;
+            }
+        const Texture strip_texture(strip_state, strip_pixels, {});
+        TextureImage strip_image;
+        strip_image.width = 8;
+        strip_image.height = 8;
+        strip_texture.decode(strip_image.pixels);
+
+        // Two adjacent quads as an expanded strip (v0v1v2, v2v1v3, ...).
+        const std::array<ScreenVertex, 8> strip_sw = {[&] {
+            std::array<ScreenVertex, 8> out{};
+            const float xs[8] = {0.0f, 16.0f, 0.0f, 16.0f, 16.0f, 32.0f, 16.0f, 32.0f};
+            const float ys[8] = {0.0f, 0.0f, 32.0f, 32.0f, 0.0f, 0.0f, 32.0f, 32.0f};
+            for (int i = 0; i < 8; ++i) {
+                out[i].x = xs[i];
+                out[i].y = ys[i];
+                // Depth comfortably above the cleared plane on both
+                // backends (software compares 16-bit ints, Vulkan NDC).
+                out[i].z = 30000.0f;
+                out[i].inv_w = 1.0f;
+                out[i].texcoord = {xs[i] / 32.0f, ys[i] / 32.0f, 1.0f};
+                out[i].color = {0.867f, 0.867f, 0.667f, 1.0f};
+            }
+            return out;
+        }()};
+        const std::array<std::uint16_t, 12> strip_indices{0, 1, 2, 2, 1, 3, 4, 5, 6, 6, 5, 7};
+        Framebuffer strip_software(32, 32);
+        strip_software.clear(rgba8(0, 0, 0), 0x0000u);
+        RasterState strip_raster_state;
+        strip_raster_state.scissor_x1 = 32;
+        strip_raster_state.scissor_y1 = 32;
+        // Mirror the game's clear discipline first: an ALWAYS+write draw
+        // at z=0 (the headless plane starts at 1.0, software at 0 here).
+        strip_raster_state.depth_test = true;
+        strip_raster_state.depth_write = true;
+        strip_raster_state.depth_function = CompareFunc::Always;
+        SoftwareRasterizer strip_rasterizer(strip_software, strip_raster_state);
+        {
+            ScreenVertex a = strip_sw[0];
+            ScreenVertex b = strip_sw[1];
+            ScreenVertex c = strip_sw[2];
+            a.z = b.z = c.z = 0.0f;
+            a.color = b.color = c.color = {0.0f, 0.0f, 0.0f, 0.0f};
+            strip_rasterizer.draw_triangle(a, b, c);
+            ScreenVertex d = strip_sw[2];
+            ScreenVertex e = strip_sw[1];
+            ScreenVertex f = strip_sw[3];
+            d.z = e.z = f.z = 0.0f;
+            d.color = e.color = f.color = {0.0f, 0.0f, 0.0f, 0.0f};
+            strip_rasterizer.draw_triangle(d, e, f);
+        }
+        strip_raster_state.depth_function = CompareFunc::Greater;
+        strip_raster_state.stencil.test = true;
+        strip_raster_state.stencil.function = CompareFunc::Always;
+        strip_raster_state.stencil.reference = 2;
+        strip_raster_state.stencil.zpass = StencilOp::Replace;
+        strip_raster_state.blend.enabled = true;
+        strip_raster_state.blend.source = BlendFactor::SrcAlpha;
+        strip_raster_state.blend.destination = BlendFactor::OneMinusSrcAlpha;
+        strip_raster_state.texture_enabled = true;
+        strip_raster_state.texture = &strip_texture;
+        strip_rasterizer.state() = strip_raster_state;
+        for (std::size_t i = 0; i + 2u < strip_indices.size(); i += 3u)
+            strip_rasterizer.draw_triangle(strip_sw[strip_indices[i]], strip_sw[strip_indices[i + 1u]],
+                                           strip_sw[strip_indices[i + 2u]]);
+        const std::array<VulkanDrawVertex, 8> strip_vk = {[&] {
+            std::array<VulkanDrawVertex, 8> out{};
+            for (int i = 0; i < 8; ++i)
+                out[i] = {strip_sw[i].x, strip_sw[i].y, strip_sw[i].z, strip_sw[i].texcoord[0],
+                          strip_sw[i].texcoord[1], strip_sw[i].color[0], strip_sw[i].color[1],
+                          strip_sw[i].color[2], strip_sw[i].color[3]};
+            return out;
+        }()};
+        VulkanDrawState vk_strip;
+        vk_strip.primitive = Primitive::TriangleStrip;
+        vk_strip.texture = &strip_image;
+        vk_strip.texture_key = strip_texture.content_key();
+        vk_strip.depth_test = true;
+        vk_strip.depth_write = true;
+        vk_strip.depth_function = CompareFunc::Greater;
+        vk_strip.stencil.test = true;
+        vk_strip.stencil.function = CompareFunc::Always;
+        vk_strip.stencil.reference = 2;
+        vk_strip.stencil.zpass = StencilOp::Replace;
+        vk_strip.blend.enabled = true;
+        vk_strip.blend.source = BlendFactor::SrcAlpha;
+        vk_strip.blend.destination = BlendFactor::OneMinusSrcAlpha;
+        // Headless plane starts at depth 1.0: clear it with an ALWAYS
+        // write at z=0 first, mirroring the game's vertex-driven clears.
+        const std::array<VulkanDrawVertex, 4> strip_clear_vk{{
+            {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+            {32.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+            {32.0f, 32.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+            {0.0f, 32.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+        }};
+        const std::array<std::uint16_t, 6> strip_clear_indices{0, 1, 2, 0, 2, 3};
+        VulkanDrawState vk_strip_clear;
+        vk_strip_clear.depth_test = true;
+        vk_strip_clear.depth_write = true;
+        vk_strip_clear.depth_function = CompareFunc::Always;
+        const std::array<VulkanDrawCall, 2> strip_calls{
+            VulkanDrawCall{std::span<const VulkanDrawVertex>(strip_clear_vk), strip_clear_indices, vk_strip_clear},
+            VulkanDrawCall{std::span<const VulkanDrawVertex>(strip_vk), strip_indices, vk_strip}};
+        check(backend.render_headless_draws(strip_calls, vulkan, error, 0u), error.c_str());
+        compare_frames(strip_software, vulkan, 1, false, "textured strip with stencil+depth matches software");
+        check(strip_software.color_at(4, 4) != rgba8(0, 0, 0), "strip painted the field");
+    }
+
+    // Projective UVs: the software rasterizer divides by q as-is (q == 0
+    // means 1), so negative q flips the sign of s/t back into range.
+    // The fragment shader must mirror that; clamping q with max(q, eps)
+    // turns every negative-q texel into garbage (battle terrain class).
+    for (const float q : {-2.0f, 0.0f}) {
+        std::vector<std::uint8_t> q_data(4u * 4u * 4u);
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x) {
+                const std::size_t o = static_cast<std::size_t>(y * 4 + x) * 4u;
+                const bool target = (x == 1 && y == 2);
+                q_data[o] = target ? 255u : 0u;
+                q_data[o + 1u] = target ? 0u : 0u;
+                q_data[o + 2u] = target ? 255u : 0u;
+                q_data[o + 3u] = 255u;
+            }
+        TextureState q_state;
+        q_state.format = TextureFormat::Rgba8888;
+        q_state.width = 4;
+        q_state.height = 4;
+        q_state.buffer_width = 4;
+        q_state.clamp_u = true;
+        q_state.clamp_v = true;
+        q_state.linear = false;
+        const Texture q_texture(q_state, q_data);
+        TextureImage q_image;
+        q_image.width = 4;
+        q_image.height = 4;
+        q_texture.decode(q_image.pixels);
+        // Constant (s, t) chosen so s/q = 0.375 (texel x=1) and
+        // t/q = 0.625 (texel y=2): the magenta texel. With q = -2 that is
+        // s = -0.75, t = -1.25; with q = 0 the software treats q as 1.
+        const float qs = (q == 0.0f) ? 0.375f : q * 0.375f;
+        const float qt = (q == 0.0f) ? 0.625f : q * 0.625f;
+        Quad q_quad = make_quad({rgba8(255, 255, 255), rgba8(255, 255, 255), rgba8(255, 255, 255),
+                                 rgba8(255, 255, 255)});
+        for (std::size_t i = 0; i < 4; ++i) {
+            q_quad.sw[i].texcoord = {qs, qt, q};
+            q_quad.vk[i].u = qs;
+            q_quad.vk[i].v = qt;
+            q_quad.vk[i].q = q;
+        }
+        Framebuffer q_software(32, 32);
+        q_software.clear(rgba8(0, 0, 0));
+        RasterState q_raster_state;
+        q_raster_state.texture_enabled = true;
+        q_raster_state.texture = &q_texture;
+        SoftwareRasterizer q_rasterizer(q_software, q_raster_state);
+        draw_quad_software(q_rasterizer, q_quad);
+        VulkanDrawState vk_q;
+        vk_q.texture = &q_image;
+        vk_q.texture_key = q_texture.content_key();
+        vk_q.clamp_u = true;
+        vk_q.clamp_v = true;
+        check(backend.render_headless_draw(q_quad.vk, q_quad.indices, vk_q, vulkan, error, 0u),
+              error.c_str());
+        check(q_software.color_at(16, 16) == rgba8(255, 0, 255),
+              "projective UV fixture targets the magenta texel");
+        compare_frames(q_software, vulkan, 1, false,
+                       q == 0.0f ? "zero q matches software" : "negative q matches software");
+    }
+
+    // Backface culling: guest-CCW triangles with front=CCW survive cull-Back
+    // on both backends, and guest-CW triangles with front=CW do too. The
+    // mapping previously only created a pipeline here without checking
+    // pixels, which is how an inverted front-face mapping hid: cull-Back
+    // draws vanished on device while cull-None painted.
+    {
+        const Quad cull_quad = make_quad({rgba8(200, 100, 40), rgba8(200, 100, 40), rgba8(200, 100, 40),
+                                          rgba8(200, 100, 40)});
+        const std::array<std::uint16_t, 6> cull_ccw_indices{0, 1, 2, 0, 2, 3};
+        const std::array<std::uint16_t, 6> cull_cw_indices{0, 2, 1, 0, 3, 2};
+        for (const bool clockwise : {false, true}) {
+            const std::array<std::uint16_t, 6> &indices = clockwise ? cull_cw_indices : cull_ccw_indices;
+            Framebuffer cull_software(32, 32);
+            cull_software.clear(rgba8(0, 0, 0));
+            SoftwareRasterizer cull_rasterizer(cull_software);
+            cull_rasterizer.draw_triangle(cull_quad.sw[indices[0]], cull_quad.sw[indices[1]],
+                                          cull_quad.sw[indices[2]]);
+            cull_rasterizer.draw_triangle(cull_quad.sw[indices[3]], cull_quad.sw[indices[4]],
+                                          cull_quad.sw[indices[5]]);
+            VulkanDrawState vk_cull;
+            vk_cull.cull = CullMode::Back;
+            vk_cull.front_face = clockwise ? FrontFace::Clockwise : FrontFace::CounterClockwise;
+            check(backend.render_headless_draw(cull_quad.vk, indices, vk_cull, vulkan, error, 0u),
+                  error.c_str());
+            check(cull_software.color_at(16, 16) == rgba8(200, 100, 40),
+                  "cull fixture paints its quad in software");
+            compare_frames(cull_software, vulkan, 1, false,
+                           clockwise ? "cull-Back keeps CW-front triangles"
+                                     : "cull-Back keeps CCW-front triangles");
+        }
+    }
+
     Framebuffer scissor_software(32, 32);
     scissor_software.clear(rgba8(0, 0, 0));
     RasterState scissor_state;

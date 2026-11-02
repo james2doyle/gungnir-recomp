@@ -273,7 +273,10 @@ int main(int argc, char **argv) {
                               << draw.state.texture->height << "]"
                               << ", \"tex_nonzero\": " << nonzero
                               << ", \"tex_addr\": \"0x" << std::hex << draw.state.texture_address << std::dec << "\""
-                              << ", \"tex_size\": " << draw.state.texture_size;
+                              << ", \"tex_size\": " << draw.state.texture_size
+                              << ", \"texfunc\": " << static_cast<int>(draw.state.tex_func)
+                              << ", \"texrgba\": " << (draw.state.tex_rgba ? "true" : "false")
+                              << ", \"texdouble\": " << (draw.state.color_double ? "true" : "false");
                 }
                 frame_out << ", \"blend\": " << (draw.state.blend.enabled ? "true" : "false")
                           << ", \"blend_factors\": [" << static_cast<int>(draw.state.blend.source) << ", "

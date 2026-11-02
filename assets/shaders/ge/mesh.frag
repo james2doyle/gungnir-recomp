@@ -33,7 +33,11 @@ bool alpha_pass(float a) {
 }
 
 void main() {
-    vec4 texel = texture(texture_sampler, in_texcoord.xy / max(in_texcoord.z, 1e-6));
+    // Mirror the software rasterizer: q == 0 means 1, otherwise divide by
+    // q as-is (negative q flips s/t back into range; max(q, eps) garbage
+    // turned every negative-q texel into an edge/wrap sample).
+    float q = in_texcoord.z == 0.0 ? 1.0 : in_texcoord.z;
+    vec4 texel = texture(texture_sampler, in_texcoord.xy / q);
     // Mirror the software combine in 255-space so both backends agree
     // to float epsilon (the parity gate allows 1 LSB).
     vec3 vc = floor(in_color.rgb * 255.0 + 0.5);
