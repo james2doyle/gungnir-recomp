@@ -42,7 +42,7 @@ class TestAndroidSuite(unittest.TestCase):
         self.assertIn("T13", text)
 
     def test_scripts_and_qa_report(self):
-        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh",
+        for name in ("build.sh", "deploy.sh", "install.sh", "run.sh", "logcat.sh",
                      "screenshot.sh", "lifecycle.sh"):
             path = SCRIPTS / name
             self.assertTrue(path.is_file(), f"{name} exists")

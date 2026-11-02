@@ -56,6 +56,7 @@ validates `size`, mode, game/save/file names and the parameter range.
 | 2 `LOAD` | Reads `PARAM.SFO`, restores title/savedata-title/detail/parental, sets `bind=1021`, copies the data file into `dataBuf` and sets `dataSize`; copies icon buffers when the guest supplies them |
 | 3 `SAVE` | Writes the data file (`dataSize`, clamped to `dataBufSize`), supplied icons/picture/sound and a fresh `PARAM.SFO` |
 | 4 `LISTLOAD` | Headless save picker: candidates are the existing save directories named by the zero-terminated 20-byte `saveNameList` (`"<>"` expands to every save of the game; an absent/empty list falls back to `gameName + saveName`). `focus` selects FIRSTLIST/LASTLIST/LATEST/OLDEST/FIRSTDATA/LASTDATA (unknown and FIRSTLIST select index 0; LATEST/OLDEST compare the `PARAM.SFO` mtime). An empty list completes with `0x80110307`; otherwise the selected name is written back and the LOAD path runs |
+| 5 `LISTSAVE` | Headless save picker: the caller `focus` entry of `saveNameList` is selected with PPSSPP's `SavedataParam` fallbacks (NAME = `saveName` index, FIRST/LASTLIST, LATEST/OLDEST by mtime, FIRST/LASTDATA/EMPTY; unknown and unsatisfiable fall back to the first entry), written back into the request, and the SAVE path runs. Proven on device by Gungnir's system-menu save |
 | 8 `SIZES` | Existing T6k path: msFree/msData/utilityData from the real save directory |
 | 11 `LIST` | Fills the guest `idList` (`maxCount`, `resultCount`, `entries`) with save directory names matching `gameName + saveName`; `*` and `?` wildcards are honoured, entries are sorted, and the name drops the game prefix |
 | others | Named counted gap (`savedata mode N is not implemented yet`), result `0x80110300` |
@@ -92,16 +93,17 @@ parsed here; a reimplementation would need explicit sign-off.
 - Delete/auto/secure modes, `FILES`/`GETSIZE`, `SAVEDATA_FILE_LIST`
   updates beyond one data file and the save-picker UI are not implemented.
 - There is no save-picker UI. `LISTLOAD` auto-cancels an empty list with
-  `0x80110307` and auto-selects the `focus` entry when saves exist; a real
-  picker would need the missing renderer path.
-- The save-picker modes `LISTSAVE` (5), `LISTDELETE` (6) and
-  `LISTALLDELETE` (7) are not implemented. The title executes LISTLOAD on
-  the new-game path with a 32-slot `saveNameList`.
+  `0x80110307` and auto-selects the `focus` entry when saves exist; `LISTSAVE`
+  auto-selects the `focus` entry of `saveNameList`; a real picker would need
+  the missing renderer path.
+- The save-picker modes `LISTDELETE` (6) and `LISTALLDELETE` (7) are not
+  implemented. The title executes LISTLOAD on the new-game path and LISTSAVE
+  on the system-menu save path, each with a 32-slot `saveNameList`.
 - `LIST` entry timestamps come from the save's `PARAM.SFO` mtime (the
   directory when the SFO is missing) through the host filesystem clock.
-- On device the memory-stick root is supplied by the future Android wiring;
-  the desktop runner takes `--ms`. Only host/PPSSPP interchange is verified
-  today.
+- On device the memory-stick root is the app-private `internal/psp`
+  directory; the desktop runner takes `--ms`. Host/PPSSPP interchange is
+  verified, and device save/load is proven by Gungnir's system menu.
 - The PPSSPP oracle is a manual clean-boot run; there is no CI PPSSPP run.
 
 ## Tests

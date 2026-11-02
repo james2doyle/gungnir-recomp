@@ -904,12 +904,18 @@ void atrac_contracts() {
                   {stream_id, kStreamInfo, kStreamInfo + 4u, kStreamInfo + 8u}) == 0u,
             "stream data info available");
         const std::uint32_t write_pointer = mem.load32(kStreamInfo);
-        check(write_pointer == kRiff, "stream write pointer is the guest buffer");
-        check(mem.load32(kStreamInfo + 4u) == first_chunk + 1536u, "stream writable bytes");
+        check(write_pointer == kRiff + first_chunk, "stream write pointer advances past loaded data");
+        check(mem.load32(kStreamInfo + 4u) == stream_file.size() - first_chunk,
+            "stream writable bytes are the remaining file bytes");
         check(mem.load32(kStreamInfo + 8u) == first_chunk, "stream read offset");
         for (std::uint32_t i = 0u; i < 1536u; ++i)
             mem.store8(write_pointer + i, stream_file[first_chunk + i]);
         check(atrac("sceAtracAddStreamData", {stream_id, 1536u}) == 0u, "stream data appended");
+        check(atrac("sceAtracGetStreamDataInfo",
+                  {stream_id, kStreamInfo, kStreamInfo + 4u, kStreamInfo + 8u}) == 0u,
+            "stream data info available after feed");
+        check(mem.load32(kStreamInfo + 4u) == 0u, "stream writable bytes shrink to zero when full");
+        check(mem.load32(kStreamInfo + 8u) == 0u, "stream read offset clears when full");
         check(atrac("sceAtracGetRemainFrame", {stream_id, kStreamInfo}) == 0u &&
                   mem.load32(kStreamInfo) == 2u,
             "stream reports two remaining frames");
@@ -922,6 +928,27 @@ void atrac_contracts() {
         check(atrac("sceAtracAddStreamData", {stream_id, first_chunk + 1536u}) == 0x80630018u,
             "oversized stream append is rejected");
         check(atrac("sceAtracReleaseAtracID", {stream_id}) == 0u, "streaming ID released");
+        // PPSSPP parity: a frame past the buffered window but inside the file
+        // decodes as silence and advances instead of BUFFER_EMPTY. A feeder
+        // that starves (no AddStreamData) otherwise wedges the sound threads,
+        // the UMD message pipe fills, main parks, and the watchdog fires.
+        const std::uint32_t prefix_len = stream_info->data_offset + 1536u;
+        for (std::uint32_t i = 0u; i < prefix_len; ++i)
+            mem.store8(kRiff + i, stream_file[i]);
+        const std::uint32_t prefix_id = atrac("sceAtracSetDataAndGetID", {kRiff, prefix_len});
+        check(prefix_id > 0u, "prefix ATRAC opens");
+        check(atrac("sceAtracDecodeData", {prefix_id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u &&
+                  mem.load32(kValue) == 2048u,
+            "buffered prefix frame decodes");
+        check(atrac("sceAtracDecodeData", {prefix_id, kPcm, kValue, kValue + 4u, kValue + 8u}) == 0u &&
+                  mem.load32(kValue) == 2048u && mem.load32(kValue + 4u) == 1u,
+            "unbuffered in-file frame succeeds as silence");
+        check(mem.load16(kPcm) == 0u && mem.load16(kPcm + 2u) == 0u,
+            "synthesized frame is silent");
+        check(atrac("sceAtracDecodeData", {prefix_id, kPcm, kValue, kValue + 4u, kValue + 8u}) ==
+                  0x80630024u,
+            "prefix track ends after the file");
+        check(atrac("sceAtracReleaseAtracID", {prefix_id}) == 0u, "prefix ID released");
     }
 }
 
@@ -1289,6 +1316,37 @@ void savedata_contracts(const std::filesystem::path &memory_stick) {
     check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "broken load update accepted");
     check(util("sceUtilitySavedataGetStatus") == 3u, "broken load reaches finished");
     check(mem.load32(kParam + 0x1Cu) == 0x80110306u, "broken PARAM.SFO reports broken data");
+
+    // List-save (mode 5): the headless dialog honors the focused entry of
+    // saveNameList instead of silently writing nothing. Gungnir saves the
+    // story slot this way; swallowing the mode wedges the system menu with
+    // no feedback.
+    gungnir::hle::reset_utility_state();
+    constexpr std::uint32_t kNameList = 0x08831700u;
+    zero(kNameList, 0x80u);
+    text(kNameList, 0x00u, 20u, "GUN9THSTORY03");
+    text(kNameList, 0x14u, 20u, "GUN9THSTORY07");
+    mode_param(5u, "GUN9THSTORY07", kData, 0x100u, static_cast<std::uint32_t>(payload.size()),
+        "Fixture Title");
+    mem.store32(kParam + 0x60u, kNameList);
+    mem.store32(kParam + 0x5C8u, 0u);
+    check(util("sceUtilitySavedataInitStart", {kParam}) == 0u, "listsave init accepted");
+    check(util("sceUtilitySavedataUpdate", {0u}) == 0u, "listsave update accepted");
+    check(util("sceUtilitySavedataGetStatus") == 3u, "listsave reaches finished");
+    check(mem.load32(kParam + 0x1Cu) == 0u, "listsave reports success");
+    check(guest_text(kParam + 0x4Cu, 20u) == "GUN9THSTORY07", "listsave writes back the focused name");
+    const std::filesystem::path focused_dir =
+        memory_stick / "PSP" / "SAVEDATA" / "ULUS10592GUN9THSTORY07";
+    check(std::filesystem::is_regular_file(focused_dir / "DATA.BIN"), "listsave writes the focused slot");
+    const auto focused_data = read_host(focused_dir / "DATA.BIN");
+    check(focused_data.size() == payload.size(), "listsave writes the requested data size");
+    bool focused_matches = focused_data.size() == payload.size();
+    for (std::size_t i = 0; i < focused_data.size() && focused_matches; ++i)
+        focused_matches = focused_matches &&
+            focused_data[i] == static_cast<std::uint8_t>(payload[i]);
+    check(focused_matches, "listsave writes the data bytes");
+    check(!std::filesystem::exists(memory_stick / "PSP" / "SAVEDATA" / "ULUS10592GUN9THSTORY03"),
+        "listsave leaves the unfocused slot alone");
 }
 
 void savedata_listload_contracts(const std::filesystem::path &memory_stick) {

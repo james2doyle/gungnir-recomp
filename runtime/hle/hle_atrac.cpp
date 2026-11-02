@@ -1,7 +1,9 @@
 // sceAtrac3plus: whole-file RIFF ATRAC3/ATRAC3+ playback over the vendored
-// decoder. Streaming/second-buffer calls remain counted gaps and are not
-// registered, so a title that needs them stops with a named NID instead of
-// receiving fake PCM.
+// decoder, plus halfway-buffer streaming (moving write cursor and remaining
+// writable bytes, PPSSPP CalculateStreamInfo parity). Past the buffered
+// window but inside the file, decode outputs silence and advances (PPSSPP
+// parity: "so games don't infinite loop") instead of wedging feeders with
+// BUFFER_EMPTY. Second-buffer calls stay not-needed stubs.
 #include "hle/hle_atrac.hpp"
 
 #include "audio/atrac_file.hpp"
@@ -28,7 +30,6 @@ constexpr std::uint32_t kAllDataLoaded = 0x80630009u;
 constexpr std::uint32_t kSizeTooSmall = 0x80630011u;
 constexpr std::uint32_t kAddDataTooBig = 0x80630018u;
 constexpr std::uint32_t kSecondBufferNotNeeded = 0x80630022u;
-constexpr std::uint32_t kBufferEmpty = 0x80630023u;
 constexpr std::uint32_t kBadAlignment = 0x80630014u;
 constexpr std::uint32_t kAllDataDecoded = 0x80630024u;
 constexpr std::uint32_t kRemainOnMemory = 0xFFFFFFFFu;
@@ -413,17 +414,18 @@ void decode_data(AllegrexContext &ctx) {
         finish_decode(ctx, kAllDataDecoded, info);
         return;
     }
-    if (frame_index >= info.available_frames()) {
-        write(0u, false);
-        finish_decode(ctx, kBufferEmpty, info);
-        return;
-    }
     const bool looping = target->has_loop && target->loops_left != 0 && target->position <= target->loop_end;
     const std::uint32_t limit = looping ? target->loop_end : target->end_sample;
     const std::uint32_t count = std::min(frame_samples - raw % frame_samples, limit - target->position + 1u);
+    // PPSSPP parity: past the buffered window but inside the file, output
+    // silence and advance instead of BUFFER_EMPTY. A starved feeder would
+    // otherwise spin the sound threads forever (the UMD thread never reaches
+    // its pipe receive, the command pipe fills, main parks in MsgPipeSend,
+    // flips freeze). PPSSPP documents this as "so games don't infinite loop".
+    const bool buffered = frame_index < info.available_frames();
     std::vector<std::int16_t> pcm;
     std::string error;
-    if (!target->track->decode_frame(frame_index, pcm, error)) {
+    if (buffered && !target->track->decode_frame(frame_index, pcm, error)) {
         finish_decode(ctx, kUnknownFormat, info);
         return;
     }
@@ -444,7 +446,12 @@ void decode_data(AllegrexContext &ctx) {
         }
         const std::size_t offset = static_cast<std::size_t>(raw % frame_samples) * static_cast<std::size_t>(info.channels);
         const std::size_t samples = static_cast<std::size_t>(count) * static_cast<std::size_t>(info.channels);
-        for (std::size_t i = 0; i < samples; ++i) {
+        if (!buffered) {
+            for (std::size_t i = 0; i < samples; ++i) {
+                destination[i * 2u] = 0u;
+                destination[i * 2u + 1u] = 0u;
+            }
+        } else for (std::size_t i = 0; i < samples; ++i) {
             const auto value = static_cast<std::uint16_t>(pcm[offset + i]);
             destination[i * 2u] = static_cast<std::uint8_t>(value);
             destination[i * 2u + 1u] = static_cast<std::uint8_t>(value >> 8u);
@@ -470,9 +477,30 @@ void get_stream_data_info(AllegrexContext &ctx) {
     std::uint32_t writable = 0u;
     std::uint32_t read_offset = 0u;
     if (target->streaming) {
-        write_pointer = target->stream_buffer;
-        writable = target->stream_buffer_size;
-        read_offset = target->stream_offset;
+        // Mirrors PPSSPP Atrac::CalculateStreamInfo for the halfway-buffer
+        // case: the write cursor advances past the bytes already fed and the
+        // writable count is the remaining file bytes. A fixed base pointer and
+        // full-size count starves cursor-gated feeders (no AddStreamData ever
+        // arrives, decodes spin BUFFER_EMPTY, the UMD sound pipe fills, main
+        // parks in MsgPipeSend, watchdog fires).
+        const auto &info = target->track->info();
+        const std::uint32_t total = info.data_offset + info.data_size;
+        if (target->stream_offset < total) {
+            write_pointer = target->stream_buffer + target->stream_offset;
+            writable = total - target->stream_offset;
+            if (target->stream_offset < target->stream_buffer_size) {
+                const std::uint32_t buffer_remaining =
+                    target->stream_buffer_size - target->stream_offset;
+                writable = std::min(writable, buffer_remaining);
+            } else {
+                writable = 0u;
+            }
+            read_offset = target->stream_offset;
+        } else {
+            write_pointer = target->stream_buffer;
+            writable = 0u;
+            read_offset = 0u;
+        }
     }
     write32(rt, arg(ctx, 1), write_pointer);
     write32(rt, arg(ctx, 2), writable);
@@ -495,22 +523,31 @@ void add_stream_data(AllegrexContext &ctx) {
         finish(ctx, 0u);
         return;
     }
-    if (bytes > target->stream_buffer_size) {
+    // The game writes the new bytes at the cursor reported by
+    // GetStreamDataInfo and reads them back from the file offset reported
+    // there; reject anything past the remaining file bytes (PPSSPP checks the
+    // feed against its computed writable count, not the buffer size).
+    const auto &info = target->track->info();
+    const std::uint32_t total = info.data_offset + info.data_size;
+    const std::uint32_t writable =
+        target->stream_offset < total ? total - target->stream_offset : 0u;
+    if (bytes > writable) {
         finish(ctx, kAddDataTooBig);
         return;
     }
     auto &rt = kernel().runtime();
-    if (!rt.memory().contains(target->stream_buffer, bytes)) {
+    const std::uint32_t source = target->stream_buffer + target->stream_offset;
+    if (!rt.memory().contains(source, bytes)) {
         finish(ctx, kSizeTooSmall);
         return;
     }
-    const std::uint8_t *source = rt.memory().raw_pointer(target->stream_buffer, bytes);
-    if (source == nullptr) {
+    const std::uint8_t *data = rt.memory().raw_pointer(source, bytes);
+    if (data == nullptr) {
         finish(ctx, kSizeTooSmall);
         return;
     }
     std::string error;
-    if (!target->track->append(std::span<const std::uint8_t>(source, bytes), error)) {
+    if (!target->track->append(std::span<const std::uint8_t>(data, bytes), error)) {
         finish(ctx, kAddDataTooBig);
         return;
     }

@@ -149,6 +149,20 @@ APK: android/app/build/outputs/apk/debug/app-debug.apk
 ## 7. Install and run
 
 ```sh
+ADB_SERIAL=<your-device-serial> scripts/android/deploy.sh
+```
+
+`scripts/android/deploy.sh` is the deterministic entry point: it installs the APK, launches
+the activity (installs never auto-start the app), waits for flowing
+`guest_frame` lines, and leaves a proof screenshot. It fails loudly
+(`deploy_failed`) instead of handing back a silently unstarted app. Set
+`SNAPSHOT_IN` to a device-side snapshot path to resume it via the
+automation-only `snapshot_in` intent extra before the session starts.
+Rebuild the APK with `scripts/android/build.sh` after any native change;
+`scripts/android/deploy.sh` installs what is on disk, it does not build. The manual
+steps below are equivalent; prefer the script. To push game files first:
+
+```sh
 ADB_SERIAL=<your-device-serial> scripts/android/install.sh
 adb push build/game/modules/SYSDIR__EBOOT.BIN.decrypted.elf \
   /sdcard/Android/data/com.gungnir.recomp/files/game/game.elf

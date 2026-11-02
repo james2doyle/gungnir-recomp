@@ -120,7 +120,7 @@ class TestAndroidScripts(unittest.TestCase):
 
     def test_deploy_scripts_exist(self):
         scripts = REPO / "scripts" / "android"
-        for name in ("build.sh", "install.sh", "run.sh", "logcat.sh", "lifecycle.sh",
+        for name in ("build.sh", "deploy.sh", "install.sh", "run.sh", "logcat.sh", "lifecycle.sh",
                      "screenshot.sh", "emulator.sh"):
             path = scripts / name
             self.assertTrue(path.is_file(), f"{name} exists")

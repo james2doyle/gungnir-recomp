@@ -48,12 +48,19 @@ be dropped to `-O1` through `-Pgungnir.o1Sources`; the choice is visible in
 ## Deploy
 
 ```sh
+ADB_SERIAL=<serial> scripts/android/deploy.sh   # install + launch + guest_frame proof (preferred)
 ADB_SERIAL=<serial> scripts/android/install.sh
 ADB_SERIAL=<serial> scripts/android/run.sh        # waits for "session_stop" or "first frame"
 ADB_SERIAL=<serial> scripts/android/logcat.sh     # gungnir/SDL/crash tags
 ADB_SERIAL=<serial> scripts/android/screenshot.sh # PNG under build/qa/android/
 ADB_SERIAL=<serial> scripts/android/lifecycle.sh  # 3 pause/resume cycles
 ```
+
+`deploy.sh` chains install, launch, and verification: it fails loudly unless
+guest frames are flowing and leaves a proof screenshot (default under
+`/tmp/opencode/scene/`, override with a second argument). Installs never
+auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
+`deploy.sh` makes that ordering structural instead of relying on memory.
 
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.

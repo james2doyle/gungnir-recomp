@@ -50,6 +50,7 @@ class TestBuildDocumentation(unittest.TestCase):
             "codegen",
             "cmake",
             "scripts/android/build.sh",
+            "scripts/android/deploy.sh",
             "scripts/android/install.sh",
             "scripts/android/run.sh",
             "scripts/android/screenshot.sh",

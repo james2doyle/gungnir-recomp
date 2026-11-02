@@ -100,6 +100,7 @@ constexpr std::uint32_t kModeAutoSave = 1u;
 constexpr std::uint32_t kModeLoad = 2u;
 constexpr std::uint32_t kModeSave = 3u;
 constexpr std::uint32_t kModeListLoad = 4u;
+constexpr std::uint32_t kModeListSave = 5u;
 constexpr std::uint32_t kModeSizes = 8u;
 constexpr std::uint32_t kModeList = 11u;
 constexpr std::uint32_t kSectorSize = 0x200u;
@@ -335,11 +336,13 @@ std::uint32_t set_result(std::uint32_t code) {
     return code;
 }
 
-std::uint32_t perform_save() {
+std::uint32_t perform_save(std::string_view save_override = {}) {
     auto &mem = memory();
     const std::uint32_t param = g_state.param;
     const std::string game = read_fixed(mem, param + kParamGameName, 13u);
-    const std::string save_name = read_fixed(mem, param + kParamSaveName, 20u);
+    const std::string save_name = save_override.empty()
+        ? read_fixed(mem, param + kParamSaveName, 20u)
+        : std::string(save_override);
     const std::string file = read_fixed(mem, param + kParamFileName, 13u);
     const std::string directory = save_directory_name(game, save_name);
     if (!savedata::SaveStore::valid_name(directory)) return set_result(kSavedataSaveParam);
@@ -383,6 +386,9 @@ std::uint32_t perform_save() {
         log_once("savedata-save:" + error, "[utility] savedata save failed: " + error);
         return set_result(kSavedataSaveNoSpace);
     }
+    // A list dialog writes the selected save name back into the request.
+    if (!save_override.empty() && !file.empty())
+        write_fixed(mem, param + kParamSaveName, 20u, save_name);
     return set_result(0u);
 }
 
@@ -604,6 +610,92 @@ std::uint32_t perform_list_load() {
     return perform_load(candidates[selected].name);
 }
 
+// There is no save-picker UI. The headless list-save honors the caller's
+// focus entry of saveNameList (PPSSPP's initial currentSelectedSave) and
+// writes it, with the selected name written back into the request. Focus
+// values and fallbacks mirror PPSSPP's SavedataParam (FIRSTLIST=first,
+// LASTLIST=last, LATEST/OLDEST by mtime, FIRST/LASTDATA/EMPTY, NAME=saveName
+// index; everything unknown or unsatisfiable falls back to the first entry).
+std::uint32_t perform_list_save() {
+    auto &mem = memory();
+    const std::uint32_t param = g_state.param;
+    const std::string game = read_fixed(mem, param + kParamGameName, 13u);
+    const std::string save = read_fixed(mem, param + kParamSaveName, 20u);
+    if (!safe_component(game) || !safe_component(save)) return set_result(kSavedataSaveParam);
+    const std::vector<std::string> names = read_save_name_list(save);
+    if (names.empty()) return set_result(kSavedataSaveParam);
+    const std::vector<ListCandidate> candidates = listload_candidates(game, names);
+    std::vector<std::time_t> modified(names.size(), 0);
+    std::vector<bool> present(names.size(), false);
+    for (const ListCandidate &candidate : candidates) {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (names[i] != candidate.name) continue;
+            present[i] = true;
+            modified[i] = candidate.time;
+        }
+    }
+    const std::uint32_t focus = mem.load32(param + kParamFocus);
+    std::size_t selected = 0u;
+    switch (focus) {
+    case 0u: {
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (names[i] != save) continue;
+            selected = i;
+            break;
+        }
+        break;
+    }
+    case 1u:
+        break;
+    case 2u:
+        selected = names.size() - 1u;
+        break;
+    case 3u:
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (present[i] && (!present[selected] || modified[i] > modified[selected])) selected = i;
+        break;
+    case 4u:
+        for (std::size_t i = 0; i < names.size(); ++i)
+            if (present[i] && (!present[selected] || modified[i] < modified[selected])) selected = i;
+        break;
+    case 5u:
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (!present[i]) continue;
+            selected = i;
+            break;
+        }
+        break;
+    case 6u:
+        for (std::size_t i = names.size(); i > 0u;) {
+            --i;
+            if (!present[i]) continue;
+            selected = i;
+            break;
+        }
+        break;
+    case 7u:
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            if (present[i]) continue;
+            selected = i;
+            break;
+        }
+        break;
+    case 8u:
+        for (std::size_t i = names.size(); i > 0u;) {
+            --i;
+            if (present[i]) continue;
+            selected = i;
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    trace_savedata("listsave names=" + std::to_string(names.size()) +
+                   " selected=" + names[selected]);
+    return perform_save(names[selected]);
+}
+
 std::uint32_t perform_operation() {
     switch (g_state.mode) {
     case kModeAutoLoad:
@@ -616,6 +708,8 @@ std::uint32_t perform_operation() {
         return perform_save();
     case kModeListLoad:
         return perform_list_load();
+    case kModeListSave:
+        return perform_list_save();
     case kModeLoad:
         return perform_load();
     case kModeList:

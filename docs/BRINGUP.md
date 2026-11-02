@@ -1338,3 +1338,29 @@ stopped. No crashes (only script force-stops in exit-info).
 landscape screens leaving Save/Load/Close unlaid-out and unreachable;
 `SettingsOverlayView` now scrolls. This is the class of bug host tests
 cannot catch — the T15e gate doing its job.
+
+## 2026-11-02 — Battle BGM stall + system-menu list-save (both VERIFIED on device)
+
+**Atrac starvation wedge (fixed).** The pre-battle event scene wedged with
+`user_main` parked in `MsgPipeSend` on a full `SOUND MsgPipe(UMD)`, zero
+`AddStreamData` calls ever, and every decode returning `BUFFER_EMPTY`.
+Snapshot forensics (`.gsnap` parsed in Python) showed `bgm70.at3` open with
+exactly the 175-frame initial window and atrac id 2 as a non-streaming
+`SetDataAndGetID` prefix. PPSSPP `Atrac::DecodeData` decodes past the buffered
+window but inside the file with synthesized silence and advances (return 0,
+"so games don't infinite loop"); our `BUFFER_EMPTY` spun the UMD sound thread
+out of its pipe-319 receive section. Fix mirrors PPSSPP (red-first
+prefix-track test in `tests/hle/kernel_tests.cpp`); the earlier
+`GetStreamDataInfo` moving-cursor fix is retained but was insufficient on its
+own. Device proof: the enemy turn plays through on the clean build.
+
+**Save-menu list-save gap (fixed).** The system menu Save called
+`SceUtilitySavedataInitStart` mode 5 `LISTSAVE`; `perform_operation` had no
+case 5 and swallowed it into the unimplemented default (fake success, no
+file). Implemented `perform_list_save` with PPSSPP's `SavedataParam` focus
+semantics (NAME index, FIRST/LASTLIST, LATEST/OLDEST by mtime,
+FIRST/LASTDATA/EMPTY, all fall back to entry 0) plus a `perform_save`
+override and request write-back, `kModeListSave = 5`, red-first host test.
+Device proof: menu save plus menu load plus reset-and-load-from-title all on
+the clean build; `ULUS10592GUN9THSTORY00/` (PARAM.SFO, STORY, icons) verified
+on the memstick via `run-as`.
