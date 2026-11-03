@@ -100,7 +100,17 @@ void StateMachine::reset() {
     draws_ = 0u;
     gaps_ = 0u;
     textures_.clear();
+    frame_textures_.clear();
+    texture_resolves_ = 0u;
 }
+
+void StateMachine::set_fast_source(FastSource source) { fast_source_ = std::move(source); }
+
+void StateMachine::begin_list() { ++list_epoch_; }
+
+void StateMachine::end_frame() { frame_textures_.clear(); }
+
+std::uint64_t StateMachine::texture_resolve_count() const { return texture_resolves_; }
 
 void StateMachine::set_draw_sink(DrawSink sink) {
     draw_sink_ = std::move(sink);
@@ -317,11 +327,6 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     static constexpr std::uint32_t kBits[8] = {16u, 16u, 16u, 32u, 4u, 8u, 16u, 32u};
     const std::size_t row_bytes = static_cast<std::size_t>(buffer_width) * kBits[format] / 8u;
     const std::size_t data_size = row_bytes * static_cast<std::size_t>(height);
-    std::vector<std::uint8_t> data(data_size, 0u);
-    if (data_size != 0u && !memory(address, data.data(), data_size)) {
-        gap("texture_unreadable");
-        return nullptr;
-    }
 
     std::array<std::uint8_t, 1024> clut{};
     bool has_clut = false;
@@ -349,8 +354,78 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     texture_state.clamp_v = ((reg_param(0xC7u) >> 8u) & 1u) != 0u;
     texture_state.linear = (reg_param(0xC6u) & 1u) != 0u;
     texture_state.clut_format = reg_param(0xC5u);
+    const ResolveKey resolve_key{address, static_cast<std::uint32_t>(data_size), format, mode, size, buffer_width,
+                                   ((reg_param(0xC7u) & 0x101u) | ((reg_param(0xC6u) & 1u) << 16u)),
+                                   texture_state.clut_format, clut_valid_};
+    const std::span<const std::uint8_t> clut_span = has_clut
+                                                       ? std::span<const std::uint8_t>(clut.data(), clut.size())
+                                                       : std::span<const std::uint8_t>{};
+    std::span<const std::uint8_t> fast_bytes;
+    if (fast_source_) {
+        fast_bytes = fast_source_(address, data_size);
+        if (fast_bytes.size() != data_size) fast_bytes = {};
+    }
+    // Copy-path validation needs the bytes in hand; read once and compare.
+    // `copied` is reused for the miss below so a mismatch costs one read.
+    std::vector<std::uint8_t> copied;
+    bool copied_valid = false;
+    if (auto found = frame_textures_.find(resolve_key); found != frame_textures_.end()) {
+        ResolveEntry &entry = found->second;
+        // Same display-list run: no guest code ran since validation, so the
+        // bytes cannot have changed; reuse without re-reading. Across runs the
+        // guest may have rewritten the range, so validate byte-exact.
+        const bool same_run = entry.validated_epoch == list_epoch_;
+        const bool bytes_match = same_run || (!fast_bytes.empty() && fast_bytes.size() == entry.data.size() &&
+                                              std::memcmp(fast_bytes.data(), entry.data.data(), fast_bytes.size()) == 0);
+        const bool copied_match = [&] {
+            if (bytes_match) return true;
+            if (!fast_bytes.empty()) return false;
+            copied.resize(data_size);
+            if (data_size != 0u && !memory(address, copied.data(), data_size)) return false;
+            copied_valid = true;
+            return copied.size() == entry.data.size() &&
+                   std::memcmp(copied.data(), entry.data.data(), copied.size()) == 0;
+        }();
+        if ((bytes_match || copied_match) && clut_span.size() == entry.clut.size() &&
+            (clut_span.empty() ||
+             std::memcmp(clut_span.data(), entry.clut.data(), clut_span.size()) == 0) &&
+            entry.cpu != nullptr && entry.cpu->texture.has_value()) {
+            entry.validated_epoch = list_epoch_;
+            const Texture &texture = *entry.cpu->texture;
+            state.texture_enabled = true;
+            state.texture = entry.image.get();
+            state.texture_cpu = &texture;
+            state.texture_storage = entry.image;
+            state.texture_cpu_storage = entry.cpu;
+            state.texture_key = entry.content_key;
+            state.linear = texture_state.linear;
+            state.clamp_u = texture_state.clamp_u;
+            state.clamp_v = texture_state.clamp_v;
+            state.texture_address = address;
+            state.texture_size = data_size;
+            return state.texture;
+        }
+        // Validation failed: fall through and recompute (mid-frame rewrite).
+    }
+
+    std::vector<std::uint8_t> data;
+    if (!fast_bytes.empty()) {
+        // Zero-copy miss: hash runs on the span; one copy feeds retention.
+    } else if (copied_valid || data_size == 0u) {
+        data = std::move(copied);
+    } else {
+        data.resize(data_size, 0u);
+        if (data_size != 0u && !memory(address, data.data(), data_size)) {
+            gap("texture_unreadable");
+            return nullptr;
+        }
+    }
     auto cpu = std::make_shared<CpuTexture>();
-    cpu->data = std::move(data);
+    if (!fast_bytes.empty()) {
+        cpu->data.assign(fast_bytes.begin(), fast_bytes.end());
+    } else {
+        cpu->data = std::move(data);
+    }
     cpu->clut.assign(clut.begin(), clut.end());
     cpu->texture.emplace(texture_state, std::span<const std::uint8_t>(cpu->data),
                          std::span<const std::uint8_t>(cpu->clut));
@@ -358,6 +433,7 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
 
     const std::uint64_t sampler = (texture_state.linear ? 1ull : 0ull) |
         (texture_state.clamp_u ? 2ull : 0ull) | (texture_state.clamp_v ? 4ull : 0ull);
+    ++texture_resolves_;
     const std::uint64_t key = texture.content_key() ^ (sampler * 0x9E3779B97F4A7C15ull);
     const std::shared_ptr<const TextureImage> image = textures_.get_shared(key, texture);
     state.texture_enabled = true;
@@ -371,6 +447,14 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     state.clamp_v = texture_state.clamp_v;
     state.texture_address = address;
     state.texture_size = data_size;
+    ResolveEntry entry;
+    entry.data = cpu->data;
+    entry.clut.assign(clut_span.begin(), clut_span.end());
+    entry.content_key = key;
+    entry.image = image;
+    entry.cpu = cpu;
+    entry.validated_epoch = list_epoch_;
+    frame_textures_.insert_or_assign(resolve_key, std::move(entry));
     return state.texture;
 }
 
@@ -383,9 +467,11 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         return;
     }
     const int index_size = layout_.index_size;
-    std::vector<std::uint8_t> vertices(static_cast<std::size_t>(count) * stride);
+    std::vector<std::uint8_t> &vertices = scratch_bytes_;
+    vertices.assign(static_cast<std::size_t>(count) * stride, 0u);
     if (index_size != 0) {
-        std::vector<std::uint8_t> indices(static_cast<std::size_t>(count) * static_cast<std::size_t>(index_size));
+        std::vector<std::uint8_t> &indices = scratch_indices_;
+        indices.resize(static_cast<std::size_t>(count) * static_cast<std::size_t>(index_size));
         if (!memory(index_address_, indices.data(), indices.size())) {
             gap("index_unreadable");
             return;
@@ -413,16 +499,20 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
     std::array<float, 8> morph{};
     for (std::size_t i = 0; i < morph.size(); ++i)
         morph[i] = reg_float(static_cast<std::uint8_t>(0x2Cu + i));
-    std::vector<Vertex> decoded(count);
+    std::vector<Vertex> &decoded = scratch_decoded_;
+    decoded.resize(count);
     for (std::uint32_t i = 0; i < count; ++i)
         decoded[i] = decode_vertex(layout_, vertices.data() + static_cast<std::size_t>(i) * stride, morph.data());
 
     const TransformState state = transform_state();
     VertexPipeline pipeline(state);
-    std::vector<ClipVertex> clips(count);
+    std::vector<ClipVertex> &clips = scratch_clips_;
+    clips.resize(count);
     for (std::uint32_t i = 0; i < count; ++i) clips[i] = pipeline.transform(decoded[i]);
 
     Draw draw;
+    draw.vertices.reserve(static_cast<std::size_t>(count) + 2u);
+    draw.indices.reserve(static_cast<std::size_t>(count) * 3u);
     draw.primitive = command.primitive;
     const std::uint32_t scissor1 = reg_param(0xD4u);
     const std::uint32_t scissor2 = reg_param(0xD5u);
@@ -503,11 +593,14 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
             gap("clip_w_nonpositive");
             return;
         }
-        std::vector<ClipVertex> polygon;
+        std::vector<ClipVertex> &polygon = scratch_polygon_;
         if (layout_.through) {
-            polygon = {a, b, c};
+            polygon.clear();
+            polygon.push_back(a);
+            polygon.push_back(b);
+            polygon.push_back(c);
         } else {
-            polygon = clip_triangle(a, b, c);
+            clip_triangle_into(polygon, scratch_clip_tmp_, a, b, c);
         }
         if (polygon.size() < 3u) return;
         const auto base = static_cast<std::uint16_t>(draw.vertices.size());
@@ -828,6 +921,7 @@ bool StateMachine::import_snapshot(std::span<const std::uint8_t> bytes, std::str
     draws_ = draws;
     gaps_ = gaps;
     textures_.clear();
+    frame_textures_.clear();
     error.clear();
     return true;
 }

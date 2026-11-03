@@ -140,6 +140,14 @@ void run_ge_list(Runtime &rt, std::uint32_t id) {
     GeList &list = found->second;
     if (list.done) return;
     if (!list.runner) make_ge_runner(rt, list);
+    // Refreshed per kick so the stored source never outlives the session's
+    // memory; the epoch bump marks a point where guest code may have run.
+    media().ge.set_fast_source([&rt](std::uint32_t address, std::size_t size) -> std::span<const std::uint8_t> {
+        const std::uint8_t *bytes = rt.memory().raw_pointer(address, size);
+        if (bytes == nullptr) return {};
+        return {bytes, size};
+    });
+    media().ge.begin_list();
     const gungnir::ge::RunResult result = list.runner->run();
     if (result.status == gungnir::ge::RunStatus::Stalled) return;
     if (result.status == gungnir::ge::RunStatus::Completed) {
@@ -228,6 +236,7 @@ void register_display(HleRegistrar &hle) {
             ++media().ge_frames;
             std::vector<gungnir::ge::Draw> draws;
             draws.swap(media().pending_draws);
+            media().ge.end_frame();
             if (media().frame_sink) media().frame_sink(draws);
             if (media().flip_observer) media().flip_observer();
         }

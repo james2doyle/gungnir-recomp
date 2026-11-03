@@ -82,9 +82,10 @@ ClipVertex lerp(const ClipVertex &a, const ClipVertex &b, float t) {
     return out;
 }
 
-std::vector<ClipVertex> clip_plane(const std::vector<ClipVertex> &polygon, float (*distance)(const ClipVertex &)) {
-    std::vector<ClipVertex> out;
-    if (polygon.empty()) return out;
+void clip_plane_into(std::vector<ClipVertex> &out, const std::vector<ClipVertex> &polygon,
+                       float (*distance)(const ClipVertex &)) {
+    out.clear();
+    if (polygon.empty()) return;
     for (std::size_t i = 0; i < polygon.size(); ++i) {
         const ClipVertex &current = polygon[i];
         const ClipVertex &next = polygon[(i + 1u) % polygon.size()];
@@ -103,8 +104,14 @@ std::vector<ClipVertex> clip_plane(const std::vector<ClipVertex> &polygon, float
             out.push_back(next);
         }
     }
+}
+
+std::vector<ClipVertex> clip_plane(const std::vector<ClipVertex> &polygon, float (*distance)(const ClipVertex &)) {
+    std::vector<ClipVertex> out;
+    clip_plane_into(out, polygon, distance);
     return out;
 }
+
 
 Vec3 material_color(const Vertex &vertex, const Material &material, std::uint8_t bit, float &alpha) {
     if (vertex.color[0] >= 0.0f && (material.update & bit) != 0u) {
@@ -460,6 +467,16 @@ std::vector<ClipVertex> clip_triangle(const ClipVertex &a, const ClipVertex &b, 
     polygon = clip_plane(polygon, plane_distance_near);
     polygon = clip_plane(polygon, plane_distance_far);
     return polygon;
+}
+
+void clip_triangle_into(std::vector<ClipVertex> &out, std::vector<ClipVertex> &scratch, const ClipVertex &a,
+                        const ClipVertex &b, const ClipVertex &c) {
+    out.clear();
+    out.push_back(a);
+    out.push_back(b);
+    out.push_back(c);
+    clip_plane_into(scratch, out, plane_distance_near);
+    clip_plane_into(out, scratch, plane_distance_far);
 }
 
 } // namespace gungnir::ge

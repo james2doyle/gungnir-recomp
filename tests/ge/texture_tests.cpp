@@ -5,6 +5,7 @@
 #include "ge/texture.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -336,6 +337,31 @@ void range_invalidation() {
 
 } // namespace
 
+void bench_content_key() {
+    // Manual benchmark only (GUNGNIR_BENCH=1): battle-sized 1MB texture,
+    // prints throughput, never fails. Host numbers guide; device simpleperf
+    // decides. Baseline 2026-11-03 (word-at-a-time FNV, x86-64 host):
+    // ~7200 MB/s, ~0.13 ns/byte.
+    if (std::getenv("GUNGNIR_BENCH") == nullptr) return;
+    TextureState state = texture_state(TextureFormat::Rgba8888, 512, 512, 512);
+    std::vector<std::uint8_t> data(512u * 512u * 4u, 0u);
+    for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<std::uint8_t>((i * 31u + 7u) & 0xFFu);
+    volatile std::uint64_t sink = 0u;
+    constexpr int iterations = 20;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < iterations; ++i) {
+        // Mutate one byte per pass so the hash cannot be hoisted out of the loop.
+        data[static_cast<std::size_t>(i) * 7919u % data.size()] ^= static_cast<std::uint8_t>(i);
+        sink ^= Texture(state, data).content_key();
+    }
+    const auto end = std::chrono::steady_clock::now();
+    const double seconds =
+        std::chrono::duration_cast<std::chrono::duration<double>>(end - start).count() / iterations;
+    const double megabytes = static_cast<double>(data.size()) / (1024.0 * 1024.0);
+    std::cout << "BENCH content_key: " << megabytes / seconds << " MB/s (" << seconds * 1e9 / data.size()
+              << " ns/byte, sink=" << sink << ")\n";
+}
+
 int main() {
     try {
         plain_formats();
@@ -345,6 +371,7 @@ int main() {
         cache_keys();
         large_content_keys();
         range_invalidation();
+        bench_content_key();
         std::cout << "ge_texture_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

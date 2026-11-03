@@ -216,5 +216,7 @@ float signed_area(const ScreenVertex &a, const ScreenVertex &b, const ScreenVert
 // Clips a triangle against the GE near (z >= -w) and far (z <= w) planes.
 // The result is a convex polygon with 0..5 vertices.
 std::vector<ClipVertex> clip_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c);
+void clip_triangle_into(std::vector<ClipVertex> &out, std::vector<ClipVertex> &scratch, const ClipVertex &a,
+                        const ClipVertex &b, const ClipVertex &c);
 
 } // namespace gungnir::ge

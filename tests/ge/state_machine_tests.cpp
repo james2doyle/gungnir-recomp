@@ -5,10 +5,13 @@
 #include "ge/state_machine.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -49,6 +52,11 @@ public:
         if (address + size > bytes_.size()) return false;
         std::memcpy(out, bytes_.data() + address, size);
         return true;
+    }
+
+    std::span<const std::uint8_t> span(std::uint32_t address, std::size_t size) const {
+        if (address + size > bytes_.size()) return {};
+        return std::span<const std::uint8_t>(bytes_.data() + address, size);
     }
 
 private:
@@ -151,6 +159,104 @@ void indexed_and_textured() {
     check(draws[0].state.texture != nullptr && draws[0].state.texture->width == 2 &&
               draws[0].state.texture->height == 2,
         "texture extent");
+}
+
+void texture_resolve_dedup() {
+    // Per-frame validated dedup: identical textured draws in one frame hash
+    // the texture once; the next frame re-resolves; a mid-frame texel change
+    // recomputes instead of serving stale bytes.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    const std::uint32_t vt = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u) | (2u << 11u);
+    memory.store8(0x2000u, 0u);
+    memory.store8(0x2001u, 1u);
+    memory.store8(0x2002u, 2u);
+    for (int i = 0; i < 4; ++i) memory.store32(0x3000u + static_cast<std::uint32_t>(i) * 4u,
+        0xFF000000u | static_cast<std::uint32_t>(i * 40u) << 16u);
+
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.set_fast_source([&memory](std::uint32_t address, std::size_t size) -> std::span<const std::uint8_t> {
+        return memory.span(address, size);
+    });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), view(memory));
+    };
+    const auto textured_prim = [&] {
+        send(CommandKind::VertexType, vt, 0x12u);
+        send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+        send(CommandKind::IndexAddress, 0x2000u, 0x02u);
+        send(CommandKind::State, 1u, 0x1Eu);
+        send(CommandKind::State, 0x3000u, 0xA0u);
+        send(CommandKind::State, 2u, 0xA8u);
+        send(CommandKind::State, 0x0101u, 0xB8u);
+        send(CommandKind::State, 3u, 0xC3u);
+        send(CommandKind::State, 0u, 0xC2u);
+        send(CommandKind::Primitive, (6u << 16u) | 2u, 0x04u);
+    };
+    textured_prim();
+    textured_prim();
+    check(draws.size() == 2u, "two identical textured draws emit");
+    check(machine.texture_resolve_count() == 1u, "identical draws in one frame hash once");
+    check(draws[0].state.texture == draws[1].state.texture, "dedup shares the decoded image");
+    // Kicks bound trust: a mutation after begin_list revalidates and
+    // recomputes, while an unchanged kick reuses the validated bytes.
+    machine.begin_list();
+    memory.store8(0x3000u, 0x11u);
+    textured_prim();
+    check(machine.texture_resolve_count() == 2u, "cross-kick texel change recomputes");
+    machine.begin_list();
+    textured_prim();
+    check(machine.texture_resolve_count() == 2u, "unchanged kick reuses validated bytes");
+    machine.end_frame();
+    textured_prim();
+    check(machine.texture_resolve_count() == 3u, "next frame re-resolves");
+}
+
+void bench_draw_primitive() {
+    // Manual benchmark only (GUNGNIR_BENCH=1): 300 textured draws sharing one
+    // texture (dedup hit path), prints us/draw. Baseline 2026-11-04
+    // (per-draw vectors): 0.51 us/draw; with scratch reuse: 0.49 us/draw
+    // (host malloc is cheap; the device win is the point).
+    if (std::getenv("GUNGNIR_BENCH") == nullptr) return;
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    const std::uint32_t vt = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u) | (2u << 11u);
+    memory.store8(0x2000u, 0u);
+    memory.store8(0x2001u, 1u);
+    memory.store8(0x2002u, 2u);
+    for (int i = 0; i < 4; ++i) memory.store32(0x3000u + static_cast<std::uint32_t>(i) * 4u,
+        0xFF000000u | static_cast<std::uint32_t>(i * 40u) << 16u);
+
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.set_fast_source([&memory](std::uint32_t address, std::size_t size) -> std::span<const std::uint8_t> {
+        return memory.span(address, size);
+    });
+    const auto textured_prim = [&] {
+        machine.command(command(CommandKind::VertexType, vt, 0x12u), view(memory));
+        machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+        machine.command(command(CommandKind::IndexAddress, 0x2000u, 0x02u), view(memory));
+        machine.command(command(CommandKind::State, 1u, 0x1Eu), view(memory));
+        machine.command(command(CommandKind::State, 0x3000u, 0xA0u), view(memory));
+        machine.command(command(CommandKind::State, 2u, 0xA8u), view(memory));
+        machine.command(command(CommandKind::State, 0x0101u, 0xB8u), view(memory));
+        machine.command(command(CommandKind::State, 3u, 0xC3u), view(memory));
+        machine.command(command(CommandKind::State, 0u, 0xC2u), view(memory));
+        machine.command(command(CommandKind::Primitive, (6u << 16u) | 2u, 0x04u), view(memory));
+    };
+    textured_prim();
+    constexpr int iterations = 300;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < iterations; ++i) textured_prim();
+    const auto end = std::chrono::steady_clock::now();
+    const double total_us =
+        static_cast<double>(
+            std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()) /
+        iterations;
+    std::cout << "BENCH draw_primitive: " << total_us << " us/draw (" << draws.size() << " draws)\n";
 }
 
 void through_sprite_quad() {
@@ -600,6 +706,8 @@ int main() {
     texfunc_decode();
     stencil_decode();
     bounded_texture_retention();
+    texture_resolve_dedup();
+    bench_draw_primitive();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";
         return 1;

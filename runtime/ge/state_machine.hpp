@@ -17,12 +17,15 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace gungnir::ge {
 
 // Copies guest bytes; false means the range is not readable.
 using MemoryView = std::function<bool(std::uint32_t address, std::uint8_t *out, std::size_t size)>;
+// Zero-copy guest view for the texture fast path; empty span means unreadable.
+using FastSource = std::function<std::span<const std::uint8_t>(std::uint32_t address, std::size_t size)>;
 
 struct DrawState {
     int scissor_x0{};
@@ -97,6 +100,12 @@ public:
     void set_draw_sink(DrawSink sink);
     void set_gap_sink(GapSink sink);
     void command(const Command &command, const MemoryView &memory);
+    // Optional zero-copy source for texture resolves; when null every resolve
+    // copies through MemoryView. end_frame drops the per-frame dedup map.
+    void set_fast_source(FastSource source);
+    void begin_list();
+    void end_frame();
+    [[nodiscard]] std::uint64_t texture_resolve_count() const;
 
     [[nodiscard]] const std::array<std::uint32_t, 256> &registers() const { return regs_; }
     [[nodiscard]] std::uint64_t draw_count() const { return draws_; }
@@ -142,6 +151,55 @@ private:
     TextureCache textures_;
     DrawSink draw_sink_;
     GapSink gap_sink_;
+    FastSource fast_source_;
+    std::uint64_t texture_resolves_{};
+    // Per-draw scratch reused across draws (no semantic state; never
+    // snapshotted). Grows to the largest draw seen, then stops allocating.
+    std::vector<std::uint8_t> scratch_bytes_;
+    std::vector<std::uint8_t> scratch_indices_;
+    std::vector<Vertex> scratch_decoded_;
+    std::vector<ClipVertex> scratch_clips_;
+    std::vector<ClipVertex> scratch_polygon_;
+    std::vector<ClipVertex> scratch_clip_tmp_;
+    std::uint64_t list_epoch_{};
+    // Per-frame validated dedup:cheap register key -> retained bytes from
+    // this frame. Hits are byte-compared (never trusted blind); the map is
+    // dropped by end_frame/reset/import.
+    struct ResolveEntry {
+        std::vector<std::uint8_t> data;
+        std::vector<std::uint8_t> clut;
+        std::uint64_t content_key{};
+        std::shared_ptr<const TextureImage> image;
+        std::shared_ptr<CpuTexture> cpu;
+        std::uint64_t validated_epoch{};
+    };
+    struct ResolveKey {
+        std::uint32_t address{};
+        std::uint32_t size{};
+        std::uint32_t format{};
+        std::uint32_t mode{};
+        std::uint32_t extent{};
+        std::uint32_t buffer_width{};
+        std::uint32_t wrap{};
+        std::uint32_t clut_format{};
+        bool clut_valid{};
+        bool operator==(const ResolveKey &) const = default;
+    };
+    struct ResolveKeyHash {
+        std::size_t operator()(const ResolveKey &key) const noexcept {
+            std::size_t hash = static_cast<std::size_t>(key.address);
+            hash = hash * 1315423911u + key.size;
+            hash = hash * 1315423911u + key.format;
+            hash = hash * 1315423911u + key.mode;
+            hash = hash * 1315423911u + key.extent;
+            hash = hash * 1315423911u + key.buffer_width;
+            hash = hash * 1315423911u + key.wrap;
+            hash = hash * 1315423911u + key.clut_format;
+            hash = hash * 1315423911u + (key.clut_valid ? 1u : 0u);
+            return hash;
+        }
+    };
+    std::unordered_map<ResolveKey, ResolveEntry, ResolveKeyHash> frame_textures_;
 };
 
 } // namespace gungnir::ge
