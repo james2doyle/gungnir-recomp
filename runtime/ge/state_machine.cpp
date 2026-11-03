@@ -654,9 +654,12 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.scissor_x1 = static_cast<int>(kDisplayWidth);
         draw.state.scissor_y1 = static_cast<int>(kDisplayHeight);
     }
-    // PSP through draws (UI, sprites) never depth-test: the enable follows
-    // test_enabled AND NOT through (Yakumo StateMappingVulkan parity).
-    draw.state.depth_test = reg_on(0x23u) && !layout_.through;
+    // Depth test follows the enable bit even for through draws (psprecore
+    // soft_renderer parity; PPSSPP behavior): through mode bypasses only
+    // transform, lighting, fog and cull — not the depth test. Exempting it
+    // here left through sprites (cursor, shadows) untested so they drew
+    // over everything behind them.
+    draw.state.depth_test = reg_on(0x23u);
     draw.state.depth_write = !reg_on(0xE7u);
     draw.state.depth_function = compare_from_ge(reg_param(0xDEu));
     draw.state.cull = state.cull;

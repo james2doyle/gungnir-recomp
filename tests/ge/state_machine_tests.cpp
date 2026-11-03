@@ -115,8 +115,8 @@ void through_triangle() {
     check(draws.size() == 1u, "one through-mode draw");
     if (draws.size() != 1u) return;
     const Draw &draw = draws[0];
-    check(draw.state.depth_test == false,
-        "through draws ignore the game depth-test enable (Yakumo parity)");
+    check(draw.state.depth_test == true,
+        "through draws honor the game depth-test enable (psprecore parity)");
     check(draw.vertices.size() == 3u, "three screen vertices");
     check(draw.indices.size() == 3u, "three indices");
     check(close(draw.vertices[0].x, 10.0f) && close(draw.vertices[0].y, 20.0f),
