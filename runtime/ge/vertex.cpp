@@ -250,12 +250,12 @@ void decode_vertices(const VertexLayout &layout, const std::uint8_t *data, std::
         out[i] = decode_vertex(layout, data + static_cast<std::size_t>(i) * layout.stride, morph_weights);
 }
 
-VertexPipeline::VertexPipeline(TransformState state) {
-    set_state(std::move(state));
+VertexPipeline::VertexPipeline(const TransformState &state) {
+    set_state(state);
 }
 
-void VertexPipeline::set_state(TransformState state) {
-    state_ = std::move(state);
+void VertexPipeline::set_state(const TransformState &state) {
+    state_ = state;
     configure();
 }
 

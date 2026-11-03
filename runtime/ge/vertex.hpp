@@ -190,9 +190,9 @@ struct TransformState {
 class VertexPipeline {
 public:
     VertexPipeline() = default;
-    explicit VertexPipeline(TransformState state);
+    explicit VertexPipeline(const TransformState &state);
 
-    void set_state(TransformState state);
+    void set_state(const TransformState &state);
     [[nodiscard]] const TransformState &state() const { return state_; }
 
     [[nodiscard]] ClipVertex transform(const Vertex &vertex) const;

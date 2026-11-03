@@ -83,8 +83,51 @@ BlendEquation blend_equation(std::uint32_t code) {
 
 StateMachine::StateMachine() = default;
 
-void StateMachine::reset() {
-    regs_.fill(0u);
+bool StateMachine::transform_affects(std::uint8_t opcode) {
+    // Mirrors the regs transform_state() reads: texture-map enable (0x1E),
+    // lighting (0x17, 0x18-0x1B enables, 0x51-0x5D material, 0x5E flags,
+    // 0x5F-0x9A per-light), cull (0x1D, 0x9B), viewport (0x42-0x4D),
+    // texture map (0x48-0x4B, 0xB8, 0xC0), fog (0x1F, 0xCD, 0xCE).
+    // Conservative misses only cost a rebuild, never stale state — but an
+    // opcode read by transform_state() and missing here WOULD go stale, so
+    // keep this in sync with that function body.
+    if (opcode >= 0x5Fu && opcode <= 0x9Au) return true;
+    if (opcode >= 0x42u && opcode <= 0x4Du) return true;
+    switch (opcode) {
+    case 0x17u:
+    case 0x18u:
+    case 0x19u:
+    case 0x1Au:
+    case 0x1Bu:
+    case 0x1Du:
+    case 0x1Eu:
+    case 0x1Fu:
+    case 0x51u:
+    case 0x53u:
+    case 0x54u:
+    case 0x55u:
+    case 0x56u:
+    case 0x57u:
+    case 0x58u:
+    case 0x59u:
+    case 0x5Au:
+    case 0x5Bu:
+    case 0x5Cu:
+    case 0x5Du:
+    case 0x5Eu:
+    case 0x9Bu:
+    case 0xB8u:
+    case 0xC0u:
+    case 0xCDu:
+    case 0xCEu:
+        return true;
+    default:
+        break;
+    }
+    return false;
+}
+
+void StateMachine::reset() {    regs_.fill(0u);
     world_ = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
     view_ = world_;
     texture_ = world_;
@@ -102,6 +145,10 @@ void StateMachine::reset() {
     textures_.clear();
     frame_textures_.clear();
     texture_resolves_ = 0u;
+    pipeline_ = VertexPipeline{};
+    transform_generation_ = 1u;
+    pipeline_generation_ = 0u;
+    pipeline_builds_ = 0u;
 }
 
 void StateMachine::set_fast_source(FastSource source) { fast_source_ = std::move(source); }
@@ -150,13 +197,20 @@ void StateMachine::command(const Command &command, const MemoryView &memory) {
         index_address_ = command.address;
         break;
     case CommandKind::VertexType:
-        layout_ = command.vertex_layout;
+        // Layouts are re-sent per draw; only a changed layout invalidates.
+        if (!(layout_ == command.vertex_layout)) {
+            layout_ = command.vertex_layout;
+            ++transform_generation_;
+        }
         break;
     case CommandKind::Primitive:
         draw_primitive(command, memory);
         break;
-    case CommandKind::State:
+    case CommandKind::State: {
+        const bool changed = regs_[command.opcode] != command.argument;
         regs_[command.opcode] = command.argument;
+        // Redundant re-uploads (same value) don't invalidate.
+        if (changed && transform_affects(command.opcode)) ++transform_generation_;
         if (command.opcode == 0xC4u) {
             const std::uint32_t address = ((reg_param(0xB1u) & 0x0F0000u) << 8u) |
                 (reg_param(0xB0u) & 0xFFFFF0u);
@@ -168,6 +222,7 @@ void StateMachine::command(const Command &command, const MemoryView &memory) {
             }
         }
         break;
+    }
     case CommandKind::Base:
     case CommandKind::Offset:
     case CommandKind::Origin:
@@ -181,22 +236,26 @@ void StateMachine::command(const Command &command, const MemoryView &memory) {
     case 0x3Bu:
         if (world_index_ >= 0 && world_index_ < 12) world_[world_index_++] = f24(command.argument);
         else gap("world_matrix_index");
+        ++transform_generation_;
         break;
     case 0x3Cu: view_index_ = static_cast<int>(command.argument & 15u); break;
     case 0x3Du:
         if (view_index_ >= 0 && view_index_ < 12) view_[view_index_++] = f24(command.argument);
         else gap("view_matrix_index");
+        ++transform_generation_;
         break;
     case 0x3Eu: projection_index_ = static_cast<int>(command.argument & 15u); break;
     case 0x3Fu:
         if (projection_index_ >= 0 && projection_index_ < 16)
             projection_[projection_index_++] = f24(command.argument);
         else gap("projection_matrix_index");
+        ++transform_generation_;
         break;
     case 0x40u: texture_index_ = static_cast<int>(command.argument & 15u); break;
     case 0x41u:
         if (texture_index_ >= 0 && texture_index_ < 12) texture_[texture_index_++] = f24(command.argument);
         else gap("texture_matrix_index");
+        ++transform_generation_;
         break;
     case 0x2Au: bone_index_ = static_cast<int>(command.argument & 127u); break;
     case 0x2Bu:
@@ -207,6 +266,7 @@ void StateMachine::command(const Command &command, const MemoryView &memory) {
         } else {
             gap("bone_matrix_index");
         }
+        ++transform_generation_;
         break;
     default:
         break;
@@ -373,18 +433,21 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
         ResolveEntry &entry = found->second;
         // Same display-list run: no guest code ran since validation, so the
         // bytes cannot have changed; reuse without re-reading. Across runs the
-        // guest may have rewritten the range, so validate byte-exact.
+        // guest may have rewritten the range, so validate byte-exact against
+        // the retained CpuTexture bytes (no second copy is kept).
         const bool same_run = entry.validated_epoch == list_epoch_;
-        const bool bytes_match = same_run || (!fast_bytes.empty() && fast_bytes.size() == entry.data.size() &&
-                                              std::memcmp(fast_bytes.data(), entry.data.data(), fast_bytes.size()) == 0);
+        const std::span<const std::uint8_t> retained =
+            entry.cpu != nullptr ? std::span<const std::uint8_t>(entry.cpu->data) : std::span<const std::uint8_t>{};
+        const bool bytes_match = same_run || (!fast_bytes.empty() && fast_bytes.size() == retained.size() &&
+                                              std::memcmp(fast_bytes.data(), retained.data(), fast_bytes.size()) == 0);
         const bool copied_match = [&] {
             if (bytes_match) return true;
             if (!fast_bytes.empty()) return false;
             copied.resize(data_size);
             if (data_size != 0u && !memory(address, copied.data(), data_size)) return false;
             copied_valid = true;
-            return copied.size() == entry.data.size() &&
-                   std::memcmp(copied.data(), entry.data.data(), copied.size()) == 0;
+            return copied.size() == retained.size() &&
+                   std::memcmp(copied.data(), retained.data(), copied.size()) == 0;
         }();
         if ((bytes_match || copied_match) && clut_span.size() == entry.clut.size() &&
             (clut_span.empty() ||
@@ -448,7 +511,6 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
     state.texture_address = address;
     state.texture_size = data_size;
     ResolveEntry entry;
-    entry.data = cpu->data;
     entry.clut.assign(clut_span.begin(), clut_span.end());
     entry.content_key = key;
     entry.image = image;
@@ -467,51 +529,115 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         return;
     }
     const int index_size = layout_.index_size;
-    std::vector<std::uint8_t> &vertices = scratch_bytes_;
-    vertices.assign(static_cast<std::size_t>(count) * stride, 0u);
-    if (index_size != 0) {
-        std::vector<std::uint8_t> &indices = scratch_indices_;
-        indices.resize(static_cast<std::size_t>(count) * static_cast<std::size_t>(index_size));
-        if (!memory(index_address_, indices.data(), indices.size())) {
-            gap("index_unreadable");
-            return;
-        }
-        for (std::uint32_t i = 0; i < count; ++i) {
-            std::uint32_t index = 0;
-            if (index_size == 1) index = indices[i];
-            else if (index_size == 2) std::memcpy(&index, indices.data() + i * 2u, 2u);
-            else std::memcpy(&index, indices.data() + i * 4u, 4u);
-            if (!memory(vertex_address_ + index * static_cast<std::uint32_t>(stride),
-                        vertices.data() + static_cast<std::size_t>(i) * stride, stride)) {
-                gap("vertex_unreadable");
-                return;
-            }
-        }
-        index_address_ += count * static_cast<std::uint32_t>(index_size);
-    } else {
-        if (!memory(vertex_address_, vertices.data(), vertices.size())) {
-            gap("vertex_unreadable");
-            return;
-        }
-        vertex_address_ += count * static_cast<std::uint32_t>(stride);
-    }
-
     std::array<float, 8> morph{};
     for (std::size_t i = 0; i < morph.size(); ++i)
         morph[i] = reg_float(static_cast<std::uint8_t>(0x2Cu + i));
     std::vector<Vertex> &decoded = scratch_decoded_;
     decoded.resize(count);
-    for (std::uint32_t i = 0; i < count; ++i)
-        decoded[i] = decode_vertex(layout_, vertices.data() + static_cast<std::size_t>(i) * stride, morph.data());
+    // Zero-copy vertex reads: the fast source (refreshed per display-list
+    // kick, during which no guest code runs) lets decode read guest bytes in
+    // place. Without it, fall back to copying through MemoryView.
+    const bool use_fast = static_cast<bool>(fast_source_);
+    if (index_size != 0) {
+        const std::size_t index_bytes = static_cast<std::size_t>(count) * static_cast<std::size_t>(index_size);
+        std::span<const std::uint8_t> index_span;
+        if (use_fast) index_span = fast_source_(index_address_, index_bytes);
+        std::vector<std::uint8_t> &indices = scratch_indices_;
+        const std::uint8_t *index_data = nullptr;
+        if (index_span.size() == index_bytes && index_bytes != 0u) {
+            index_data = index_span.data();
+        } else {
+            indices.resize(index_bytes);
+            if (!memory(index_address_, indices.data(), indices.size())) {
+                gap("index_unreadable");
+                return;
+            }
+            index_data = indices.data();
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t index = 0;
+            if (index_size == 1) index = index_data[i];
+            else if (index_size == 2) std::memcpy(&index, index_data + i * 2u, 2u);
+            else std::memcpy(&index, index_data + i * 4u, 4u);
+            const std::uint32_t vertex_address = vertex_address_ + index * static_cast<std::uint32_t>(stride);
+            if (use_fast) {
+                const std::span<const std::uint8_t> vertex_span = fast_source_(vertex_address, stride);
+                if (vertex_span.size() != stride) {
+                    gap("vertex_unreadable");
+                    return;
+                }
+                decoded[i] = decode_vertex(layout_, vertex_span.data(), morph.data());
+            } else {
+                std::vector<std::uint8_t> &vertices = scratch_bytes_;
+                if (vertices.size() < stride) vertices.resize(stride);
+                if (!memory(vertex_address, vertices.data(), stride)) {
+                    gap("vertex_unreadable");
+                    return;
+                }
+                decoded[i] = decode_vertex(layout_, vertices.data(), morph.data());
+            }
+        }
+        index_address_ += count * static_cast<std::uint32_t>(index_size);
+    } else {
+        const std::size_t total = static_cast<std::size_t>(count) * stride;
+        const std::uint8_t *base = nullptr;
+        std::vector<std::uint8_t> &vertices = scratch_bytes_;
+        if (use_fast) {
+            const std::span<const std::uint8_t> vertex_span = fast_source_(vertex_address_, total);
+            if (vertex_span.size() != total) {
+                gap("vertex_unreadable");
+                return;
+            }
+            base = vertex_span.data();
+        } else {
+            vertices.assign(total, 0u);
+            if (!memory(vertex_address_, vertices.data(), vertices.size())) {
+                gap("vertex_unreadable");
+                return;
+            }
+            base = vertices.data();
+        }
+        for (std::uint32_t i = 0; i < count; ++i)
+            decoded[i] = decode_vertex(layout_, base + static_cast<std::size_t>(i) * stride, morph.data());
+        vertex_address_ += count * static_cast<std::uint32_t>(stride);
+    }
 
-    const TransformState state = transform_state();
-    VertexPipeline pipeline(state);
+    // Most consecutive draws share transform state (only addresses and
+    // texture regs change per draw). Matching generations skip the rebuild
+    // plus the state copy and the matrix precomputation in configure().
+    if (pipeline_generation_ != transform_generation_) {
+        pipeline_.set_state(transform_state());
+        pipeline_generation_ = transform_generation_;
+        ++pipeline_builds_;
+    }
+    VertexPipeline &pipeline = pipeline_;
+    const TransformState &state = pipeline.state();
     std::vector<ClipVertex> &clips = scratch_clips_;
     clips.resize(count);
     for (std::uint32_t i = 0; i < count; ++i) clips[i] = pipeline.transform(decoded[i]);
 
     Draw draw;
-    draw.vertices.reserve(static_cast<std::size_t>(count) + 2u);
+    // Vertex reserves from proven per-primitive expansion bounds (unclipped
+    // through draws hit them exactly; clipping only shrinks output, except
+    // heavily clipped strips/fans which may still grow once). Undersized
+    // reserves realloc (malloc plus memmove) on most of the frame's ~2100
+    // strip draws; oversize is transient per draw, freed at flip.
+    std::size_t vertex_budget = static_cast<std::size_t>(count) + 2u;
+    switch (command.primitive) {
+    case Primitive::TriangleStrip:
+    case Primitive::TriangleFan:
+        vertex_budget = static_cast<std::size_t>(count) * 3u;
+        break;
+    case Primitive::Sprites:
+        vertex_budget = static_cast<std::size_t>(count) * 2u + 2u;
+        break;
+    case Primitive::Triangles:
+        vertex_budget = static_cast<std::size_t>(count) * 2u;
+        break;
+    default:
+        break;
+    }
+    draw.vertices.reserve(vertex_budget);
     draw.indices.reserve(static_cast<std::size_t>(count) * 3u);
     draw.primitive = command.primitive;
     const std::uint32_t scissor1 = reg_param(0xD4u);
@@ -709,7 +835,7 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
 
     if (!draw.vertices.empty() && !draw.indices.empty()) {
         ++draws_;
-        if (draw_sink_) draw_sink_(draw);
+        if (draw_sink_) draw_sink_(std::move(draw));
     }
 }
 

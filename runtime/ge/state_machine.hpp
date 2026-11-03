@@ -91,7 +91,7 @@ struct Draw {
 // they are counted, never silently rendered as triangles.
 class StateMachine {
 public:
-    using DrawSink = std::function<void(const Draw &)>;
+    using DrawSink = std::function<void(Draw &&)>;
     using GapSink = std::function<void(const std::string &)>;
 
     StateMachine();
@@ -106,6 +106,10 @@ public:
     void begin_list();
     void end_frame();
     [[nodiscard]] std::uint64_t texture_resolve_count() const;
+    // Pipeline cache telemetry: how often the cached VertexPipeline was
+    // rebuilt (transform state changed). Hits skip the state copy plus the
+    // matrix precomputation in configure().
+    [[nodiscard]] std::uint64_t pipeline_build_count() const { return pipeline_builds_; }
 
     [[nodiscard]] const std::array<std::uint32_t, 256> &registers() const { return regs_; }
     [[nodiscard]] std::uint64_t draw_count() const { return draws_; }
@@ -121,6 +125,10 @@ public:
 private:
     void draw_primitive(const Command &command, const MemoryView &memory);
     [[nodiscard]] TransformState transform_state() const;
+    // True when a State write to opcode feeds transform_state() (viewport,
+    // texture-map, lighting, fog, cull regs). Matrix/bone uploads and
+    // VertexType bump the generation separately.
+    [[nodiscard]] static bool transform_affects(std::uint8_t opcode);
     [[nodiscard]] std::vector<ScreenVertex> transform_vertices(
         const std::vector<Vertex> &vertices, const TransformState &state) const;
     [[nodiscard]] const TextureImage *resolve_texture(const MemoryView &memory, DrawState &state);
@@ -162,11 +170,19 @@ private:
     std::vector<ClipVertex> scratch_polygon_;
     std::vector<ClipVertex> scratch_clip_tmp_;
     std::uint64_t list_epoch_{};
+    // Cached vertex pipeline: transform_generation_ bumps on every write
+    // that transform_state() reads (see transform_affects; the function body
+    // is the spec — if it reads new state, add the opcodes here). A draw
+    // whose generation matches the pipeline's skips the rebuild entirely.
+    // Derived cache: never snapshotted; mismatched init forces first build.
+    VertexPipeline pipeline_;
+    std::uint64_t transform_generation_{1};
+    std::uint64_t pipeline_generation_{};
+    std::uint64_t pipeline_builds_{};
     // Per-frame validated dedup:cheap register key -> retained bytes from
     // this frame. Hits are byte-compared (never trusted blind); the map is
     // dropped by end_frame/reset/import.
     struct ResolveEntry {
-        std::vector<std::uint8_t> data;
         std::vector<std::uint8_t> clut;
         std::uint64_t content_key{};
         std::shared_ptr<const TextureImage> image;

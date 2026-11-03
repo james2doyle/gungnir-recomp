@@ -161,6 +161,130 @@ void indexed_and_textured() {
         "texture extent");
 }
 
+void primitive_expansion_counts() {
+    // Pins per-primitive vertex/index expansion for unclipped through draws:
+    // a 102-vert strip emits 100 triangles (300 verts/indices), a 4-vert
+    // sprite quad emits 8 verts and 12 indices. The draw allocator sizes
+    // reserves from these bounds; regressions here mean reallocs per draw.
+    Memory memory;
+    const std::uint32_t vt = (3u << 7u) | 3u | (7u << 2u) | (1u << 23u);
+    const VertexLayout layout = decode_vertex_layout(vt);
+    for (int i = 0; i < 102; ++i) {
+        const std::uint32_t at = 0x1000u + static_cast<std::uint32_t>(i) * layout.stride;
+        memory.store_float(at + layout.position_offset + 0u, 10.0f + static_cast<float>(i));
+        memory.store_float(at + layout.position_offset + 4u, 20.0f);
+        memory.store_float(at + layout.position_offset + 8u, 0.0f);
+        memory.store_float(at + layout.texcoord_offset + 0u, 0.0f);
+        memory.store_float(at + layout.texcoord_offset + 4u, 0.0f);
+        memory.store32(at + layout.color_offset, 0xFFFFFFFFu);
+    }
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), view(memory));
+    };
+    send(CommandKind::VertexType, vt, 0x12u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::Primitive, (4u << 16u) | 102u, 0x04u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::Primitive, (6u << 16u) | 4u, 0x04u);
+    check(draws.size() == 2u, "strip plus sprites emit");
+    if (draws.size() != 2u) return;
+    check(draws[0].vertices.size() == 300u, "102-vert strip emits 300 verts");
+    check(draws[0].indices.size() == 300u, "102-vert strip emits 300 indices");
+    check(draws[1].vertices.size() == 8u, "4-vert sprites emit 8 verts");
+    check(draws[1].indices.size() == 12u, "4-vert sprites emit 12 indices");
+}
+
+void pipeline_cache_reuse() {
+    // The vertex pipeline rebuilds only when transform state changes:
+    // identical draws share it, texture-only preamble does not rebuild,
+    // a viewport change does. Fails to compile before the cache exists.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), view(memory));
+    };
+    const auto triangle = [&] {
+        send(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u), 0x12u);
+        send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+        send(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u);
+    };
+    triangle();
+    const std::uint64_t first = machine.pipeline_build_count();
+    triangle();
+    check(machine.pipeline_build_count() == first, "identical draws share the pipeline");
+    send(CommandKind::State, 0x3000u, 0xA0u);  // texture address: not transform state
+    triangle();
+    check(machine.pipeline_build_count() == first, "texture preamble does not rebuild");
+    send(CommandKind::State, 0x3F8000u, 0x42u);  // viewport scale x = f24 -> 1.0f
+    triangle();
+    check(machine.pipeline_build_count() == first + 1u, "viewport change rebuilds");
+    check(draws.size() == 4u, "all cached draws emit");
+}
+
+void draw_sink_moves() {    // The draw sink receives a movable Draw: a sink that moves the vertices
+    // out must observe the emitted content. Does not compile against the old
+    // const-ref sink (no move path existed).
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    StateMachine machine;
+    std::vector<ScreenVertex> moved;
+    machine.set_draw_sink([&moved](Draw &&draw) { moved = std::move(draw.vertices); });
+    machine.command(command(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u),
+                           0x12u), view(memory));
+    machine.command(command(CommandKind::VertexAddress, 0x1000u, 0x01u), view(memory));
+    machine.command(command(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u), view(memory));
+    check(moved.size() == 3u, "moved sink observes three vertices");
+    if (moved.size() != 3u) return;
+    check(close(moved[0].x, 10.0f) && close(moved[0].y, 20.0f),
+        "moved vertices keep screen positions");
+}
+
+void fast_vertex_reads() {
+    // Zero-copy vertex/index reads: with a failing MemoryView but a valid
+    // fast source, both the non-indexed and indexed paths still emit with
+    // correct positions. Fails until draw_primitive consults fast_source_
+    // for vertex and index bytes.
+    Memory memory;
+    write_through_triangle(memory, 0x1000u);
+    memory.store8(0x2000u, 0u);
+    memory.store8(0x2001u, 1u);
+    memory.store8(0x2002u, 2u);
+    const MemoryView failing = [](std::uint32_t, std::uint8_t *, std::size_t) { return false; };
+
+    StateMachine machine;
+    std::vector<Draw> draws;
+    machine.set_draw_sink([&draws](const Draw &draw) { draws.push_back(draw); });
+    machine.set_fast_source([&memory](std::uint32_t address, std::size_t size) -> std::span<const std::uint8_t> {
+        return memory.span(address, size);
+    });
+    const auto send = [&](CommandKind kind, std::uint32_t argument, std::uint8_t opcode) {
+        machine.command(command(kind, argument, opcode), failing);
+    };
+    // Non-indexed through triangle.
+    send(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u), 0x12u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::Primitive, (3u << 16u) | 3u, 0x04u);
+    // Indexed triangle over the same vertices (1u<<11u = 8-bit indices).
+    send(CommandKind::VertexType, (3u << 7u) | 3u | (7u << 2u) | (1u << 23u) | (1u << 11u), 0x12u);
+    send(CommandKind::VertexAddress, 0x1000u, 0x01u);
+    send(CommandKind::IndexAddress, 0x2000u, 0x02u);
+    send(CommandKind::Primitive, (6u << 16u) | 2u, 0x04u);
+
+    check(draws.size() == 2u, "fast source feeds both vertex paths");
+    if (draws.size() != 2u) return;
+    check(draws[0].vertices.size() == 3u, "non-indexed fast vertices");
+    check(close(draws[0].vertices[0].x, 10.0f) && close(draws[0].vertices[0].y, 20.0f),
+        "non-indexed fast position is screen space");
+    check(!draws[1].vertices.empty() && close(draws[1].vertices[0].x, 10.0f),
+        "indexed fast position is screen space");
+}
+
 void texture_resolve_dedup() {
     // Per-frame validated dedup: identical textured draws in one frame hash
     // the texture once; the next frame re-resolves; a mid-frame texel change
@@ -217,8 +341,10 @@ void texture_resolve_dedup() {
 void bench_draw_primitive() {
     // Manual benchmark only (GUNGNIR_BENCH=1): 300 textured draws sharing one
     // texture (dedup hit path), prints us/draw. Baseline 2026-11-04
-    // (per-draw vectors): 0.51 us/draw; with scratch reuse: 0.49 us/draw
-    // (host malloc is cheap; the device win is the point).
+    // (per-draw vectors): 0.51 us/draw; with scratch reuse: 0.49 us/draw;
+    // with single-copy dedup retention: 0.48 us/draw; with zero-copy
+    // vertex/index reads: 0.46 us/draw (host malloc is cheap; the device
+    // win is the point).
     if (std::getenv("GUNGNIR_BENCH") == nullptr) return;
     Memory memory;
     write_through_triangle(memory, 0x1000u);
@@ -707,6 +833,10 @@ int main() {
     stencil_decode();
     bounded_texture_retention();
     texture_resolve_dedup();
+    primitive_expansion_counts();
+    pipeline_cache_reuse();
+    draw_sink_moves();
+    fast_vertex_reads();
     bench_draw_primitive();
     if (failures != 0) {
         std::cerr << "state_machine_tests: " << failures << " failure(s)\n";

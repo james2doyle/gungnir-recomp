@@ -380,8 +380,8 @@ DisplayState &display_state() {
 void reset_media_state() {
     media() = MediaState{};
     MediaState &state = media();
-    state.ge.set_draw_sink([&state](const gungnir::ge::Draw &draw) {
-        state.pending_draws.push_back(draw);
+    state.ge.set_draw_sink([&state](gungnir::ge::Draw draw) {
+        state.pending_draws.push_back(std::move(draw));
     });
     state.ge.set_gap_sink([&state](const std::string &gap) {
         ++state.ge_gaps;
@@ -726,7 +726,7 @@ bool import_snapshot_media(std::span<const std::uint8_t> bytes, Runtime &runtime
     state.ge_frames = ge_frames;
     state.ge_gaps = ge_gaps;
     state.ge = std::move(machine);
-    state.ge.set_draw_sink([&state](const gungnir::ge::Draw &draw) { state.pending_draws.push_back(draw); });
+    state.ge.set_draw_sink([&state](gungnir::ge::Draw draw) { state.pending_draws.push_back(std::move(draw)); });
     state.ge.set_gap_sink([&state](const std::string &gap) {
         ++state.ge_gaps;
         if (state.logged_ge_gaps.insert(gap).second) {
