@@ -1156,8 +1156,8 @@ struct VulkanBackend::Impl {
         return &inserted.first->second;
     }
 
-    // Called only after the device is idle: every frame still referencing a
-    // retired texture has finished on the GPU.
+    // Called only after the previous frame's fence is waited: every frame
+    // still referencing a retired texture has finished on the GPU.
     void reap_retired_textures() {
         for (GpuTexture &texture : retired_textures) destroy_texture(texture);
         retired_textures.clear();
@@ -1982,8 +1982,7 @@ bool VulkanBackend::render_swapchain(std::string &error) {
         return false;
     }
     if (!result_ok_or_suboptimal(presented, "vkQueuePresentKHR", error)) return false;
-    return result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
-                     error);
+    return true;
 }
 
 bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls, std::string &error,
@@ -1999,10 +1998,16 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         error = "swapchain_backend_not_initialized";
         return false;
     }
+    // Single-flight sync: the fence covers the previous submit, so waiting it
+    // here (before touching any reusable resource) replaces the old
+    // per-frame vkDeviceWaitIdle full drain. Game CPU between present and this
+    // wait overlaps GPU execution.
+    if (!result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait fence", error))
+        return false;
+    if (!result_ok(vkResetFences(impl_->device, 1, &impl_->frame_fence), "reset fence", error)) return false;
+    impl_->reap_retired_textures();
+    impl_->evict_textures();
     if (!calls.empty()) {
-        vkDeviceWaitIdle(impl_->device);
-        impl_->reap_retired_textures();
-        impl_->evict_textures();
         if (!impl_->create_draw_resources(error)) return false;
     }
 
@@ -2071,9 +2076,6 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         }
     }
 
-    if (!result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait fence", error))
-        return false;
-    if (!result_ok(vkResetFences(impl_->device, 1, &impl_->frame_fence), "reset fence", error)) return false;
     std::uint32_t image_index = 0;
     const VkResult acquired = vkAcquireNextImageKHR(impl_->device, impl_->swapchain, UINT64_MAX,
                                                     impl_->image_available, VK_NULL_HANDLE, &image_index);
@@ -2191,10 +2193,6 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         return false;
     }
     if (!result_ok_or_suboptimal(presented, "vkQueuePresentKHR", error)) return false;
-    if (!result_ok(vkWaitForFences(impl_->device, 1, &impl_->frame_fence, VK_TRUE, UINT64_MAX), "wait frame fence",
-                   error))
-        return false;
-    impl_->evict_textures();
     return true;
 }
 
