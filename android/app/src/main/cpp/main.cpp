@@ -425,7 +425,14 @@ Java_com_gungnir_recomp_GungnirActivity_nativeSaveSnapshot(JNIEnv *env, jobject,
     g_snapshot_session->request_stop();
     if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
     std::string error;
-    if (!g_snapshot_session->save_snapshot(file, error)) return env->NewStringUTF(error.c_str());
+    if (!g_snapshot_session->save_snapshot(file, error)) {
+        // Never strand a stopped session: resume and relaunch so the game
+        // stays alive, and log the cause (the toast alone is not evidence).
+        GUNGNIR_LOGE("snapshot_save_failed: %s\n", error.c_str());
+        g_snapshot_session->request_resume();
+        launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        return env->NewStringUTF(error.c_str());
+    }
     GUNGNIR_LOGI("snapshot_saved path=%s\n", file.c_str());
     g_snapshot_session->request_resume();
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
@@ -451,7 +458,13 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
         g_snapshot_thread->join();
     }
     std::string error;
-    if (!g_snapshot_session->load_snapshot(file, error)) return env->NewStringUTF(error.c_str());
+    if (!g_snapshot_session->load_snapshot(file, error)) {
+        // Never strand a stopped session: the relaunched worker reports the
+        // recorded load error loudly instead of freezing on a dead frame.
+        GUNGNIR_LOGE("snapshot_load_failed: %s\n", error.c_str());
+        launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        return env->NewStringUTF(error.c_str());
+    }
     GUNGNIR_LOGI("snapshot_loaded path=%s\n", file.c_str());
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
     return nullptr;
@@ -470,7 +483,11 @@ Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject)
         g_snapshot_thread->join();
     }
     std::string error;
-    if (!g_snapshot_session->restart_to_title(error)) return env->NewStringUTF(error.c_str());
+    if (!g_snapshot_session->restart_to_title(error)) {
+        GUNGNIR_LOGE("reset_to_title_failed: %s\n", error.c_str());
+        launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        return env->NewStringUTF(error.c_str());
+    }
     if (g_session_rearm) g_session_rearm();
     GUNGNIR_LOGI("session_reset_to_title\n");
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
