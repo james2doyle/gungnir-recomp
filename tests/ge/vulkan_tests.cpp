@@ -165,6 +165,38 @@ void compare_frames(const Framebuffer &software, const VulkanFrame &vulkan, int 
     }
 }
 
+void depth_format_tests() {
+    // Fallback chain is data, not driver queries: D32F+S8 first, then D24S8.
+    const auto all = [](VkFormat) { return true; };
+    check(choose_depth_format(all) == VK_FORMAT_D32_SFLOAT_S8_UINT, "D32F+S8 preferred");
+    const auto no32 = [](VkFormat format) { return format != VK_FORMAT_D32_SFLOAT_S8_UINT; };
+    check(choose_depth_format(no32) == VK_FORMAT_D24_UNORM_S8_UINT, "D24S8 fallback");
+    const auto none = [](VkFormat) { return false; };
+    check(choose_depth_format(none) == VK_FORMAT_UNDEFINED, "no depth format reports undefined");
+}
+
+void sampler_sharing_tests() {
+    std::string reason;
+    if (!VulkanBackend::available(reason)) {
+        std::cout << "SKIP: " << reason << "\n";
+        std::exit(77);
+    }
+    VulkanBackend backend;
+    VulkanBackend::Config config;
+    config.width = 32;
+    config.height = 32;
+    config.headless = true;
+    std::string error;
+    check(backend.initialize(config, error), error.c_str());
+    const VkSampler linear_clamp = backend.sampler_for(true, true, true);
+    check(linear_clamp != VK_NULL_HANDLE, "shared sampler created");
+    check(backend.sampler_for(true, true, true) == linear_clamp, "same params share one sampler");
+    check(backend.sampler_for(true, false, false) != linear_clamp, "repeat differs from clamp");
+    check(backend.sampler_for(false, true, true) != linear_clamp, "nearest differs from linear");
+    check(backend.sampler_for(true, true, false) != linear_clamp, "split clamp axes differ");
+    backend.shutdown();
+}
+
 void parity_tests() {
     std::string reason;
     if (!VulkanBackend::available(reason)) {
@@ -221,6 +253,50 @@ void parity_tests() {
     check(backend.render_headless_draws(depth_calls, vulkan, error, 0u), error.c_str());
     compare_frames(depth_software, vulkan, 1, false, "depth ordering matches software");
 
+    // Clear-write vs clear-keep parity (depth-clear audit lock): the captured
+    // corpus clears depth to 0 every frame and uses bit-10 keeps that must
+    // leave the plane untouched. Observed through a GREATER-tested probe quad
+    // so the plane value decides the pixel colour on both backends.
+    const Quad plane_write = make_quad({rgba8(0, 0, 0), rgba8(0, 0, 0), rgba8(0, 0, 0), rgba8(0, 0, 0)}, 0.25f);
+    const Quad probe = make_quad({rgba8(0, 0, 255), rgba8(0, 0, 255), rgba8(0, 0, 255), rgba8(0, 0, 255)}, 0.5f);
+    RasterState probe_state;
+    probe_state.depth_test = true;
+    probe_state.depth_write = false;
+    probe_state.depth_function = CompareFunc::Greater;
+    VulkanDrawState vk_probe;
+    vk_probe.depth_test = true;
+    vk_probe.depth_write = false;
+    vk_probe.depth_function = CompareFunc::Greater;
+    // Case 1: plane written to 0.25, probe at 0.5 passes GREATER on both.
+    Framebuffer write_software(32, 32);
+    write_software.clear(rgba8(0, 0, 0), 0xFFFFu);
+    RasterState always_state;
+    always_state.depth_test = true;
+    always_state.depth_write = true;
+    always_state.depth_function = CompareFunc::Always;
+    SoftwareRasterizer write_rasterizer(write_software, always_state);
+    draw_quad_software(write_rasterizer, plane_write);
+    SoftwareRasterizer probe_rasterizer(write_software, probe_state);
+    draw_quad_software(probe_rasterizer, probe);
+    VulkanDrawState vk_always;
+    vk_always.depth_test = true;
+    vk_always.depth_write = true;
+    vk_always.depth_function = CompareFunc::Always;
+    const std::array<VulkanDrawCall, 2> write_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(plane_write.vk), plane_write.indices, vk_always},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(probe.vk), probe.indices, vk_probe}};
+    check(backend.render_headless_draws(write_calls, vulkan, error, 0u), error.c_str());
+    compare_frames(write_software, vulkan, 1, false, "clear write is visible to later depth tests");
+    // Case 2: plane kept at 1.0, probe at 0.5 fails GREATER on both.
+    Framebuffer keep_software(32, 32);
+    keep_software.clear(rgba8(0, 0, 0), 0xFFFFu);
+    SoftwareRasterizer keep_rasterizer(keep_software, probe_state);
+    draw_quad_software(keep_rasterizer, probe);
+    const std::array<VulkanDrawCall, 1> keep_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(probe.vk), probe.indices, vk_probe}};
+    check(backend.render_headless_draws(keep_calls, vulkan, error, 0u), error.c_str());
+    compare_frames(keep_software, vulkan, 1, false, "clear keep leaves the plane untouched");
+
     Framebuffer blend_software(32, 32);
     blend_software.clear(rgba8(0, 0, 0));
     const std::size_t before_blend = backend.pipeline_count();
@@ -249,6 +325,64 @@ void parity_tests() {
     check(backend.render_headless_draw(blend_vk, blend_indices, vk_blend, vulkan, error, 0u), error.c_str());
     compare_frames(blend_software, vulkan, 1, true, "source-alpha blend matches software");
     check(backend.pipeline_count() == before_blend + 1u, "blend state creates one additional pipeline");
+
+    // Both-FIX complement parity: FIXA + FIXB summing to white per channel
+    // must behave as FIX + INVERSE_CONSTANT, not source-wins. Red before the
+    // fix (Vulkan double-applies FIXA), green after.
+    const std::array<std::array<float, 2>, 3> pair_base_positions{{{-5.0f, -5.0f}, {70.0f, -5.0f}, {-5.0f, 70.0f}}};
+    std::array<ScreenVertex, 3> pair_base_sw;
+    std::array<VulkanDrawVertex, 3> pair_base_vk;
+    for (std::size_t i = 0; i < 3; ++i) {
+        pair_base_sw[i] = {};
+        pair_base_sw[i].x = pair_base_positions[i][0];
+        pair_base_sw[i].y = pair_base_positions[i][1];
+        pair_base_sw[i].z = 0.5f;
+        pair_base_sw[i].inv_w = 1.0f;
+        pair_base_sw[i].color = {0.0f, 0.0f, 128.0f / 255.0f, 1.0f};
+        pair_base_vk[i] = {pair_base_positions[i][0], pair_base_positions[i][1], 0.5f, 0.0f, 0.0f, 0.0f, 0.0f,
+                           128.0f / 255.0f, 1.0f};
+    }
+    // Single triangle (no shared-edge double coverage): covers the frame.
+    const std::array<std::array<float, 2>, 3> pair_positions{{{-5.0f, -5.0f}, {70.0f, -5.0f}, {-5.0f, 70.0f}}};
+    std::array<ScreenVertex, 3> pair_sw;
+    std::array<VulkanDrawVertex, 3> pair_vk;
+    for (std::size_t i = 0; i < 3; ++i) {
+        pair_sw[i] = {};
+        pair_sw[i].x = pair_positions[i][0];
+        pair_sw[i].y = pair_positions[i][1];
+        pair_sw[i].z = 0.5f;
+        pair_sw[i].inv_w = 1.0f;
+        pair_sw[i].color = {1.0f, 128.0f / 255.0f, 0.0f, 1.0f};
+        pair_vk[i] = {pair_positions[i][0], pair_positions[i][1], 0.5f, 0.0f, 0.0f, 1.0f, 128.0f / 255.0f, 0.0f,
+                      1.0f};
+    }
+    const std::array<std::uint16_t, 3> pair_indices{0, 1, 2};
+    Framebuffer pair_software(32, 32);
+    pair_software.clear(rgba8(0, 0, 0));
+    RasterState pair_base_state;
+    SoftwareRasterizer pair_base_rasterizer(pair_software, pair_base_state);
+    pair_base_rasterizer.draw_triangle(pair_base_sw[0], pair_base_sw[1], pair_base_sw[2]);
+    RasterState pair_state;
+    pair_state.blend.enabled = true;
+    pair_state.blend.source = BlendFactor::Fix;
+    pair_state.blend.destination = BlendFactor::Fix;
+    pair_state.blend.fixed_source = 0x404040u;
+    pair_state.blend.fixed_destination = 0xBFBFBFu;
+    SoftwareRasterizer pair_rasterizer(pair_software, pair_state);
+    pair_rasterizer.draw_triangle(pair_sw[0], pair_sw[1], pair_sw[2]);
+    VulkanDrawState vk_pair_base;
+    VulkanDrawState vk_pair;
+    vk_pair.blend.enabled = true;
+    vk_pair.blend.source = BlendFactor::Fix;
+    vk_pair.blend.destination = BlendFactor::Fix;
+    vk_pair.blend.fixed_source = 0x404040u;
+    vk_pair.blend.fixed_destination = 0xBFBFBFu;
+    vk_pair.write_mask = 0u;
+    const std::array<VulkanDrawCall, 2> pair_calls{
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(pair_base_vk), pair_indices, vk_pair_base},
+        VulkanDrawCall{std::span<const VulkanDrawVertex>(pair_vk), pair_indices, vk_pair}};
+    check(backend.render_headless_draws(pair_calls, vulkan, error, 0u), error.c_str());
+    compare_frames(pair_software, vulkan, 1, false, "both-FIX white pair matches software");
 
     // PSP modulate (other-color): white over red stays red on both
     // backends. Pre-fix this decoded to (Zero, One) in software and
@@ -1074,6 +1208,8 @@ int main() {
         viewport_fitting();
         scissor_scaling();
         headless_triangle();
+        depth_format_tests();
+        sampler_sharing_tests();
         parity_tests();
         many_textures();
         bounded_gpu_texture_cache();

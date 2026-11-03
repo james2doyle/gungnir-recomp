@@ -151,6 +151,70 @@ VkStencilOp to_vk_stencil_op(StencilOp op) {
 
 using PipelineKey = unsigned __int128;
 
+// Pair-aware FIX resolution for COLOR factors (PPSSPP blendColor2Func
+// parity): white/black FIX resolve to ONE/ZERO, and a both-FIX pair whose
+// channels sum to white resolves the destination to INVERSE_CONSTANT_COLOR
+// (the fog/steam pattern). Anything else keeps CONSTANT_COLOR; a both-FIX
+// conflict on different non-complement values keeps source-wins (named gap).
+struct ResolvedColorBlend {
+    VkBlendFactor src{VK_BLEND_FACTOR_ONE};
+    VkBlendFactor dst{VK_BLEND_FACTOR_ZERO};
+    float constant[3]{0.0f, 0.0f, 0.0f};
+};
+
+namespace {
+bool blend_complements(std::uint32_t a, std::uint32_t b) {
+    // Per-channel sums to white (0xFF) with no carry between channels.
+    for (int shift = 0; shift < 24; shift += 8)
+        if ((((a >> shift) & 255u) + ((b >> shift) & 255u)) != 255u) return false;
+    return true;
+}
+} // namespace
+
+
+
+ResolvedColorBlend resolve_color_blend(const BlendState &blend) {
+    ResolvedColorBlend out;
+    const std::uint32_t a = blend.fixed_source & 0xFFFFFFu;
+    const std::uint32_t b = blend.fixed_destination & 0xFFFFFFu;
+    bool src_constant = false;
+    if (blend.source == BlendFactor::Fix) {
+        if (a == 0xFFFFFFu) {
+            out.src = VK_BLEND_FACTOR_ONE;
+        } else if (a == 0u) {
+            out.src = VK_BLEND_FACTOR_ZERO;
+        } else {
+            out.src = VK_BLEND_FACTOR_CONSTANT_COLOR;
+            src_constant = true;
+        }
+    } else {
+        out.src = to_vk_blend(blend.source);
+    }
+    if (blend.destination == BlendFactor::Fix) {
+        if (b == 0u) {
+            out.dst = VK_BLEND_FACTOR_ZERO;
+        } else if (b == 0xFFFFFFu) {
+            out.dst = VK_BLEND_FACTOR_ONE;
+        } else if (src_constant && blend_complements(a, b)) {
+            out.dst = VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+        } else {
+            out.dst = VK_BLEND_FACTOR_CONSTANT_COLOR;
+        }
+    } else {
+        out.dst = to_vk_blend(blend.destination);
+    }
+    if (src_constant) {
+        out.constant[0] = static_cast<float>(a & 255u) / 255.0f;
+        out.constant[1] = static_cast<float>((a >> 8u) & 255u) / 255.0f;
+        out.constant[2] = static_cast<float>((a >> 16u) & 255u) / 255.0f;
+    } else if (blend.destination == BlendFactor::Fix && out.dst == VK_BLEND_FACTOR_CONSTANT_COLOR) {
+        out.constant[0] = static_cast<float>(b & 255u) / 255.0f;
+        out.constant[1] = static_cast<float>((b >> 8u) & 255u) / 255.0f;
+        out.constant[2] = static_cast<float>((b >> 16u) & 255u) / 255.0f;
+    }
+    return out;
+}
+
 PipelineKey draw_pipeline_key(const VulkanDrawState &state) {
     PipelineKey key = state.blend.enabled ? 1u : 0u;
     // BlendFactor now spans 0-14 (four bits); the old packing overlapped
@@ -198,6 +262,11 @@ PipelineKey draw_pipeline_key(const VulkanDrawState &state) {
         key |= static_cast<PipelineKey>(state.stencil.zfail) << 62u;
         key |= static_cast<PipelineKey>(state.stencil.zpass) << 65u;
     }
+    // Resolved color factors select the pipeline: FIX-white/black and
+    // complements need different pipelines than CONSTANT_COLOR.
+    const ResolvedColorBlend resolved_blend = resolve_color_blend(state.blend);
+    key |= static_cast<PipelineKey>(resolved_blend.src) << 72u;
+    key |= static_cast<PipelineKey>(resolved_blend.dst) << 77u;
     return key;
 }
 
@@ -205,16 +274,12 @@ PipelineKey draw_pipeline_key(const VulkanDrawState &state) {
 // readback and swapchain) must set them; the shared parity test covers the
 // helper through either path.
 inline void maybe_set_blend_constants(VkCommandBuffer commands, const BlendState &blend) {
-    if (!blend.enabled ||
-        (blend.source != BlendFactor::Fix && blend.destination != BlendFactor::Fix))
-        return;
-    // FIX reads BLENDFIXEDA (source) or B (destination); when both sides are
-    // FIX with different registers the source wins (named gap).
-    const std::uint32_t fixed =
-        blend.source == BlendFactor::Fix ? blend.fixed_source : blend.fixed_destination;
-    const float constants[4] = {static_cast<float>(fixed & 255u) / 255.0f,
-                                static_cast<float>((fixed >> 8u) & 255u) / 255.0f,
-                                static_cast<float>((fixed >> 16u) & 255u) / 255.0f, 1.0f};
+    if (!blend.enabled || (blend.source != BlendFactor::Fix && blend.destination != BlendFactor::Fix)) return;
+    // Alpha factors stay CONSTANT_COLOR for FIX (software defines FIX alpha
+    // as 1.0), so constants must be set whenever either side is FIX even
+    // when the resolved COLOR factors no longer need them.
+    const ResolvedColorBlend resolved = resolve_color_blend(blend);
+    const float constants[4] = {resolved.constant[0], resolved.constant[1], resolved.constant[2], 1.0f};
     vkCmdSetBlendConstants(commands, constants);
 }
 
@@ -276,6 +341,20 @@ void query_driver_info(VkPhysicalDevice physical,
 
 } // namespace
 
+VkFormat choose_depth_format(const std::function<bool(VkFormat)> &supported) {
+    for (const VkFormat candidate :
+         {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM})
+        if (supported(candidate)) return candidate;
+    return VK_FORMAT_UNDEFINED;
+}
+
+inline VkImageAspectFlags depth_aspect(VkFormat format) {
+    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (depth_format_has_stencil(format)) aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    return aspect;
+}
+
+
 ViewportRect fit_viewport(int virtual_width, int virtual_height, int target_width, int target_height) {
     if (virtual_width <= 0 || virtual_height <= 0 || target_width <= 0 || target_height <= 0) return {};
     const long long by_width = static_cast<long long>(virtual_width) * target_height;
@@ -319,6 +398,8 @@ struct VulkanBackend::Impl {
     bool initialized{};
     VkInstance instance{VK_NULL_HANDLE};
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};
+    VkFormat depth_format{VK_FORMAT_D24_UNORM_S8_UINT};
+    std::map<std::uint32_t, VkSampler> shared_samplers;
     VkDevice device{VK_NULL_HANDLE};
     std::uint32_t queue_family{};
     VkQueue queue{VK_NULL_HANDLE};
@@ -594,7 +675,7 @@ struct VulkanBackend::Impl {
         attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         attachments[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        attachments[1].format = VK_FORMAT_D24_UNORM_S8_UINT;
+        attachments[1].format = depth_format;
         attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -641,7 +722,7 @@ struct VulkanBackend::Impl {
         attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        attachments[1].format = VK_FORMAT_D24_UNORM_S8_UINT;
+        attachments[1].format = depth_format;
         attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -708,11 +789,30 @@ struct VulkanBackend::Impl {
         return result_ok(result, "submit upload commands", error);
     }
 
-    void destroy_texture(GpuTexture &texture) {
-        if (device == VK_NULL_HANDLE) return;
+    VkSampler sampler_for(bool linear, bool clamp_u, bool clamp_v, std::string &error) {
+        const std::uint32_t key = (linear ? 4u : 0u) | (clamp_u ? 2u : 0u) | (clamp_v ? 1u : 0u);
+        const auto found = shared_samplers.find(key);
+        if (found != shared_samplers.end()) return found->second;
+        VkSamplerCreateInfo sampler_info{};
+        sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sampler_info.magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        sampler_info.minFilter = sampler_info.magFilter;
+        sampler_info.addressModeU = clamp_u ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.addressModeV = clamp_v ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        sampler_info.maxLod = 0.0f;
+        VkSampler sampler{VK_NULL_HANDLE};
+        if (!result_ok(vkCreateSampler(device, &sampler_info, nullptr, &sampler), "shared texture sampler", error))
+            return VK_NULL_HANDLE;
+        shared_samplers.emplace(key, sampler);
+        return sampler;
+    }
+
+    void destroy_texture(GpuTexture &texture) {        if (device == VK_NULL_HANDLE) return;
         if (texture.descriptor != VK_NULL_HANDLE && draw_descriptor_pool != VK_NULL_HANDLE)
             vkFreeDescriptorSets(device, draw_descriptor_pool, 1, &texture.descriptor);
-        if (texture.sampler != VK_NULL_HANDLE) vkDestroySampler(device, texture.sampler, nullptr);
+        // Samplers are shared (sampler_for): never destroyed per texture.
         if (texture.view != VK_NULL_HANDLE) vkDestroyImageView(device, texture.view, nullptr);
         if (texture.image != VK_NULL_HANDLE) vkDestroyImage(device, texture.image, nullptr);
         if (texture.memory != VK_NULL_HANDLE) vkFreeMemory(device, texture.memory, nullptr);
@@ -743,16 +843,12 @@ struct VulkanBackend::Impl {
             destroy_texture(texture);
             return false;
         }
-        VkSamplerCreateInfo sampler_info{};
-        sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        sampler_info.magFilter = linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        sampler_info.minFilter = sampler_info.magFilter;
-        sampler_info.addressModeU = clamp_u ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_info.addressModeV = clamp_v ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sampler_info.maxLod = 0.0f;
-        if (!result_ok(vkCreateSampler(device, &sampler_info, nullptr, &texture.sampler), "texture sampler", error)) {
+        // Shared sampler (at most eight exist); uploads reference it instead
+        // of creating one sampler per texture.
+        std::string sampler_error;
+        texture.sampler = sampler_for(linear, clamp_u, clamp_v, sampler_error);
+        if (texture.sampler == VK_NULL_HANDLE) {
+            error = sampler_error.empty() ? "texture sampler" : sampler_error;
             destroy_texture(texture);
             return false;
         }
@@ -967,8 +1063,9 @@ struct VulkanBackend::Impl {
 
         VkPipelineColorBlendAttachmentState blend{};
         blend.blendEnable = state.blend.enabled ? VK_TRUE : VK_FALSE;
-        blend.srcColorBlendFactor = to_vk_blend(state.blend.source);
-        blend.dstColorBlendFactor = to_vk_blend(state.blend.destination);
+        const ResolvedColorBlend resolved = resolve_color_blend(state.blend);
+        blend.srcColorBlendFactor = resolved.src;
+        blend.dstColorBlendFactor = resolved.dst;
         blend.colorBlendOp = to_vk_equation(state.blend.equation);
         blend.srcAlphaBlendFactor = to_vk_blend(state.blend.source);
         blend.dstAlphaBlendFactor = to_vk_blend(state.blend.destination);
@@ -1093,16 +1190,15 @@ struct VulkanBackend::Impl {
         if (!result_ok(vkCreateImageView(device, &view_info, nullptr, &color_view), "vkCreateImageView", error))
             return false;
         if (!create_image(static_cast<std::uint32_t>(config.width), static_cast<std::uint32_t>(config.height),
-                          VK_FORMAT_D24_UNORM_S8_UINT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depth_image,
+                          depth_format, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depth_image,
                           depth_memory, error))
             return false;
         VkImageViewCreateInfo depth_view_info{};
         depth_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         depth_view_info.image = depth_image;
         depth_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        depth_view_info.format = VK_FORMAT_D24_UNORM_S8_UINT;
-        depth_view_info.subresourceRange = {static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT |
-                                                                           VK_IMAGE_ASPECT_STENCIL_BIT),
+        depth_view_info.format = depth_format;
+        depth_view_info.subresourceRange = {depth_aspect(depth_format),
                                             0, 1, 0, 1};
         if (!result_ok(vkCreateImageView(device, &depth_view_info, nullptr, &depth_view), "depth image view", error))
             return false;
@@ -1221,7 +1317,7 @@ struct VulkanBackend::Impl {
         if (!create_swapchain_render_pass_depth(chosen.format, swapchain_render_pass, error)) return false;
         if (!create_pipeline(swapchain_render_pass, swapchain_pipeline, error)) return false;
 
-        if (!create_image(extent.width, extent.height, VK_FORMAT_D24_UNORM_S8_UINT,
+        if (!create_image(extent.width, extent.height, depth_format,
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, swapchain_depth_image,
                           swapchain_depth_memory, error))
             return false;
@@ -1229,9 +1325,8 @@ struct VulkanBackend::Impl {
         swapchain_depth_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         swapchain_depth_view_info.image = swapchain_depth_image;
         swapchain_depth_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        swapchain_depth_view_info.format = VK_FORMAT_D24_UNORM_S8_UINT;
-        swapchain_depth_view_info.subresourceRange = {static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT |
-                                                                                      VK_IMAGE_ASPECT_STENCIL_BIT),
+        swapchain_depth_view_info.format = depth_format;
+        swapchain_depth_view_info.subresourceRange = {depth_aspect(depth_format),
                                                       0, 1, 0, 1};
         if (!result_ok(vkCreateImageView(device, &swapchain_depth_view_info, nullptr, &swapchain_depth_view),
                        "swapchain depth view", error))
@@ -1284,6 +1379,12 @@ VulkanBackend::VulkanBackend() : impl_(std::make_unique<Impl>()) {}
 
 VulkanBackend::~VulkanBackend() {
     shutdown();
+}
+
+VkSampler VulkanBackend::sampler_for(bool linear, bool clamp_u, bool clamp_v) {
+    if (!impl_ || !impl_->initialized || impl_->device == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+    std::string error;
+    return impl_->sampler_for(linear, clamp_u, clamp_v, error);
 }
 
 bool VulkanBackend::available(std::string &reason) {
@@ -1429,6 +1530,16 @@ bool VulkanBackend::initialize(const Config &config, std::string &error) {
     }
     if (!found_queue) {
         error = "no_graphics_queue";
+        shutdown();
+        return false;
+    }
+    impl_->depth_format = choose_depth_format([&](VkFormat candidate) {
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(impl_->physical_device, candidate, &properties);
+        return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u;
+    });
+    if (impl_->depth_format == VK_FORMAT_UNDEFINED) {
+        error = "no_depth_format";
         shutdown();
         return false;
     }
@@ -2147,6 +2258,8 @@ void VulkanBackend::shutdown() {
     if (impl_->device != VK_NULL_HANDLE) {
         for (auto &entry : impl_->draw_pipelines) vkDestroyPipeline(impl_->device, entry.second, nullptr);
         impl_->draw_pipelines.clear();
+        for (auto &entry : impl_->shared_samplers) vkDestroySampler(impl_->device, entry.second, nullptr);
+        impl_->shared_samplers.clear();
         impl_->destroy_texture(impl_->white_texture);
         for (auto &entry : impl_->textures) impl_->destroy_texture(entry.second);
         impl_->textures.clear();

@@ -24,6 +24,15 @@
 
 namespace gungnir::ge {
 
+// Depth format fallback chain (Yakumo parity: D32F first, sidestepping
+// Adreno D24S8 errata). The predicate reports
+// DEPTH_STENCIL_ATTACHMENT_BIT support; returns UNDEFINED when nothing
+// qualifies.
+[[nodiscard]] VkFormat choose_depth_format(const std::function<bool(VkFormat)> &supported);
+[[nodiscard]] inline bool depth_format_has_stencil(VkFormat format) {
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
+}
+
 struct VulkanFrame {
     int width{};
     int height{};
@@ -190,6 +199,10 @@ public:
     [[nodiscard]] int swapchain_height() const;
     [[nodiscard]] VkSurfaceTransformFlagBitsKHR surface_transform() const;
     [[nodiscard]] const gungnir::platform::VulkanDriverInfo &driver_info() const;
+    // Shared texture sampler for (linear, clamp_u, clamp_v). At most eight
+    // exist; uploads reference them instead of creating one per texture.
+    // Returns NULL_HANDLE when the backend is not initialized.
+    [[nodiscard]] VkSampler sampler_for(bool linear, bool clamp_u, bool clamp_v);
 
 private:
     struct Impl;

@@ -40,10 +40,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <unistd.h>
-#if defined(__ANDROID__)
-#include <sys/syscall.h>
-#endif
 
 #if defined(__ANDROID__)
 #include <android/log.h>
@@ -79,8 +75,6 @@ std::atomic<bool> *g_snapshot_finished = nullptr;
 std::function<void()> g_session_rearm;
 
 void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool> &finished) {
-    // TEMP-DIAG mega probe: attribute worker entry/exit by kernel tid.
-    GUNGNIR_LOGI("worker_enter tid=%d\n", static_cast<int>(syscall(SYS_gettid)));
     session.run();
     const gungnir::session::Result &result = session.result();
     GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
@@ -89,8 +83,6 @@ void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool
         GUNGNIR_LOGI("session_unbound=%s\n", import.c_str());
     if (!result.ok) GUNGNIR_LOGE("session_error: %s\n", result.error.c_str());
     finished.store(true);
-    // TEMP-DIAG mega probe: worker exit by kernel tid.
-    GUNGNIR_LOGI("worker_exit tid=%d\n", static_cast<int>(syscall(SYS_gettid)));
 }
 
 void launch_session_thread(gungnir::session::GameSession &session, std::atomic<bool> &finished,
@@ -426,30 +418,17 @@ Java_com_gungnir_recomp_GungnirActivity_nativeSaveSnapshot(JNIEnv *env, jobject,
     if (utf == nullptr) return env->NewStringUTF("snapshot_save_failed: null path bytes");
     const std::string file(utf);
     env->ReleaseStringUTFChars(path, utf);
-    // TEMP-DIAG mega probe: stage trace with thread hash plus kernel tid,
-    // finished flag and joinable state at every decision.
-    const auto self_hash =
-        static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    const int self_tid = static_cast<int>(syscall(SYS_gettid));
-    GUNGNIR_LOGI("snap_enter.%llu tid=%d\n", self_hash, self_tid);
     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
-    GUNGNIR_LOGI("snap_locked.%llu finished=%d joinable=%d\n", self_hash,
-                 g_snapshot_finished == nullptr ? -1 : (g_snapshot_finished->load() ? 1 : 0),
-                 g_snapshot_thread == nullptr ? -1 : (g_snapshot_thread->joinable() ? 1 : 0));
     if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
         return env->NewStringUTF("session_not_started");
     if (g_snapshot_finished->load()) return env->NewStringUTF("snapshot_save_failed: session finished");
     g_snapshot_session->request_stop();
-    GUNGNIR_LOGI("snap_stopped.%llu\n", self_hash);
     if (g_snapshot_thread->joinable()) g_snapshot_thread->join();
-    GUNGNIR_LOGI("snap_joined.%llu\n", self_hash);
     std::string error;
     if (!g_snapshot_session->save_snapshot(file, error)) return env->NewStringUTF(error.c_str());
     GUNGNIR_LOGI("snapshot_saved path=%s\n", file.c_str());
-    GUNGNIR_LOGI("snap_saved.%llu\n", self_hash);
     g_snapshot_session->request_resume();
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
-    GUNGNIR_LOGI("snap_exit.%llu\n", self_hash);
     return nullptr;
 }
 
@@ -460,15 +439,7 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
     if (utf == nullptr) return env->NewStringUTF("snapshot_load_failed: null path bytes");
     const std::string file(utf);
     env->ReleaseStringUTFChars(path, utf);
-    // TEMP-DIAG mega probe: same stage trace for load.
-    const auto load_hash =
-        static_cast<unsigned long long>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    const int load_tid = static_cast<int>(syscall(SYS_gettid));
-    GUNGNIR_LOGI("load_enter.%llu tid=%d\n", load_hash, load_tid);
     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
-    GUNGNIR_LOGI("load_locked.%llu finished=%d joinable=%d\n", load_hash,
-                 g_snapshot_finished == nullptr ? -1 : (g_snapshot_finished->load() ? 1 : 0),
-                 g_snapshot_thread == nullptr ? -1 : (g_snapshot_thread->joinable() ? 1 : 0));
     if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
         return env->NewStringUTF("session_not_started");
     // Like reset-to-title: a finished session restarts from the snapshot
@@ -483,14 +454,11 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
     if (!g_snapshot_session->load_snapshot(file, error)) return env->NewStringUTF(error.c_str());
     GUNGNIR_LOGI("snapshot_loaded path=%s\n", file.c_str());
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
-    GUNGNIR_LOGI("load_exit.%llu\n", load_hash);
     return nullptr;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject) {
-    // TEMP-DIAG mega probe: same stage trace for reset-to-title.
-    GUNGNIR_LOGI("reset_enter tid=%d\n", static_cast<int>(syscall(SYS_gettid)));
     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
     if (g_snapshot_session == nullptr || g_snapshot_thread == nullptr || g_snapshot_finished == nullptr)
         return env->NewStringUTF("session_not_started");
@@ -506,7 +474,6 @@ Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject)
     if (g_session_rearm) g_session_rearm();
     GUNGNIR_LOGI("session_reset_to_title\n");
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
-    GUNGNIR_LOGI("reset_exit tid=%d\n", static_cast<int>(syscall(SYS_gettid)));
     return nullptr;
 }
 

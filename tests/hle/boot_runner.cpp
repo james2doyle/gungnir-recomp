@@ -261,6 +261,8 @@ int main(int argc, char **argv) {
                           << ", \"target\": \"0x" << std::hex << draw.state.draw_buffer << std::dec << "\""
                           << ", \"fb_format\": " << draw.state.draw_format
                           << ", \"clear\": " << (draw.state.clear ? "true" : "false")
+                          << ", \"clear_depth_write\": "
+                          << (draw.state.clear_depth_write ? "true" : "false")
                           << ", \"mask\": \"0x" << std::hex << draw.state.write_mask << std::dec << "\""
                           << ", \"scissor\": [" << draw.state.scissor_x0 << ", " << draw.state.scissor_y0
                           << ", " << draw.state.scissor_x1 << ", " << draw.state.scissor_y1 << "]"
