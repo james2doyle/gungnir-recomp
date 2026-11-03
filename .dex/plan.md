@@ -3,7 +3,7 @@
 **Target:** Gungnir (USA) — *Gungnir: Inferno of the Demon Lance and the War of Heroes*, ULUS-10592
 **Goal:** Static recompilation of the game's Allegrex code to native C++, running on Android — from the user's own `game.chd` to real gameplay on an adb-connected device.
 **Current milestone (locked):** M4 QA close-out (gameplay into battles verified on device; dated QA reports pending) with battle-scene performance work feeding M5.
-**Plan date:** 2026-10-30; amended 2026-11-02 (T15 done, T16–T18 filed, M4 scope achieved). Source: 14-project discovery survey (see §3).
+**Plan date:** 2026-10-30; amended 2026-11-03 (T16 research corrected: 16:9 is a no-op for this title, T16b must land first). Source: 14-project discovery survey (see §3).
 
 ---
 
@@ -317,10 +317,11 @@ records what it used.
 **Docs checkpoint:** `docs/SNAPSHOT.md`, `docs/qa/` session report.
 **Refs:** Yakumo (state shape), PPSSPP (behavioral oracle only).
 
-### T16 — Widescreen rendering: 16:9 and ultrawide (planned)
+### T16 — Widescreen rendering: display aspect and ultrawide (planned)
 **Depends on:** T7, M4
 **Work:** T16a projection widening + presentation; T16b fill-screen presentation (stretch, crop or fit). Research tasks complete; implementation pending.
-**Test cases:** host projection unit tests + device visual QA per mode, no gameplay-logic change (logic rate untouched — see T17).
+**Research correction (2026-11-03):** 480x272 is 1.765:1, already almost 16:9 (16:9 is 483.6 px at 272 height), so a "16:9" host mode is a 0.7% change and visually identical to off for this title. The real target is the display aspect (19.5:9 → 604 px virtual, k = 1.26); 16:9 stays as a cap for other titles. T16b must land first: it owns the presentation policy enum, and T16a consumes it. Both tasks touch the same `fit_viewport`/scissor call sites, so they cannot run concurrently. Draw classification (`through` or a zero w-row projection term) is not carried to the renderer today and must be added to `DrawState`/`VulkanDrawState`; full-screen 2D effects must stretch, or fades show unfaded strips. Only display-buffer draws can widen — an offscreen 480-wide target is a counted gap. All `sceMpeg` entry points are a named gap, so FMV pillarboxing is unit-testable only; mark the device acceptance blocked, never failed.
+**Test cases:** host projection/classification unit tests, presentation policy tests, snapshot identity rejection, mutation (widen everything breaks the ortho case) + device visual QA per mode, no gameplay-logic change (logic rate untouched — see T17).
 
 ### T17 — 60 fps support: pacing, interpolation and logic rate (planned)
 **Depends on:** M4
@@ -384,6 +385,8 @@ Milestone discipline (hst-decomp ratchet): every milestone is *measured*, record
 3. Gungnir's PPSSPP log shows "render to area containing texture" — feedback-path invalidation is a named regression (TC-7.4), not a surprise.
 4. Cooperative scheduling first (all surveyed repos converged); preemption is a designed-later phase — but never ship hidden stalls (yield counters + watchdogs).
 5. 59.94 Hz pacing: frame = 16,683 µs; a wrong pace desyncs audio and TAS-like determinism tests.
+6. Widescreen widening is host-side only: the guest still culls against its own camera, so geometry outside the unwidened frustum is never submitted and cannot be recovered without per-title camera hooks. Never claim "full widescreen"; count scenes that render into a 480-wide texture as a named gap.
+7. PSP 480x272 is 1.765:1, already ~16:9 — the only meaningful widening target is the display aspect. Projection widening and presentation layout are separate settings: only the projection mode may enter the snapshot config identity, or every layout change invalidates save states. Vulkan scissor offsets must be non-negative (`VUID-vkCmdSetScissor-x-00595`), so crop with a negative origin must be clamped to the surface.
 
 ### E. Android platform
 1. NDK Clang chokes on huge generated TUs — chunk generation (`FUNCS_PER_CHUNK`), force `-O2` even in debug APKs, per-unit `-O1` overrides, exclude generated corpus from LTO (codepdbh battle scars).

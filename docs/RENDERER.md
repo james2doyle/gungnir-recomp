@@ -48,6 +48,52 @@ re-upload fixture changes the palette, invalidates the range, and requires the
 next Vulkan frame to match the changed software frame; removing invalidation
 fails that test.
 
+## Presentation, widescreen and display layout (T16 — PLANNED)
+
+Not implemented yet. This records the renderer-side contract the T16 design
+must keep; the authoritative work items are the T16 dex tasks.
+
+Current behaviour: `fit_viewport` (`vulkan_backend.cpp:358`) fits the
+480x272 guest frame into the swapchain preserving aspect, and
+`scale_scissor_to_extent` (`:377`) maps guest scissor coordinates into the
+fitted rect; both run at `:2109`/`:2122`.
+
+Planned settings, deliberately separate:
+
+- `widescreen` (off / display aspect / 16:9 cap) changes the projection and
+  enters the snapshot config identity.
+- `display_layout` (fit / stretch / crop) changes only the presentation
+  rectangle and never enters the snapshot identity.
+
+Invariants:
+
+- 480x272 is 1.765:1, already almost 16:9 (16:9 is 483.6 px at 272 height).
+  Widening to 16:9 is a 0.7% no-op; the real mode is the display aspect
+  (19.5:9 -> 604x272, `k = 1.26`).
+- Only perspective draws widen. `through` draws and draws whose projection
+  w-row is zero stay on the 480 mapping. That 2D/3D tag does not exist on
+  `DrawState`/`VulkanDrawState` today and must be added and tested.
+- A 2D draw covering the full frame is a full-screen effect (fade, vignette,
+  letterbox bar) and stretches with the scene, otherwise fades leave unfaded
+  strips at the sides.
+- The shader normalizes with the pushed viewport (`assets/shaders/ge/mesh.vert:31`),
+  so the effective virtual width must be pushed and every vertex shifted by
+  the same origin; the 480-wide HUD then lands centred without distortion.
+- Scissors follow the draw class (widened `x*k`, 2D `x+off`). Crop must
+  clamp to `[0, extent]`: Vulkan requires non-negative scissor offsets
+  (`VUID-vkCmdSetScissor-x-00595`), and crop has a negative origin.
+- Only display-buffer draws widen. A scene that renders into a 480-wide VRAM
+  target keeps the 480 mapping and is a counted gap, never a silent no-op.
+- Guest CPU culling still uses the unwidened camera, so geometry outside the
+  original frustum stays missing. That is not a renderer bug and cannot be
+  recovered host-side (only per-title camera hooks would).
+
+Numbers on 19.5:9: stretch is ~23% horizontal magnification (or ~15%
+vertical squash); crop loses ~20% of the frame height (~10% top and bottom).
+FMV/PSMF is not implemented (every `sceMpeg` entry point is a named gap), so
+pillarboxing is unit-tested with a full-screen 2D quad only and device
+acceptance stays blocked on movie playback.
+
 ## Fixtures and tolerance
 
 | Gate | Fixtures | Tolerance |

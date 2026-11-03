@@ -547,3 +547,40 @@ is modelled because the title only reads GPI.
   killing every depth-tested draw. Verified by `clear_fill` software
   and `0xD3`-decode unit tests (both observed red), host battle
   render (chibis back), and device battle proof with full depth on.
+
+### Widescreen and display-layout reference review (2026-11-03)
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later): `UI/DisplayLayoutScreen.cpp`
+  exposes `bDisplayStretch`, `fDisplayAspectRatio`, `bDisplayIntegerScale`
+  and `bDisplayCropTo16x9`; `GPU/Common/PresentationCommon.cpp` applies the
+  aspect adjust and crop. Stretch is user-selected and disabled under
+  integer scaling — never the default. `Core/CwCheat.cpp` shows why real
+  PSP widescreen is a per-frame projection-constant patch. Behavioral
+  reference only; no code copied.
+- `stenzek/duckstation` (GPL-3.0): `src/core/settings.cpp`
+  `WidescreenHack`, `src/core/cheats.cpp` `disable_widescreen_rendering`
+  and `src/core/imgui_overlays.cpp` — projection widening is separate from
+  the display aspect and can be forced off per game. Behavioral only.
+- `rt64/rt64` (MIT) and `Zelda64Recomp/Zelda64Recomp` (GPL-3.0): the
+  renderer widens the projection to any aspect, pins the HUD to 16:9 in
+  ultrawide, fixes 2D/pixel-space effects through the extended GBI
+  (`gEXVertexZTest`) and adjusts culling in `patches/culling.c`. Behavioral
+  only; no code copied.
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0): camera-entry hooks pass
+  the window aspect to the game (which then widens and culls itself), the
+  HUD is squeezed into a centred 16:9 area with scissor clipping, and a
+  small perspective quad spanning the PSP screen width is treated as a
+  full-screen effect. `mods/example_wider_fov/` is the disabled FOV
+  example. Behavioral only.
+- `highcmd/chinatown-wars-psp-recomp` (GPL-3.0): `docs/OPTIONS.md` keeps
+  the 480:272 frame fitted even in fullscreen, `render_scale` raises
+  internal resolution instead of stretching, and `hud_scale` (100/75/50)
+  shrinks HUD elements toward their corner or edge with full-screen menus
+  unchanged. Behavioral only.
+- Vulkan specification `VUID-vkCmdSetScissor-x-00595`: scissor offsets
+  must be non-negative. This constrains crop-mode scissor clipping.
+- Decision: host-side widening for perspective draws only; presentation
+  and projection remain separate settings; per-draw classification is
+  carried to the renderer; full-screen 2D effects stretch with the scene;
+  scenes that render into a 480-wide target stay at 480 and are counted as
+  a gap. No third-party code copied (AGENTS #0).
