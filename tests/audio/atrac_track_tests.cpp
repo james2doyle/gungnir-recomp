@@ -110,6 +110,9 @@ void contracts() {
         std::vector<std::int16_t> pcm;
         check(stream_track->decode_frame(0u, pcm, error), "first stream frame decodes");
         check(!stream_track->decode_frame(1u, pcm, error), "second stream frame is not available yet");
+        const auto full_span = std::span<const std::uint8_t>(stream_file.data(), stream_file.size());
+        check(stream_track->decode_frame(1u, full_span, pcm, error),
+            "live span decodes past the snapshot without an append");
         const auto second = std::span<const std::uint8_t>(stream_file.data() + first_frame_end, 1536u);
         check(stream_track->append(second, error), "second frame appends");
         check(stream_track->info().available_frames() == 2u, "both frames are available");

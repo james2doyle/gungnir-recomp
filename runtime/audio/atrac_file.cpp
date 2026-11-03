@@ -139,20 +139,30 @@ std::uint32_t AtracTrack::frames() const noexcept {
 }
 
 bool AtracTrack::decode_frame(std::uint32_t frame, std::vector<std::int16_t> &pcm, std::string &error) {
+    if (!impl_) {
+        error = "atrac_frame_out_of_range";
+        return false;
+    }
+    return decode_frame(frame, std::span<const std::uint8_t>(impl_->file.data(), impl_->file.size()), pcm, error);
+}
+
+bool AtracTrack::decode_frame(std::uint32_t frame, std::span<const std::uint8_t> file,
+                              std::vector<std::int16_t> &pcm, std::string &error) {
     error.clear();
     if (!impl_ || frame >= impl_->info.frames()) {
         error = "atrac_frame_out_of_range";
         return false;
     }
-    if (frame >= impl_->info.available_frames()) {
+    const std::size_t start =
+        static_cast<std::size_t>(impl_->info.data_offset) + static_cast<std::size_t>(frame) * impl_->info.block_align;
+    if (start + impl_->info.block_align > file.size()) {
         error = "atrac_frame_not_available";
         return false;
     }
     const std::uint32_t samples_per_frame = impl_->info.samples_per_frame();
     const std::size_t channels = static_cast<std::size_t>(impl_->info.channels);
     pcm.assign(channels * samples_per_frame, 0);
-    const std::uint8_t *data = impl_->file.data() + impl_->info.data_offset +
-        static_cast<std::size_t>(frame) * impl_->info.block_align;
+    const std::uint8_t *data = file.data() + start;
     int samples = 0;
     int consumed = 0;
     if (impl_->info.codec == AtracCodec::Atrac3Plus) {
