@@ -45,11 +45,11 @@ supply a field says `unknown`.
 
 | Cell | Report | Status |
 |---|---|---|
-| emulator smoke (SwiftShader x86_64) | TBD | PENDING |
-| physical Adreno cold boot x3 | TBD | PENDING |
-| physical Adreno touch menu | TBD | PENDING |
-| physical Adreno gamepad menu | TBD | PENDING |
-| physical Adreno suspend/resume | TBD | PENDING |
+| emulator smoke (SwiftShader x86_64) | 2026-11-03-emulator-smoke.md | SIGNED |
+| physical Adreno cold boot x3 | 2026-11-03-m2102k1ac-coldboot.md | SIGNED |
+| physical Adreno touch menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
+| physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
+| physical Adreno suspend/resume | 2026-11-03-m2102k1ac-resume.md | SIGNED |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
 | physical Adreno audio smoke | TBD | PENDING |
