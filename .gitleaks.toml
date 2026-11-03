@@ -1,0 +1,12 @@
+# T13e — gitleaks config. Default rules; the allowlist is explicit and
+# reviewed: both paths are the gate's own machinery, and both stay covered
+# by tools/repository_check.py (a separate required CI step), so nothing
+# escapes scanning.
+title = "gungnir-recomp secret scan"
+
+[allowlist]
+description = "Red-test fixtures (fragmented fakes, never valid credentials) and the scanner's own detection patterns (regexes, not material)"
+paths = [
+    '''tests/test_repository_check\.py''',
+    '''tools/repository_check\.py''',
+]

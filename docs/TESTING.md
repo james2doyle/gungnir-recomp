@@ -65,6 +65,21 @@ fixture's declared memory windows. Stops exit 4 (loud); clean fixture
 completion exits 0; an exhausted dispatch budget exits 3 — never silent
 success.
 
+## Private-input skip contract (T13d)
+
+Tests that need the private disc (or its derived corpus) skip locally via
+`tests/private_inputs.py`: `require_private_input(reason)` raises
+`unittest.SkipTest` on a developer box but `AssertionError` when
+`GUNGNIR_REQUIRE_PRIVATE_INPUT=1` is set. CI sets strict mode in every job
+without game data, so a missing input fails loudly instead of passing
+silently. The ctest entry `private_inputs` runs
+`tests/private_input_probe.py`, which exits 77 when the input is absent
+(mapped to Skipped by `SKIP_RETURN_CODE` — an honest skip on a clean
+clone, never a pass). `tests/test_private_inputs.py` pins the contract;
+`tests/test_ci_workflows.py`
+pins the workflow shape (SHA-pinned actions, strict env, empty-corpus
+Android build, least privilege).
+
 ## Profile gates (T5)
 
 `tests/test_profile.py` adds four gates on the real local module. The suite

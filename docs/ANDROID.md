@@ -65,6 +65,17 @@ auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.
 
+## CI build mode
+
+`.github/workflows/ci.yml` builds a clean clone with zero game artifacts:
+the Linux job runs `tools/deps.py verify`, the tracked-artifact scan, the
+full synthetic suite (`ctest`, strict private-input mode via
+`GUNGNIR_REQUIRE_PRIVATE_INPUT=1`), and `tools/repository_check.py`. The
+Android job assembles the APK with an empty corpus (no `-Pgungnir.gameCorpus`,
+no game paths) on the pinned SDK/NDK from `android/app/build.gradle.kts`.
+A physical device is never required for CI. The first green run's URL is the
+TC-13.2 evidence; record it in the T13d result, not in-repo.
+
 ## Runtime session and intent extras
 
 A normal launch runs the guest continuously against `files/game/game.elf` and

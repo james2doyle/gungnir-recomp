@@ -112,10 +112,22 @@ prose is fine; importing their code is not.
    forbidden extensions, magic bytes (ELF, `~PSP`, CHD, PGF, PBP, PE, ISO
    9660), blob-size cap, secret patterns, and **ignore-rule probes** (if
    someone weakens `.gitignore`, the gate goes red). Tested by
-   `tests/test_repository_check.py`; run in CI and before every commit.
-3. CI runs only on synthetic fixtures — never on game data (private-input
-   tests skip fail-closed). Secret scanning on full history.
-4. Documentation claims are evidence-checked in review: if the README says
+   `tests/test_repository_check.py` (scratch-repo dummy artifacts, magic,
+   secrets); run in CI and before every commit.
+3. CI runs only on synthetic fixtures — never on game data. Hygiene is one
+   required job: gitleaks secret scan (`.gitleaks.toml` allowlist covers only
+   the gate's own red-test fixtures and scanner patterns, both still checked
+   locally), `tools/package_notices.py check-coverage` + `check-licenses`,
+   `reuse lint` against `REUSE.toml` + `LICENSES/`, and `repository_check`.
+   `tests/test_ci_workflows.py` asserts every gate is present and fail-closed.
+4. `REUSE.toml` maps first-party files to `GPL-3.0-or-later` and each
+   `dependencies.json` third-party zone to its upstream license; `LICENSES/`
+   carries the verbatim texts. `tests/test_reuse.py` enforces coverage
+   locally. Adding a dependency means a `dependencies.json` entry (pin +
+   provenance + license file) plus matching `REUSE.toml`/`LICENSES/` entries —
+   `check-coverage`, `reuse lint` and `test_reuse.py` all fail otherwise.
+   No relicensing: vendored files keep their upstream identifiers.
+5. Documentation claims are evidence-checked in review: if the README says
    "no game data included", the tree must prove it.
 
 ## 8. Consequences

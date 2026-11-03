@@ -1,0 +1,56 @@
+# REUSE 3.x licensing map (T13e). First-party files default to the project
+# license; every dependencies.json third_party zone keeps its own upstream
+# license and copyright. When several annotations match, the LAST one wins,
+# so the default comes first and the overrides follow.
+version = 1
+SPDX-PackageName = "gungnir-recomp"
+
+[[annotations]]
+path = ["**"]
+SPDX-FileCopyrightText = "2026 gungnir-recomp authors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = ["third_party/yakumo/**"]
+SPDX-FileCopyrightText = "2026 PSPRecomp contributors, 2026 Yakumo contributors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/pspsdk-nids/**"]
+SPDX-FileCopyrightText = "2005 adresd, 2005 Marcus R. Brown"
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["third_party/atrac3p/**"]
+SPDX-FileCopyrightText = "2010-2013 Maxim Poliakovski, 2026 the Nakagawa Recomp authors"
+SPDX-License-Identifier = "LGPL-2.1"
+
+[[annotations]]
+path = ["third_party/miniz/**"]
+SPDX-FileCopyrightText = "2013-2014 RAD Game Tools and Valve Software, 2010-2014 Rich Geldreich and Tenacious Software LLC"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/nlohmann-json/**"]
+SPDX-FileCopyrightText = "2013-2026 Niels Lohmann"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/volk/**"]
+SPDX-FileCopyrightText = "2018-2026 Arseny Kapoulkine"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["third_party/sdl3/**"]
+SPDX-FileCopyrightText = "1997-2026 Sam Lantinga"
+SPDX-License-Identifier = "Zlib"
+
+[[annotations]]
+path = ["third_party/libadrenotools/**"]
+SPDX-FileCopyrightText = "2021 Billy Laws"
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = ["third_party/liblinkernsbypass/**"]
+SPDX-FileCopyrightText = "2021 Billy Laws"
+SPDX-License-Identifier = "BSD-2-Clause"

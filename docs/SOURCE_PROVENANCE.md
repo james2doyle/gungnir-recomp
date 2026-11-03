@@ -206,6 +206,24 @@ was copied.
 Our handler returns 0 unconditionally, which is the retail value; no GPO state
 is modelled because the title only reads GPI.
 
+### T13d/T13e reference review — CI and hygiene gates
+
+- `Jstar269/nakagawa-recomp` (GPL-3.0): `docs/CI.md` + Makefile exit-77
+  fail-closed skips ("SKIPs when the private input is absent — never a
+  pass; NOT part of CI") shaped our probe/helper split; `ci.yml` is the
+  workflow-shape reference. No workflow text copied.
+- `Jstar269/HST-Decomp` (GPL-3.0): `REUSE.toml` + `LICENSES/` +
+  `tools/hstreuse.py check` shaped our REUSE layout (default first, zone
+  overrides last); `docs/milestones.json` + `docs/PROGRESS.md` shaped the
+  T13h ledger plan. No file copied.
+- `TeamGDB/Yakumo` (MIT): `tests.yml`/`nightly.yml` workflow shape. No text copied.
+- `zxyandreay/azazel6` (MIT): `tools/repository_check.py` + `android-host.yml`
+  merge-gate shape. No code copied.
+- `fontforge/fontforge`: `set_tests_properties(... SKIP_RETURN_CODE 77)`
+  precedent for the CMake mapping. Mechanism only.
+- Secret-scan/REUSE-lint issue searches returned nothing usable; gitleaks and
+  reuse are adopted as stock pinned tools, not as project code.
+
 ### T15 reference review — host save states
 
 - `hrydgard/ppsspp` (GPL-2.0-or-later), behavioral only; never linked,

@@ -477,3 +477,10 @@ enable_testing()
 add_test(NAME python_suites
     COMMAND ${Python3_EXECUTABLE} -m unittest discover -s tests -p "test_*.py"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# T13d: private-input probe. Exit 77 (input absent) maps to
+# Skipped; never a pass. Strict-mode fail-closed lives in
+# tests/private_inputs.py for real tests.
+add_test(NAME private_inputs
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/private_input_probe.py
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(private_inputs PROPERTIES SKIP_RETURN_CODE 77)
