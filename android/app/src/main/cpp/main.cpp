@@ -4,6 +4,7 @@
 #include "ge/vulkan_backend.hpp"
 #include "hle/cadence.hpp"
 #include "hle/hle_media.hpp"
+#include "hle/kernel.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -80,6 +81,37 @@ std::atomic<bool> g_lifecycle_reset_requested{false};
 // flow nowhere, the screen freezes on a stale frame, and no guest_frame line
 // ever logs (T15e device finding).
 std::function<void()> g_session_rearm;
+
+// A guest flip publishes its frame with the host moment it is due. Under the
+// pacing hold the kernel maps the flip's emulated time to real time, so the
+// presenter shows the frame when the guest produced it instead of one fixed
+// sleep later. Unpaced runs have no mapping and present immediately.
+gungnir::ge::FrameQueue::Clock::time_point frame_due_at() {
+    const auto at = gungnir::hle::kernel().real_time_of(gungnir::hle::kernel().now_us());
+    return at.value_or(gungnir::ge::FrameQueue::Clock::now());
+}
+
+std::atomic<std::int64_t> g_due_delta_min_us{0};
+std::atomic<std::int64_t> g_due_delta_max_us{0};
+
+void publish_guest_frame(gungnir::ge::FrameQueue &queue,
+    const std::vector<gungnir::ge::Draw> &draws) {
+    const auto due = frame_due_at();
+    const auto delta = std::chrono::duration_cast<std::chrono::microseconds>(
+        due - gungnir::ge::FrameQueue::Clock::now()).count();
+    std::int64_t seen = g_due_delta_min_us.load();
+    while (delta < seen && !g_due_delta_min_us.compare_exchange_weak(seen, delta)) {}
+    seen = g_due_delta_max_us.load();
+    while (delta > seen && !g_due_delta_max_us.compare_exchange_weak(seen, delta)) {}
+    queue.publish(draws, due);
+}
+
+// Wait for the next frame, but never longer than 8 ms, so touch and the
+// overlay stay responsive while the guest runs at 20 Hz. Publishing wakes the
+// wait, so a frame is presented within a millisecond of its deadline.
+void sleep_for_next_frame(gungnir::ge::FrameQueue &queue) {
+    queue.wait_for_next(std::chrono::milliseconds(8));
+}
 
 void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool> &finished) {
     session.run();
@@ -998,7 +1030,7 @@ int main(int, char **) {
             } else {
                 GUNGNIR_LOGI("session_start elf=%s\n", elf.string().c_str());
                 gungnir::hle::set_ge_frame_sink([&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
-                    frame_queue.publish(draws);
+                    publish_guest_frame(frame_queue, draws);
                 });
                 {
                     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
@@ -1008,7 +1040,7 @@ int main(int, char **) {
                     g_session_rearm = [&frame_queue] {
                         gungnir::hle::set_ge_frame_sink(
                             [&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
-                                frame_queue.publish(draws);
+                                publish_guest_frame(frame_queue, draws);
                             });
                     };
                 }
@@ -1137,8 +1169,21 @@ int main(int, char **) {
                                 lifecycle_policy);
 
         std::vector<gungnir::ge::Draw> guest_draws;
-        const bool have_guest_frame = !debug_quad && frame_queue.take_latest(guest_draws);
+        bool present_late = false;
+        const bool have_guest_frame = !debug_quad &&
+            frame_queue.take_due(gungnir::ge::FrameQueue::Clock::now(), guest_draws, present_late);
+        if (present_late) {
+            // The frame is still shown, one deadline late: name it rather than
+            // hiding the miss under a longer sleep.
+            static std::uint64_t late_lines = 0u;
+            if (late_lines++ == 0u)
+                GUNGNIR_LOGE("present_late: host behind the guest deadline by %lld us\n",
+                             static_cast<long long>(frame_queue.last_late_us()));
+        }
         bool rendered = false;
+        std::chrono::microseconds present_time{};
+        static std::chrono::microseconds present_total{};
+        static std::uint64_t present_count{};
         if (debug_quad) {
             const std::array<gungnir::ge::VulkanDrawVertex, 4> vertices{{
                 {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
@@ -1155,9 +1200,16 @@ int main(int, char **) {
             const std::array<gungnir::ge::VulkanDrawCall, 1> calls{{{vertices, indices, state}}};
             rendered = backend.render_swapchain_draws(calls, error, 0u);
         } else if (have_guest_frame) {
+            const auto present_started = gungnir::ge::FrameQueue::Clock::now();
             rendered = present_guest_frame(backend, guest_draws, error);
+            present_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                gungnir::ge::FrameQueue::Clock::now() - present_started);
+            present_total += present_time;
+            ++present_count;
         } else {
-            SDL_Delay(1);
+            // Nothing is due yet: wake for the next deadline, or soon enough to
+            // keep input and the overlay responsive.
+            sleep_for_next_frame(frame_queue);
             continue;
         }
         if (!rendered) {
@@ -1212,12 +1264,31 @@ int main(int, char **) {
                          audio_out != nullptr ? audio_out->xruns() : 0);
             const gungnir::hle::CadenceCounters cadence = gungnir::hle::cadence_snapshot();
             GUNGNIR_LOGI("%s\n", gungnir::hle::format_cadence(cadence).c_str());
+            GUNGNIR_LOGI("present_time frames=%llu total_us=%lld avg_us=%lld last_us=%lld\n",
+                         static_cast<unsigned long long>(present_count),
+                         static_cast<long long>(present_total.count()),
+                         static_cast<long long>(present_count != 0u
+                             ? present_total.count() / static_cast<std::int64_t>(present_count)
+                             : 0),
+                         static_cast<long long>(present_time.count()));
+            GUNGNIR_LOGI("present_due min_us=%lld max_us=%lld last_late_us=%lld\n",
+                         static_cast<long long>(g_due_delta_min_us.load()),
+                         static_cast<long long>(g_due_delta_max_us.load()),
+                         static_cast<long long>(frame_queue.last_late_us()));
+            GUNGNIR_LOGI("presents published=%llu presented=%llu dropped=%llu late=%llu\n",
+                         static_cast<unsigned long long>(frame_queue.published()),
+                         static_cast<unsigned long long>(frame_queue.presented()),
+                         static_cast<unsigned long long>(frame_queue.dropped()),
+                         static_cast<unsigned long long>(frame_queue.late()));
         }
         if (first_frame) {
             GUNGNIR_LOGI("first frame %dx%d\n", width, height);
             first_frame = false;
         }
-        SDL_Delay(16);
+        if (debug_quad)
+            SDL_Delay(16);
+        else
+            sleep_for_next_frame(frame_queue);
     }
 
     SDL_RemoveEventWatch(lifecycle_watch, &lifecycle);

@@ -17,6 +17,7 @@ POST = BUILD / "tests" / "post"
 
 BINARIES = {
     "decoder": GE / "ge_display_list_tests",
+    "pacing": GE / "frame_pacing_tests",
     "vertex": GE / "ge_vertex_tests",
     "texture": GE / "ge_texture_tests",
     "software": GE / "ge_software_tests",

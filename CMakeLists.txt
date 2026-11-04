@@ -170,6 +170,11 @@ target_link_libraries(ge_display_list_tests PRIVATE gungnir_ge)
 set_target_properties(ge_display_list_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
+add_executable(frame_pacing_tests tests/ge/frame_pacing_tests.cpp)
+target_link_libraries(frame_pacing_tests PRIVATE gungnir_ge)
+set_target_properties(frame_pacing_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
 add_executable(ge_vertex_tests tests/ge/vertex_tests.cpp)
 target_link_libraries(ge_vertex_tests PRIVATE gungnir_ge yakumo)
 set_target_properties(ge_vertex_tests PROPERTIES
