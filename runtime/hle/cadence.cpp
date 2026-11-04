@@ -10,6 +10,7 @@ std::mutex g_mutex;
 CadenceCounters g_counters;
 std::uint64_t g_last_flip_vblank{};
 std::uint64_t g_last_wait_vblank{};
+bool g_gap_open{};
 bool g_has_wait_wake{};
 
 std::size_t bucket(std::uint32_t vblanks) {
@@ -29,10 +30,12 @@ void reset_cadence() {
     g_last_flip_vblank = 0u;
     g_last_wait_vblank = 0u;
     g_has_wait_wake = false;
+    g_gap_open = false;
 }
 
 void note_vblank_wait(std::uint32_t requested, std::uint64_t vblank_count) {
     std::lock_guard lock(g_mutex);
+    g_gap_open = false;
     ++g_counters.vblank_waits;
     ++g_counters.vblank_wait_counts[bucket(requested == 0u ? 1u : requested)];
     const std::uint64_t elapsed =
@@ -56,6 +59,22 @@ void note_delay(std::uint32_t microseconds) {
         : microseconds < 25'000u                        ? 2u
                                                         : 3u;
     ++g_counters.delay_buckets[index];
+}
+
+void note_gap_audio(std::uint32_t microseconds, std::uint64_t vblanks_inside) {
+    std::lock_guard lock(g_mutex);
+    if (!g_gap_open) return;
+    ++g_counters.gap_audio;
+    g_counters.gap_audio_us += microseconds;
+    g_counters.gap_audio_vblanks += vblanks_inside;
+}
+
+void note_gap_delay(std::uint32_t microseconds, std::uint64_t vblanks_inside) {
+    std::lock_guard lock(g_mutex);
+    if (!g_gap_open) return;
+    ++g_counters.gap_delays;
+    g_counters.gap_delay_us += microseconds;
+    g_counters.gap_delay_vblanks += vblanks_inside;
 }
 
 void note_audio_block(std::uint32_t microseconds) {
@@ -90,6 +109,7 @@ void note_flip(std::span<const gungnir::ge::Draw> draws, std::uint64_t vblank_co
         ++g_counters.flip_after_wait[bucket(static_cast<std::uint32_t>(after))];
     }
     g_last_flip_vblank = vblank_count;
+    g_gap_open = true;
 }
 
 std::string format_cadence(const CadenceCounters &counters) {
@@ -115,6 +135,12 @@ std::string format_cadence(const CadenceCounters &counters) {
         if (i != 0u) line += '/';
         line += std::to_string(counters.flip_vblanks[i]);
     }
+    line += " gap_delays=" + std::to_string(counters.gap_delays) +
+        " gap_delay_us=" + std::to_string(counters.gap_delay_us) +
+        " gap_delay_vblanks=" + std::to_string(counters.gap_delay_vblanks) +
+        " gap_audio=" + std::to_string(counters.gap_audio) +
+        " gap_audio_us=" + std::to_string(counters.gap_audio_us) +
+        " gap_audio_vblanks=" + std::to_string(counters.gap_audio_vblanks);
     line += " waitafterflip=";
     for (std::size_t i = 0; i < counters.wait_after_flip.size(); ++i) {
         if (i != 0u) line += '/';

@@ -46,6 +46,15 @@ struct CadenceCounters {
     std::array<std::uint64_t, kCadenceHistogram> flip_after_wait{};
     // Draws handed to presentation by the last flip, classified by the GE
     // through bit: 3D candidates versus 2D/HUD screen-space draws.
+    // The gap between a flip and the next vblank wait: whatever blocks there
+    // is what makes the wait start late, and the vblank delta inside each call
+    // says whether the clock actually moved during it.
+    std::uint64_t gap_delays{};
+    std::uint64_t gap_delay_us{};
+    std::uint64_t gap_delay_vblanks{};
+    std::uint64_t gap_audio{};
+    std::uint64_t gap_audio_us{};
+    std::uint64_t gap_audio_vblanks{};
     std::uint64_t draws_3d{};
     std::uint64_t draws_2d{};
     std::uint64_t vertices{};
@@ -59,6 +68,9 @@ void note_vblank_wait(std::uint32_t requested, std::uint64_t vblank_count);
 void note_vblank_wait_wake(std::uint64_t vblank_count);
 void note_delay(std::uint32_t microseconds);
 void note_audio_block(std::uint32_t microseconds);
+// Same, for a call that ran inside the flip-to-wait gap.
+void note_gap_audio(std::uint32_t microseconds, std::uint64_t vblanks_inside);
+void note_gap_delay(std::uint32_t microseconds, std::uint64_t vblanks_inside);
 // `vblank_count` is the kernel's current vblank counter at the flip.
 void note_flip(std::span<const gungnir::ge::Draw> draws, std::uint64_t vblank_count);
 

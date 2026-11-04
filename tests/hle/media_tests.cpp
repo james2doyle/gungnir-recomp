@@ -368,6 +368,21 @@ void cadence_contracts() {
     check(counters.flip_vblanks[3] == 1u, "the flip interval is the whole frame");
     check(counters.flip_after_wait[0] == 1u, "a flip right after the wake is not charged an extra vblank");
 
+    // The flip-to-wait gap: only calls made before the next vblank wait are
+    // attributed to it, so a delay on another thread after the wait is not.
+    gungnir::hle::reset_cadence();
+    gungnir::hle::note_flip(std::span<const gungnir::ge::Draw>(&alone, 1u), 0u);
+    gungnir::hle::note_gap_delay(8'000u, 1u);
+    gungnir::hle::note_gap_audio(4'000u, 0u);
+    gungnir::hle::note_vblank_wait(2u, 1u);
+    gungnir::hle::note_gap_delay(8'000u, 1u);
+    counters = cadence_snapshot();
+    check(counters.gap_delays == 1u && counters.gap_delay_us == 8'000u,
+        "only the delays inside the flip-to-wait gap are attributed to it");
+    check(counters.gap_delay_vblanks == 1u, "the gap tracks the vblanks its calls consumed");
+    check(counters.gap_audio == 1u && counters.gap_audio_us == 4'000u,
+        "audio blocks in the gap are attributed too");
+
     gungnir::hle::reset_cadence();
     counters = cadence_snapshot();
     check(counters.flips == 0u && counters.vblank_waits == 0u && counters.delay_calls == 0u,

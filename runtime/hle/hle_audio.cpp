@@ -149,6 +149,7 @@ std::uint32_t enqueue_blocking(Runtime &rt, AllegrexContext &ctx, std::size_t in
     channel.waiting_right = right;
     const std::uint32_t remaining = remaining_at(channel, now);
     note_audio_block(drain_us(remaining));
+    const std::uint64_t vblank_before = kernel().vblank_count();
     WaitState wait{};
     wait.type = WaitType::Audio;
     wait.object = static_cast<SceUID>(index + 1u);
@@ -172,6 +173,7 @@ std::uint32_t enqueue_blocking(Runtime &rt, AllegrexContext &ctx, std::size_t in
         waiting.waiting_right = 0u;
     };
     kernel().block(ctx, wait, 0u);
+    note_gap_audio(drain_us(remaining), kernel().vblank_count() - vblank_before);
     return 0u;
 }
 

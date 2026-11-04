@@ -153,14 +153,20 @@ void register_threads(HleRegistrar &hle) {
     });
 
     const auto delay = [](Runtime &, AllegrexContext &ctx) {
-        note_delay(arg(ctx, 0));
-        kernel().delay_current(ctx, arg(ctx, 0));
+        const std::uint32_t us = arg(ctx, 0);
+        note_delay(us);
+        const std::uint64_t before = kernel().vblank_count();
+        kernel().delay_current(ctx, us);
+        note_gap_delay(us, kernel().vblank_count() - before);
     };
     hle.add("ThreadManForUser", "sceKernelDelayThread", delay);
     hle.add("ThreadManForUser", "sceKernelDelayThreadCB", [](Runtime &, AllegrexContext &ctx) {
-        note_delay(arg(ctx, 0));
+        const std::uint32_t us = arg(ctx, 0);
+        note_delay(us);
         (void)kernel().deliver_callbacks();
-        kernel().delay_current(ctx, arg(ctx, 0));
+        const std::uint64_t before = kernel().vblank_count();
+        kernel().delay_current(ctx, us);
+        note_gap_delay(us, kernel().vblank_count() - before);
     });
 
     hle.add("ThreadManForUser", "sceKernelSuspendDispatchThread", [](Runtime &, AllegrexContext &ctx) {
