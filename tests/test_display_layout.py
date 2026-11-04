@@ -16,6 +16,7 @@ BRIDGE = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir" 
 OVERLAY = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir" / "recomp" / "SettingsOverlayView.java"
 ACTIVITY = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "gungnir" / "recomp" / "GungnirActivity.java"
 SNAPSHOT_SOURCES = ("runtime/session/snapshot.cpp", "runtime/session/game_session.cpp")
+VERTEX = REPO / "runtime" / "ge" / "vertex.cpp"
 RUNTIME = REPO / "runtime" / "ge" / "vulkan_backend.cpp"
 
 
@@ -51,6 +52,29 @@ class TestDisplayLayoutSurfaces(unittest.TestCase):
                       "the QA intent still reaches the renderer")
         self.assertIn('getString("display_layout", "fit")', activity,
                       "the persisted policy is still applied")
+
+    def test_geometry_contracts_exist(self):
+        text = VERTEX.read_text()
+        self.assertIn("bool covers_guest_frame(", text,
+                      "full-frame detection is a tested unit")
+        self.assertIn("float wide_screen_x(", text, "the mapping is a tested unit")
+        self.assertIn("world_view_projection_.m[0] *= inverse", text,
+                      "the frustum widens through the matrix row")
+
+    def test_widescreen_follows_the_window(self):
+        main = MAIN_CPP.read_text()
+        self.assertIn('intent_string("widescreen")', main, "QA can pin the mode")
+        self.assertIn('mode.empty() ? "adaptive"', main,
+                      "adaptive is the default: the frame follows the window")
+        for cap in ('"16:9"', '"21:9"', '"32:9"', '"off"'):
+            self.assertIn(cap, main, f"{cap} is an accepted cap")
+        self.assertIn("unknown_widescreen: %s", main, "an unknown mode is named")
+        self.assertIn("gungnir::hle::set_widescreen_scale", main,
+                      "the scene pipeline learns the factor")
+        self.assertIn("covers_guest_frame", main,
+                      "full-frame 2D stretches with the scene")
+        self.assertIn('GUNGNIR_LOGI("widescreen mode=%s scale=%.4f', main,
+                      "the applied factor is logged, never assumed")
 
     def test_presentation_never_enters_a_snapshot(self):
         for relative in SNAPSHOT_SOURCES:

@@ -66,9 +66,17 @@ auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.
 
-Presentation is chosen with `--es display_layout fit|stretch|crop` on the QA
-intent, or the `Screen fill` row in the settings overlay (persisted, default
-`fit`). `fit` keeps the guest aspect with bars, `stretch` fills the display and
+Widescreen follows the window by default (`--es widescreen
+adaptive|off|16:9|21:9|32:9`): the frame widens to the display aspect, the
+perspective scene is widened without zooming, and full-frame 2D effects
+(backdrop, fades) stretch with it while the HUD keeps its pixel size and stays
+centred. `off` renders the native 480x272 frame; the aspect caps bound the
+widening for very wide windows. The boot log states the decision:
+`widescreen mode=adaptive scale=1.3001 virtual=624x272`.
+
+Presentation layout (`--es display_layout fit|stretch|crop`) remains a QA-only
+switch; it has no settings row while adaptive widescreen already fills the
+display, because the three policies coincide there. `fit` keeps the guest aspect with bars, `stretch` fills the display and
 distorts, `crop` fills it uniformly and cuts ~10% off the top and bottom of the
 image. None of them changes what the guest renders, and none is recorded in a
 snapshot.
