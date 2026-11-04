@@ -1,4 +1,5 @@
 #include "ge/frame_interpolation.hpp"
+#include "ge/present_schedule.hpp"
 #include "ge/frame_queue.hpp"
 #include "ge/state_machine.hpp"
 #include "ge/targets.hpp"
@@ -96,6 +97,26 @@ gungnir::ge::FrameQueue::Clock::time_point frame_due_at() {
 // RAM, a snapshot or a save, so save states stay comparable with it on or off.
 std::atomic<bool> g_interpolation_enabled{false};
 
+// Interpolation state is file-scope for two reasons: main() has no stack room
+// for it (the added locals overflowed the SDL thread stack once), and the menu
+// paths must be able to drop the history when a session restarts.
+struct InterpolationState {
+    gungnir::ge::PresentSchedule schedule;
+    gungnir::ge::FrameHistory history;
+    std::vector<gungnir::ge::Draw> current;
+    std::vector<gungnir::ge::Draw> scratch;
+};
+InterpolationState g_interpolation;
+
+// A snapshot load, a reset to title or a background round trip makes the
+// recorded frames a different continuity; never interpolate across it.
+void reset_interpolation_history() {
+    g_interpolation.schedule.reset();
+    g_interpolation.history.clear();
+    g_interpolation.current.clear();
+    g_interpolation.scratch.clear();
+}
+
 std::atomic<std::int64_t> g_due_delta_min_us{0};
 std::atomic<std::int64_t> g_due_delta_max_us{0};
 
@@ -165,6 +186,7 @@ void resume_after_background(gungnir::session::GameSession &session,
         return;
     }
     if (slot.joinable()) slot.join();
+    reset_interpolation_history();
     session.request_resume();
     launch_session_thread(session, finished, slot);
     GUNGNIR_LOGI("session_resumed reason=foreground\n");
@@ -610,6 +632,7 @@ Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject)
     } else if (g_snapshot_thread->joinable()) {
         g_snapshot_thread->join();
     }
+    reset_interpolation_history();
     std::string error;
     if (!g_snapshot_session->restart_to_title(error)) {
         GUNGNIR_LOGE("reset_to_title_failed: %s\n", error.c_str());
@@ -1114,23 +1137,7 @@ int main(int, char **) {
     const auto refresh_interval = std::chrono::duration_cast<gungnir::ge::FrameQueue::Clock::duration>(
         std::chrono::duration<double>(1.0 / refresh_hz));
     GUNGNIR_LOGI("display_refresh_hz=%.1f\n", refresh_hz);
-    struct InterpolationState {
-        gungnir::ge::FrameHistory history;
-        std::vector<gungnir::ge::Draw> current;
-        std::vector<gungnir::ge::Draw> scratch;
-        gungnir::ge::FrameQueue::Clock::time_point last_arrival{};
-        gungnir::ge::FrameQueue::Clock::time_point window_start{};
-        gungnir::ge::FrameQueue::Clock::duration window{};
-        gungnir::ge::FrameQueue::Clock::time_point next_tick{};
-        bool has_arrival{};
-        bool active{};
-        std::uint64_t interpolated{};
-        std::uint64_t held{};
-        std::uint64_t late_ticks{};
-    };
-    // Static storage: this state is large enough that keeping it off the SDL
-    // main thread's stack matters, and there is one session per process.
-    static InterpolationState interpolation;
+    gungnir::ge::PresentSchedule &schedule = g_interpolation.schedule;
     std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;
@@ -1259,62 +1266,31 @@ int main(int, char **) {
             // of what goes on screen; without it a guest frame is presented as
             // it arrives.
             std::vector<gungnir::ge::Draw> *to_present = nullptr;
-            const bool interpolation_on =
-                g_interpolation_enabled.load(std::memory_order_relaxed);
-            if (have_guest_frame && interpolation_on) {
-                if (interpolation.current.empty()) {
-                    // Nothing to interpolate from yet: show this frame at once.
-                    to_present = &guest_draws;
-                } else {
-                    // One guest interval of display latency by construction:
-                    // this window shows the previous frame moving into this
-                    // one, and the real frame lands at the end of it.
-                    interpolation.history.push(std::move(interpolation.current));
-                    interpolation.window = interpolation.has_arrival
-                        ? frame_now - interpolation.last_arrival
-                        : refresh_interval;
-                    if (interpolation.window < std::chrono::milliseconds(1))
-                        interpolation.window = std::chrono::milliseconds(1);
-                    interpolation.window_start = frame_now;
-                    interpolation.next_tick = frame_now + refresh_interval;
-                    interpolation.active = true;
-                }
-                interpolation.last_arrival = frame_now;
-                interpolation.has_arrival = true;
-                interpolation.current = std::move(guest_draws);
-            } else if (have_guest_frame) {
-                to_present = &guest_draws;
-            } else if (interpolation_on && interpolation.active && frame_now >= interpolation.next_tick) {
-                const double elapsed = std::chrono::duration<double>(
-                    frame_now - interpolation.window_start).count();
-                const double span = std::chrono::duration<double>(interpolation.window).count();
-                const double t = std::clamp(elapsed / span, 0.0, 1.0);
-                if (t >= 1.0) {
-                    // The next guest frame is late: hold the real one and stop
-                    // the window so nothing extrapolates past what the guest
-                    // produced.
-                    interpolation.scratch = interpolation.current;
-                    ++interpolation.held;
-                    interpolation.active = false;
-                } else {
-                    interpolation.scratch = interpolation.current;
+            schedule.set_enabled(g_interpolation_enabled.load(std::memory_order_relaxed));
+            if (have_guest_frame) {
+                const bool has_previous = !g_interpolation.current.empty();
+                const bool immediate = schedule.on_guest_frame(frame_now, has_previous);
+                if (has_previous) g_interpolation.history.push(std::move(g_interpolation.current));
+                g_interpolation.current = std::move(guest_draws);
+                if (immediate) to_present = &g_interpolation.current;
+            } else {
+                const auto due = schedule.due(frame_now);
+                if (due.kind == gungnir::ge::PresentSchedule::Kind::Interpolated) {
+                    g_interpolation.scratch = g_interpolation.current;
                     gungnir::ge::InterpolationStats stats;
-                    gungnir::ge::interpolate_frame(interpolation.scratch,
-                        interpolation.history, static_cast<float>(t), &stats);
-                    ++interpolation.interpolated;
-                    interpolation.next_tick += refresh_interval;
-                    if (interpolation.next_tick <= frame_now) {
-                        interpolation.next_tick = frame_now + refresh_interval;
-                        ++interpolation.late_ticks;
-                    }
+                    gungnir::ge::interpolate_frame(g_interpolation.scratch,
+                        g_interpolation.history, due.t, &stats);
+                    to_present = &g_interpolation.scratch;
+                } else if (due.kind == gungnir::ge::PresentSchedule::Kind::Held) {
+                    // The next guest frame is late: show the real one once.
+                    to_present = &g_interpolation.current;
                 }
-                to_present = &interpolation.scratch;
             }
             if (to_present == nullptr) {
                 // Nothing is due yet: wake for the next deadline, or soon
                 // enough to keep input and the overlay responsive.
-                sleep_for_next_frame(frame_queue,
-                    interpolation.active ? &interpolation.next_tick : nullptr);
+                const auto tick = schedule.next_tick();
+                sleep_for_next_frame(frame_queue, schedule.active() ? &tick : nullptr);
                 continue;
             }
             const auto present_started = gungnir::ge::FrameQueue::Clock::now();
@@ -1387,11 +1363,11 @@ int main(int, char **) {
                          static_cast<long long>(g_due_delta_min_us.load()),
                          static_cast<long long>(g_due_delta_max_us.load()),
                          static_cast<long long>(frame_queue.last_late_us()));
-            GUNGNIR_LOGI("interpolation active=%d interpolated=%llu held=%llu late_ticks=%llu\n",
+            GUNGNIR_LOGI("interpolation active=%d interpolated=%llu held=%llu skipped_ticks=%llu\n",
                          g_interpolation_enabled.load() ? 1 : 0,
-                         static_cast<unsigned long long>(interpolation.interpolated),
-                         static_cast<unsigned long long>(interpolation.held),
-                         static_cast<unsigned long long>(interpolation.late_ticks));
+                         static_cast<unsigned long long>(schedule.interpolated()),
+                         static_cast<unsigned long long>(schedule.held()),
+                         static_cast<unsigned long long>(schedule.skipped()));
             GUNGNIR_LOGI("presents published=%llu presented=%llu dropped=%llu late=%llu\n",
                          static_cast<unsigned long long>(frame_queue.published()),
                          static_cast<unsigned long long>(frame_queue.presented()),

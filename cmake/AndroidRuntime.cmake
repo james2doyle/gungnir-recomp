@@ -153,6 +153,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/ge/display_list.cpp"
         "${ARG_ROOT}/runtime/ge/frame_interpolation.cpp"
         "${ARG_ROOT}/runtime/ge/frame_queue.cpp"
+        "${ARG_ROOT}/runtime/ge/present_schedule.cpp"
         "${ARG_ROOT}/runtime/ge/software.cpp"
         "${ARG_ROOT}/runtime/ge/state_machine.cpp"
         "${ARG_ROOT}/runtime/ge/texture.cpp"
