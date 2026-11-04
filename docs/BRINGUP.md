@@ -1413,3 +1413,57 @@ count `overruns` on every round trip.
 `grep -c guest_frame` over the whole log buffer, which counts pre-pause lines;
 the session had in fact ended. That report is marked superseded and the cell is
 re-signed from the new record.
+
+## 2026-11-03 — Startup SIGSEGV: the identity gate spent the SDL thread's stack (device, FIXED)
+
+**Symptom.** The app crashed at launch with `SIGSEGV` in the `SDLThread`,
+sometimes, and only on the phone: logcat stopped after `runtime_assets_current`,
+the process died before any `gungnir` session line, and debuggerd reported
+`Cause: stack pointer is close to top of stack`. It first appeared while adding
+the T17a interpolation schedule, reproduced with the cadence gap counters, and
+once even after reverting `main.cpp` — so it was never caused by that work, only
+exposed by it: the margin was effectively zero and any change tipped it.
+
+**Falsification.** Not a `main()` frame problem: the disassembly showed
+`SDL_main` reserving about 5.8 KB, and adding locals there changed nothing. Not
+an interpolation or pacing defect: the crash happened with the frame-rate work
+reverted. The tombstone's backtrace named the consumer:
+`SDL_main → gungnir::platform::select_game_data → verify_game_data →
+istream::read → fread → malloc`, with `sp` one page above the stack bottom.
+
+**Root cause.** `verify_game_data` kept `std::array<unsigned char, 1u << 20>` as
+a local — declared after the size check, so it only materialised once a
+candidate file matched the disc size. clang reports the frame as
+**1,049,040 bytes**. The SDL thread is SDLActivity's Java thread, and the device
+measures it at `limit_kb=1043 used_kb=9 headroom_kb=1033`
+(`stack_space thread=main`): the buffer alone was the entire stack, leaving
+about 10 KiB of margin, so the first call the stream made afterwards (a
+`malloc` for the file buffer) crossed the guard page. The session worker's
+`std::thread` is no better (`limit_kb=995`), so the same class of bug could take
+the guest down later.
+
+**Fix (2026-11-03).** The buffer is a heap `std::vector` sized by
+`kVerifyChunk`. Because the failure is invisible until it runs on the device,
+three gates landed with it: every runtime library in both build roots compiles
+with `-Werror=frame-larger-than=16384` (`cmake/BoundedStack.cmake`), so the old
+code fails the build with a 1,049,152-byte frame; the identity gate is exercised
+on a thread given 512 KiB of stack (`game_data_tests`, failing with the signal
+when it does not fit); and `stack_space thread=<name>` logs the limit, use and
+headroom of the SDL thread and the session worker at startup. `scripts/android/qa-startup.sh`
+repeats the cold boot ten times and fails on any crash, so one good boot never
+counts as evidence again.
+
+**Evidence.** `docs/qa/2026-11-03-m2102k1ac-interpolation.md`: ten consecutive
+cold boots, `runs=10 failures=0`, each reporting
+`stack_space thread=main limit_kb=1043 used_kb=9 headroom_kb=1033` and
+`stack_space thread=session limit_kb=995 used_kb=0 headroom_kb=995`, then the
+whole T17a.8 cell on the same artifact.
+
+**Regression tests.** `game_data_tests` (identity gate fits a 512 KiB stack),
+`stack_space_tests` (limit, use and headroom are reported and track frame
+depth), `tests/test_startup_limits.py` (the frame bound is applied in both build
+roots and the cold-boot gate exists and fails on crashes). Gotcha §7E.9.
+
+**Retraction.** The T17a investigation's own suspicion that the frame-rate work
+had introduced the crash is withdrawn: the tree crashed with that work reverted,
+and the cause sits in `runtime/platform/android/game_data.cpp`, untouched by it.

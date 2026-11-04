@@ -69,7 +69,7 @@ supply a field says `unknown`.
 | physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno suspend/resume | 2026-11-03-m2102k1ac-background-resume.md | SIGNED |
 | physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
-| physical Adreno frame interpolation | TBD | PENDING |
+| physical Adreno frame interpolation | 2026-11-03-m2102k1ac-interpolation.md | SIGNED |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
 | physical Adreno audio smoke | TBD | PENDING |
@@ -79,6 +79,14 @@ Note 2026-11-03 (fast-forward cell): signed for touch, pacing, audio,
 save/load and pad control (R3 latches, R2 holds). The same session found that
 backgrounding ended the guest session, which put the suspend/resume cell under
 re-check.
+
+Note 2026-11-03 (frame interpolation cell): signed for the battle scene at the
+aspect the app presents — option off by default, toggled and persisted from the
+settings row, 19.8 → 41.1 presents/s with the guest rate unchanged, real frames
+correct, audio clean. The 4:3 versus 16:9 part of the cell is a **named gap**:
+presentation layout is T16 and is not in the tree. The cell was blocked until
+the startup stack overflow was fixed; the same artifact passed the ten-launch
+cold-boot gate.
 
 Note 2026-11-03 (suspend/resume re-run): the earlier report's rendering row is
 withdrawn — it counted `guest_frame` lines over the whole buffer, including
