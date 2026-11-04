@@ -87,6 +87,17 @@ class TestAndroidWiring(unittest.TestCase):
                       "a resumed session must forget the wall time spent paused, or "
                       "it either races to catch up or holds against a stale base")
 
+    def test_background_mute_lives_in_the_watch(self):
+        """SDL blocks the event pump while backgrounded, so a mute applied by
+        the frame loop never runs and the paused stream's ring overruns."""
+        text = MAIN_CPP.read_text()
+        start = text.index("SDL_EVENT_WILL_ENTER_BACKGROUND")
+        body = text[start:start + 2400]
+        self.assertIn("audio_muted reason=background", body,
+                      "the background mute must log alongside the pause")
+        self.assertLess(body.index("audio_paused"), body.index("set_muted(true)"),
+                        "the mute must follow the audio pause in the lifecycle watch")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -384,6 +384,7 @@ struct LifecycleState {
     // that mode never reports a live session or requests a stop.
     std::atomic<bool> *session_finished{};
     gungnir::audio::AAudioOut *audio_out{};
+    gungnir::audio::MixerSink *mixer{};
 };
 
 bool lifecycle_watch(void *userdata, SDL_Event *event) {
@@ -417,6 +418,14 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
             else
                 GUNGNIR_LOGI("audio_paused\n");
         }
+        // The paused stream drains nothing, so the guest's last submissions
+        // before it stops would fill the ring and count overruns. SDL blocks
+        // the event pump while backgrounded, so the main loop cannot do this:
+        // the mute has to happen here, with the stop.
+        if (state->mixer != nullptr) {
+            state->mixer->set_muted(true);
+            GUNGNIR_LOGI("audio_muted reason=background\n");
+        }
         GUNGNIR_LOGI("lifecycle_paused\n");
     }
     if (event->type == SDL_EVENT_WINDOW_FOCUS_LOST) {
@@ -434,6 +443,13 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
                 GUNGNIR_LOGE("audio_resume_failed: %s\n", error.c_str());
             else
                 GUNGNIR_LOGI("audio_resumed\n");
+        }
+        // A latched fast-forward stays muted; the main loop keeps ownership
+        // of the control from here (it sees the same value and does nothing).
+        if (state->mixer != nullptr &&
+            !gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward)) {
+            state->mixer->set_muted(false);
+            GUNGNIR_LOGI("audio_muted reason=foreground\n");
         }
         GUNGNIR_LOGI("lifecycle_event foreground\n");
     }
@@ -1021,6 +1037,7 @@ int main(int, char **) {
     lifecycle.lifecycle = &lifecycle_policy;
     lifecycle.session_finished = session_launched ? &session_finished : nullptr;
     lifecycle.audio_out = audio_out.get();
+    lifecycle.mixer = &mixer;
     SDL_AddEventWatch(lifecycle_watch, &lifecycle);
 
     bool running = true;
