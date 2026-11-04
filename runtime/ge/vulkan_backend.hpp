@@ -18,6 +18,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ge/software.hpp"
@@ -123,6 +124,31 @@ struct ViewportRect {
 // aspect ratio, centring the result (pillar/letterbox).
 ViewportRect fit_viewport(int virtual_width, int virtual_height, int target_width, int target_height);
 
+// How the guest framebuffer is laid onto the display. Presentation only: the
+// guest still produces 480x272 for all three.
+enum class DisplayLayout {
+    Fit,     // aspect-preserving, centred, with bars (the original behaviour)
+    Stretch, // maps the guest extent onto the whole target (non-uniform)
+    Crop,    // uniform scale until the target is covered; the surface clips
+};
+
+// The rectangle the guest framebuffer is drawn into. Crop may originate
+// outside the target (negative x/y), because covering a wider display means
+// overflowing vertically; Vulkan clips the viewport, the scissor must be
+// clamped separately.
+ViewportRect present_rect(DisplayLayout layout, int virtual_width, int virtual_height, int target_width,
+                          int target_height);
+
+// Parses the host policy name. An unknown value returns Fit and fills `error`
+// with `unknown_display_layout: <text>` rather than guessing silently.
+DisplayLayout parse_display_layout(std::string_view text, std::string *error);
+
+// Offsets a guest-scaled scissor by the presented origin and clamps it to the
+// target: a Vulkan scissor origin must not be negative
+// (VUID-vkCmdSetScissor-x-00595), and crop overflows the surface.
+ScissorRect clamp_scissor_to_target(ScissorRect rect, int origin_x, int origin_y, int target_width,
+                                    int target_height);
+
 // Maps a scissor expressed in the guest virtual framebuffer onto the
 // swapchain extent. Edges round outward; an inverted or empty input yields
 // an empty rect.
@@ -153,6 +179,9 @@ public:
         // Window resizes change width/height but never this virtual extent.
         int virtual_width{};
         int virtual_height{};
+        // Presentation policy for the guest framebuffer. Host-only: it never
+        // enters the snapshot identity.
+        DisplayLayout display_layout{DisplayLayout::Fit};
         bool headless{true};
         bool validation{false};
         // Bound on retained GPU textures. Eviction runs while the device is
@@ -186,6 +215,9 @@ public:
                                std::uint32_t display_buffer);
     bool recreate_swapchain(int width, int height, std::string &error);
     bool recreate_surface(std::string &error);
+    // Presentation policy for the next present. Host state only: it is never
+    // part of the snapshot or of what the guest renders.
+    void set_display_layout(DisplayLayout layout);
     void invalidate_texture(std::uint64_t key);
     void wait_idle();
     void shutdown();

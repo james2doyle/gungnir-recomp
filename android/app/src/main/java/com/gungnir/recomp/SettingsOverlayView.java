@@ -19,6 +19,8 @@ public final class SettingsOverlayView extends FrameLayout {
         void onDrivers();
         void onGameData();
         void onToggleFrameInterpolation();
+
+        void onCycleDisplayLayout();
         void onSaveState();
         void onLoadState();
         void onResetToTitle();
@@ -29,6 +31,7 @@ public final class SettingsOverlayView extends FrameLayout {
     private final LinearLayout panel;
     private final TextView layoutRow;
     private final TextView interpolationRow;
+    private final TextView layoutPolicyRow;
     private final TextView statusRow;
     private final java.util.List<TextView> navigationRows = new java.util.ArrayList<>();
     private final java.util.List<Runnable> navigationActions = new java.util.ArrayList<>();
@@ -82,12 +85,26 @@ public final class SettingsOverlayView extends FrameLayout {
         row("Reset touch layout", listener::onResetLayout);
         row("Gamepad", listener::onGamepad);
         row("Vulkan driver", listener::onDrivers);
+        layoutPolicyRow = row("Screen fill: Fit", listener::onCycleDisplayLayout);
         row("Game data", listener::onGameData);
         interpolationRow = row("Frame interpolation: Off", listener::onToggleFrameInterpolation);
         row("Save state", listener::onSaveState);
         row("Load state", listener::onLoadState);
         row("Reset to title", listener::onResetToTitle);
         row("Close", listener::onClose);
+    }
+
+    /** Reflects the active presentation policy on the row label. */
+    public void setDisplayLayout(String policy) {
+        String name;
+        if ("stretch".equals(policy)) {
+            name = "Stretch";
+        } else if ("crop".equals(policy)) {
+            name = "Crop";
+        } else {
+            name = "Fit";
+        }
+        layoutPolicyRow.setText("Screen fill: " + name);
     }
 
     /** Reflects the persisted setting on the row label. */

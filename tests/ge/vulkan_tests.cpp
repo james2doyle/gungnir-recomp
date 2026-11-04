@@ -53,6 +53,57 @@ void viewport_fitting() {
     check(degenerate.width == 0 && degenerate.height == 0, "a zero guest extent yields an empty viewport");
 }
 
+void layout_policies() {
+    const ViewportRect fitted = fit_viewport(480, 272, 3063, 1335);
+    const auto by_fit = present_rect(DisplayLayout::Fit, 480, 272, 3063, 1335);
+    check(by_fit.x == fitted.x && by_fit.y == fitted.y && by_fit.width == fitted.width &&
+              by_fit.height == fitted.height,
+          "the fit policy is the current centred aspect-preserving rect");
+
+    const auto stretched = present_rect(DisplayLayout::Stretch, 480, 272, 3063, 1335);
+    check(stretched.x == 0 && stretched.y == 0 && stretched.width == 3063 && stretched.height == 1335,
+          "stretch maps the guest extent onto the whole target");
+
+    const auto cropped = present_rect(DisplayLayout::Crop, 480, 272, 3063, 1335);
+    check(cropped.width == 3063, "crop fills the target width");
+    check(cropped.height >= 1335 && cropped.x == 0,
+          "crop scales uniformly and overflows the target instead of stretching");
+    check(cropped.y < 0 && cropped.y + cropped.height > 1335,
+          "crop overflows vertically so the surface clips the top and bottom");
+
+    const auto empty = present_rect(DisplayLayout::Fit, 0, 272, 3063, 1335);
+    check(empty.width == 0 && empty.height == 0, "a zero guest extent yields an empty rect");
+
+    std::string policy_error;
+    check(parse_display_layout("fit", &policy_error) == DisplayLayout::Fit && policy_error.empty(),
+          "fit parses");
+    check(parse_display_layout("stretch", &policy_error) == DisplayLayout::Stretch, "stretch parses");
+    check(parse_display_layout("crop", &policy_error) == DisplayLayout::Crop, "crop parses");
+    const DisplayLayout fallback = parse_display_layout("zoom", &policy_error);
+    check(fallback == DisplayLayout::Fit && policy_error == "unknown_display_layout: zoom",
+          "an unknown policy is a named error and falls back to fit");
+}
+
+void layout_scissor_clamping() {
+    const auto cropped = present_rect(DisplayLayout::Crop, 480, 272, 3063, 1335);
+    const ScissorRect top = clamp_scissor_to_target(
+        {0, 0, cropped.width, cropped.height}, cropped.x, cropped.y, 3063, 1335);
+    check(top.x0 == 0 && top.y0 == 0 && top.x1 == 3063 && top.y1 == 1335,
+          "a crop-relative scissor outside the surface clamps onto it");
+
+    const ScissorRect band = clamp_scissor_to_target({100, 50, 400, 260}, 0, 0, 3063, 1335);
+    check(band.x0 == 100 && band.y0 == 50 && band.x1 == 400 && band.y1 == 260,
+          "a scissor already inside the surface is unchanged");
+
+    const ScissorRect outside = clamp_scissor_to_target({10, 10, 20, 20}, 3000, 1330, 3063, 1335);
+    check(outside.x1 <= outside.x0 || outside.y1 <= outside.y0,
+          "a scissor that lands entirely outside the surface is dropped");
+
+    const ScissorRect negative = clamp_scissor_to_target({0, 0, 100, 100}, -50, -50, 3063, 1335);
+    check(negative.x0 >= 0 && negative.y0 >= 0,
+          "a scissor offset must never produce a negative origin (VUID-vkCmdSetScissor-x-00595)");
+}
+
 void scissor_scaling() {
     const ScissorRect full = scale_scissor_to_extent({0, 0, 480, 272}, 480, 272, 3063, 1335);
     check(full.x0 == 0 && full.y0 == 0 && full.x1 == 3063 && full.y1 == 1335,
@@ -1206,6 +1257,8 @@ int main() {
     try {
         shader_validation();
         viewport_fitting();
+        layout_policies();
+        layout_scissor_clamping();
         scissor_scaling();
         headless_triangle();
         depth_format_tests();

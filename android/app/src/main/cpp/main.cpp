@@ -98,6 +98,19 @@ gungnir::ge::FrameQueue::Clock::time_point frame_due_at() {
 // RAM, a snapshot or a save, so save states stay comparable with it on or off.
 std::atomic<bool> g_interpolation_enabled{false};
 
+// Display layout is the same kind of policy: how the 480x272 framebuffer is
+// laid onto the display, never what the guest renders.
+std::atomic<gungnir::ge::DisplayLayout> g_display_layout{gungnir::ge::DisplayLayout::Fit};
+
+const char *display_layout_name(gungnir::ge::DisplayLayout layout) {
+    switch (layout) {
+    case gungnir::ge::DisplayLayout::Fit: return "fit";
+    case gungnir::ge::DisplayLayout::Stretch: return "stretch";
+    case gungnir::ge::DisplayLayout::Crop: return "crop";
+    }
+    return "unknown";
+}
+
 // Interpolation state is file-scope for two reasons: main() has no stack room
 // for it (the added locals overflowed the SDL thread stack once), and the menu
 // paths must be able to drop the history when a session restarts.
@@ -679,6 +692,25 @@ std::string jstring_to_string(JNIEnv *env, jstring value) {
     return result;
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_HostBridge_nativeSetDisplayLayout(JNIEnv *env, jclass, jstring policy) {
+    const std::string text = jstring_to_string(env, policy);
+    std::string error;
+    const gungnir::ge::DisplayLayout layout = gungnir::ge::parse_display_layout(text, &error);
+    if (!error.empty()) {
+        // Named, not silent: the layout stays as it was.
+        GUNGNIR_LOGE("%s\n", error.c_str());
+        return;
+    }
+    g_display_layout.store(layout);
+    GUNGNIR_LOGI("display_layout=%s\n", display_layout_name(layout));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_gungnir_recomp_input_HostBridge_displayLayout(JNIEnv *env, jclass) {
+    return env->NewStringUTF(display_layout_name(g_display_layout.load()));
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_gungnir_recomp_GungnirActivity_nativeImportDriver(JNIEnv *env, jobject, jstring zip_path,
                                                            jstring drivers_root) {
@@ -980,6 +1012,22 @@ int main(int, char **) {
     config.virtual_width = 480;
     config.virtual_height = 272;
     config.headless = false;
+    {
+        // QA form: --es display_layout fit|stretch|crop. An unknown name is a
+        // named error and the default (fit) stands.
+        const std::string requested = intent_string("display_layout");
+        if (!requested.empty()) {
+            std::string layout_error;
+            const gungnir::ge::DisplayLayout layout =
+                gungnir::ge::parse_display_layout(requested, &layout_error);
+            if (!layout_error.empty()) {
+                GUNGNIR_LOGE("%s\n", layout_error.c_str());
+            } else {
+                g_display_layout.store(layout);
+                config.display_layout = layout;
+            }
+        }
+    }
     config.driver = driver_selection;
     config.instance_extensions.assign(extensions, extensions + extension_count);
     config.create_surface = [window](VkInstance instance) -> VkSurfaceKHR {
@@ -1001,6 +1049,7 @@ int main(int, char **) {
 
     GUNGNIR_LOGI("swapchain=%dx%d transform=%u\n", backend.swapchain_width(), backend.swapchain_height(),
                  static_cast<unsigned>(backend.surface_transform()));
+    GUNGNIR_LOGI("display_layout=%s\n", display_layout_name(config.display_layout));
     const gungnir::platform::VulkanDriverInfo &driver = backend.driver_info();
     GUNGNIR_LOGI("driver_active=%s name=%s info=%s api=%u\n",
                  driver.custom ? "custom" : "system", driver.driver_name.c_str(),
@@ -1285,6 +1334,7 @@ int main(int, char **) {
             // it arrives.
             std::vector<gungnir::ge::Draw> *to_present = nullptr;
             schedule.set_enabled(g_interpolation_enabled.load(std::memory_order_relaxed));
+            backend.set_display_layout(g_display_layout.load(std::memory_order_relaxed));
             if (have_guest_frame) {
                 const bool has_previous = !g_interpolation.current.empty();
                 const bool immediate = schedule.on_guest_frame(frame_now, has_previous);

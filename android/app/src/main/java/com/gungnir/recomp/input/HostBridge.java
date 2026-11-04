@@ -19,4 +19,10 @@ public final class HostBridge {
 
     /** True while in-between frames are being presented. */
     public static native boolean frameInterpolation();
+
+    /** Display layout: "fit", "stretch" or "crop". Presentation only. */
+    public static native void nativeSetDisplayLayout(String policy);
+
+    /** The active display layout, for the settings row. */
+    public static native String displayLayout();
 }

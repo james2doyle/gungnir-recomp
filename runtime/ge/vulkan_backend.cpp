@@ -374,9 +374,58 @@ ViewportRect fit_viewport(int virtual_width, int virtual_height, int target_widt
     return out;
 }
 
-ScissorRect scale_scissor_to_extent(ScissorRect rect, int source_width, int source_height, int target_width,
+ViewportRect present_rect(DisplayLayout layout, int virtual_width, int virtual_height, int target_width,
+                          int target_height) {
+    if (virtual_width <= 0 || virtual_height <= 0 || target_width <= 0 || target_height <= 0) return {};
+    switch (layout) {
+    case DisplayLayout::Fit:
+        return fit_viewport(virtual_width, virtual_height, target_width, target_height);
+    case DisplayLayout::Stretch:
+        return ViewportRect{0, 0, target_width, target_height};
+    case DisplayLayout::Crop: {
+        // Uniform scale, chosen by the axis that covers more: the smaller
+        // axis overflows the target and the surface clips it. Rounding
+        // matches fit_viewport so a cropped rect always covers the target.
+        const long long by_width = static_cast<long long>(virtual_width) * target_height;
+        const long long by_height = static_cast<long long>(virtual_height) * target_width;
+        ViewportRect out;
+        if (by_width > by_height) {
+            out.height = target_height;
+            out.width = static_cast<int>((by_width * 2 + virtual_height) / (2 * virtual_height));
+        } else {
+            out.width = target_width;
+            out.height = static_cast<int>((by_height * 2 + virtual_width) / (2 * virtual_width));
+        }
+        out.x = (target_width - out.width) / 2;
+        out.y = (target_height - out.height) / 2;
+        return out;
+    }
+    }
+    return {};
+}
+
+DisplayLayout parse_display_layout(std::string_view text, std::string *error) {
+    if (text == "fit") return DisplayLayout::Fit;
+    if (text == "stretch") return DisplayLayout::Stretch;
+    if (text == "crop") return DisplayLayout::Crop;
+    if (error != nullptr) *error = "unknown_display_layout: " + std::string(text);
+    return DisplayLayout::Fit;
+}
+
+ScissorRect clamp_scissor_to_target(ScissorRect rect, int origin_x, int origin_y, int target_width,
                                     int target_height) {
-    if (source_width <= 0 || source_height <= 0 || target_width <= 0 || target_height <= 0) return {};
+    if (target_width <= 0 || target_height <= 0) return {};
+    ScissorRect out;
+    out.x0 = std::clamp(rect.x0 + origin_x, 0, target_width);
+    out.y0 = std::clamp(rect.y0 + origin_y, 0, target_height);
+    out.x1 = std::clamp(rect.x1 + origin_x, 0, target_width);
+    out.y1 = std::clamp(rect.y1 + origin_y, 0, target_height);
+    if (out.x1 <= out.x0 || out.y1 <= out.y0) return {};
+    return out;
+}
+
+ScissorRect scale_scissor_to_extent(ScissorRect rect, int source_width, int source_height, int target_width,
+                                    int target_height) {    if (source_width <= 0 || source_height <= 0 || target_width <= 0 || target_height <= 0) return {};
     if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) return {};
     const auto scale_low = [](int value, int source, int target) {
         return static_cast<int>(static_cast<long long>(value) * target / source);
@@ -2106,7 +2155,8 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
     const int virtual_height =
         impl_->config.virtual_height > 0 ? impl_->config.virtual_height : impl_->config.height;
     const ViewportRect fitted =
-        fit_viewport(virtual_width, virtual_height, static_cast<int>(impl_->swapchain_extent.width),
+        present_rect(impl_->config.display_layout, virtual_width, virtual_height,
+                     static_cast<int>(impl_->swapchain_extent.width),
                      static_cast<int>(impl_->swapchain_extent.height));
     VkViewport viewport{static_cast<float>(fitted.x), static_cast<float>(fitted.y),
                         static_cast<float>(fitted.width), static_cast<float>(fitted.height), 0.0f, 1.0f};
@@ -2120,10 +2170,11 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
                          scissor_unset ? virtual_width : calls[i].state.scissor_x1,
                          scissor_unset ? virtual_height : calls[i].state.scissor_y1};
         rect = scale_scissor_to_extent(rect, virtual_width, virtual_height, fitted.width, fitted.height);
-        rect.x0 += fitted.x;
-        rect.y0 += fitted.y;
-        rect.x1 += fitted.x;
-        rect.y1 += fitted.y;
+        // Crop presents outside the surface, and a Vulkan scissor origin may
+        // not be negative: clamp after offsetting, drop what fell off.
+        rect = clamp_scissor_to_target(rect, fitted.x, fitted.y,
+                                       static_cast<int>(impl_->swapchain_extent.width),
+                                       static_cast<int>(impl_->swapchain_extent.height));
         if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) continue;
         const int x0 = rect.x0;
         const int y0 = rect.y0;
@@ -2237,6 +2288,11 @@ bool VulkanBackend::recreate_swapchain(int width, int height, std::string &error
 
 void VulkanBackend::wait_idle() {
     if (impl_ && impl_->device != VK_NULL_HANDLE) vkDeviceWaitIdle(impl_->device);
+}
+
+void VulkanBackend::set_display_layout(DisplayLayout layout) {
+    if (!impl_) return;
+    impl_->config.display_layout = layout;
 }
 
 void VulkanBackend::invalidate_texture(std::uint64_t key) {

@@ -66,6 +66,13 @@ auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.
 
+Presentation is chosen with `--es display_layout fit|stretch|crop` on the QA
+intent, or the `Screen fill` row in the settings overlay (persisted, default
+`fit`). `fit` keeps the guest aspect with bars, `stretch` fills the display and
+distorts, `crop` fills it uniformly and cuts ~10% off the top and bottom of the
+image. None of them changes what the guest renders, and none is recorded in a
+snapshot.
+
 `qa-startup.sh` repeats the cold boot (`RUNS`, default 10) and fails on the
 first launch that does not reach its first frame or that leaves a
 `Fatal signal` in the crash buffer, keeping one logcat dump per run under
@@ -310,6 +317,7 @@ closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
 | `surface_recreate_failed` | swapchain surface could not be rebuilt; retried |
 | `driver_fallback: <reason>` | a selected custom driver failed; the system driver is used |
 | `stack_space thread=<name> unavailable` | the thread stack cannot be queried; the margin is unknown, boot continues |
+| `unknown_display_layout: <text>` | `--es display_layout` named a policy that does not exist; the layout stays as it was |
 | `driver_selection_invalid` | the persisted selection file is malformed; system is used |
 | `driver_import_failed: <reason>` | a driver zip was rejected; no selection change |
 | `driver_remove_failed: <reason>` | a driver directory could not be removed |
