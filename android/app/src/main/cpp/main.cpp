@@ -1155,6 +1155,7 @@ int main(int, char **) {
         std::chrono::duration<double>(1.0 / refresh_hz));
     GUNGNIR_LOGI("display_refresh_hz=%.1f\n", refresh_hz);
     gungnir::ge::PresentSchedule &schedule = g_interpolation.schedule;
+    schedule.set_refresh_interval(refresh_interval);
     std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;

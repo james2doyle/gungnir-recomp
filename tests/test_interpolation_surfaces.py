@@ -53,6 +53,11 @@ class TestInterpolationOption(unittest.TestCase):
         self.assertIn("skipped_ticks=", main,
                       "missing refreshes must be visible, not silent")
 
+    def test_schedule_uses_the_display_rate(self):
+        main = MAIN_CPP.read_text()
+        self.assertIn("set_refresh_interval(refresh_interval)", main,
+                      "the schedule must tick at the panel's refresh rate, not a default")
+
 
 class TestSnapshotPurity(unittest.TestCase):
     def test_snapshot_never_records_interpolation(self):
