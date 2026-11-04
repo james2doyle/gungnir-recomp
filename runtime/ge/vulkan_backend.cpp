@@ -2168,8 +2168,11 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         // One line per present geometry change: the displayed rect is the
         // evidence for the layout policy, and guessing at it has cost time.
         static int logged_width = -1;
-        if (logged_width != virtual_width) {
+        static int logged_layout = -1;
+        const int layout_now = static_cast<int>(impl_->config.display_layout);
+        if (logged_width != virtual_width || logged_layout != layout_now) {
             logged_width = virtual_width;
+            logged_layout = layout_now;
 #if defined(__ANDROID__)
             __android_log_print(ANDROID_LOG_INFO, "gungnir",
                                 "present_rect virtual=%dx%d target=%ux%u rect=%d,%d %dx%d layout=%d",
