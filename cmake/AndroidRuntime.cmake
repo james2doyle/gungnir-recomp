@@ -151,6 +151,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/input/touch_layout_store.cpp"
         "${ARG_ROOT}/runtime/input/touch_overlay.cpp"
         "${ARG_ROOT}/runtime/ge/display_list.cpp"
+        "${ARG_ROOT}/runtime/ge/frame_interpolation.cpp"
         "${ARG_ROOT}/runtime/ge/frame_queue.cpp"
         "${ARG_ROOT}/runtime/ge/software.cpp"
         "${ARG_ROOT}/runtime/ge/state_machine.cpp"
