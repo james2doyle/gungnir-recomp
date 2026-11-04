@@ -19,6 +19,7 @@ BINARIES = {
     "decoder": GE / "ge_display_list_tests",
     "pacing": GE / "frame_pacing_tests",
     "identity": GE / "draw_identity_tests",
+    "interpolation": GE / "interpolation_tests",
     "vertex": GE / "ge_vertex_tests",
     "texture": GE / "ge_texture_tests",
     "software": GE / "ge_software_tests",

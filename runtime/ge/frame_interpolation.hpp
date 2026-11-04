@@ -56,4 +56,25 @@ private:
     mutable std::size_t matches_{};
 };
 
+// What one interpolation pass did, for the periodic log.
+struct InterpolationStats {
+    std::size_t candidates{};  // transform draws in the frame
+    std::size_t matched{};     // and how many had a usable partner
+    std::size_t cut{};         // partners rejected as a jump (camera cut)
+    std::size_t unmatched{};   // no partner at all
+};
+
+// Average screen-space motion, in the 480-wide guest frame, above which two
+// draws are treated as unrelated rather than as the same object moving.
+// The 3rd Birthday uses 0.3 of a screen width as its cut test; this is
+// stricter at 0.2 so a hard pan is never smeared.
+inline constexpr float kCutScreenFraction = 0.2f;
+
+// Moves `frame`'s matched transform draws to `t` of the way from the previous
+// frame to this one, in place: positions only (x, y, z, inv_w), never colour,
+// texture coordinates or state. Through/2D draws, unmatched draws and pairs
+// whose vertices jumped are left exactly as the guest produced them.
+void interpolate_frame(std::vector<Draw> &frame, const FrameHistory &history, float t,
+    InterpolationStats *stats = nullptr);
+
 } // namespace gungnir::ge

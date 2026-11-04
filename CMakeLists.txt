@@ -171,6 +171,11 @@ target_link_libraries(ge_display_list_tests PRIVATE gungnir_ge)
 set_target_properties(ge_display_list_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
+add_executable(interpolation_tests tests/ge/interpolation_tests.cpp)
+target_link_libraries(interpolation_tests PRIVATE gungnir_ge)
+set_target_properties(interpolation_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
 add_executable(draw_identity_tests tests/ge/draw_identity_tests.cpp)
 target_link_libraries(draw_identity_tests PRIVATE gungnir_ge)
 set_target_properties(draw_identity_tests PROPERTIES
