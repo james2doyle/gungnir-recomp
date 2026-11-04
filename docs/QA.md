@@ -58,7 +58,7 @@ supply a field says `unknown`.
 | physical Adreno cold boot x3 | 2026-11-03-m2102k1ac-coldboot.md | SIGNED |
 | physical Adreno touch menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
-| physical Adreno suspend/resume | 2026-11-03-m2102k1ac-resume.md | SUPERSEDED (re-run pending) |
+| physical Adreno suspend/resume | 2026-11-03-m2102k1ac-background-resume.md | SIGNED |
 | physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
@@ -74,7 +74,7 @@ Note 2026-11-03 (suspend/resume re-run): the earlier report's rendering row is
 withdrawn — it counted `guest_frame` lines over the whole buffer, including
 pre-pause ones, while the session was in fact stopped. The session is now
 stopped between dispatches on background and resumed in place on foreground;
-the cell stays pending until a clean-build re-run records the battle-scene
+the cell is re-signed from a clean-build re-run that records the battle-scene
 round trip (same PID, one `session_start`, progress intact, `overruns=0`,
 `xruns=0`).
 
