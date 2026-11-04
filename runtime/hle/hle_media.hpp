@@ -43,6 +43,12 @@ void set_display_flip_observer(std::function<void()> observer);
 // runs on the guest thread and must not block.
 void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &)> sink);
 
+// Host widescreen widening factor for the GE pipeline (1 = native 480x272).
+// Presentation policy: never guest state, never part of a snapshot. Applies to
+// the live machine and to every machine rebuilt by a reset or a snapshot load.
+void set_widescreen_scale(float scale);
+float widescreen_scale();
+
 // Draws translated since the last presentable flip. A flip hands them to the
 // frame sink or drops them; this must not grow across flips.
 [[nodiscard]] std::size_t ge_pending_draw_count();

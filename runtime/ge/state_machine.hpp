@@ -102,6 +102,10 @@ public:
     void reset();
     void set_draw_sink(DrawSink sink);
     void set_gap_sink(GapSink sink);
+    // Host widescreen widening factor (1 = native 480x272). Presentation
+    // policy: it changes how wide the perspective frustum is, never guest RAM,
+    // and it is not part of the snapshot.
+    void set_widescreen(float scale);
     void command(const Command &command, const MemoryView &memory);
     // Optional zero-copy source for texture resolves; when null every resolve
     // copies through MemoryView. end_frame drops the per-frame dedup map.
@@ -179,6 +183,7 @@ private:
     // whose generation matches the pipeline's skips the rebuild entirely.
     // Derived cache: never snapshotted; mismatched init forces first build.
     VertexPipeline pipeline_;
+    float widescreen_{1.0f};
     std::uint64_t transform_generation_{1};
     std::uint64_t pipeline_generation_{};
     std::uint64_t pipeline_builds_{};

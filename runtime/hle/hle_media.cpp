@@ -378,6 +378,12 @@ void register_ge(HleRegistrar &hle) {
 
 } // namespace
 
+namespace {
+// Host presentation state survives a media reset by design: it is not part of
+// the guest or of a snapshot.
+float g_widescreen_scale = 1.0f;
+} // namespace
+
 DisplayState &display_state() {
     return media().display;
 }
@@ -386,6 +392,7 @@ void reset_media_state() {
     media() = MediaState{};
     reset_cadence();
     MediaState &state = media();
+    state.ge.set_widescreen(g_widescreen_scale);
     state.ge.set_draw_sink([&state](gungnir::ge::Draw draw) {
         state.pending_draws.push_back(std::move(draw));
     });
@@ -406,6 +413,15 @@ void set_display_flip_observer(std::function<void()> observer) {
 
 void set_ge_frame_sink(std::function<void(const std::vector<gungnir::ge::Draw> &)> sink) {
     media().frame_sink = std::move(sink);
+}
+
+void set_widescreen_scale(float scale) {
+    g_widescreen_scale = scale > 1.0f ? scale : 1.0f;
+    media().ge.set_widescreen(g_widescreen_scale);
+}
+
+float widescreen_scale() {
+    return g_widescreen_scale;
 }
 
 std::uint64_t ge_frame_count() {
@@ -732,6 +748,7 @@ bool import_snapshot_media(std::span<const std::uint8_t> bytes, Runtime &runtime
     state.ge_frames = ge_frames;
     state.ge_gaps = ge_gaps;
     state.ge = std::move(machine);
+    state.ge.set_widescreen(g_widescreen_scale);
     state.ge.set_draw_sink([&state](gungnir::ge::Draw draw) { state.pending_draws.push_back(std::move(draw)); });
     state.ge.set_gap_sink([&state](const std::string &gap) {
         ++state.ge_gaps;

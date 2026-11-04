@@ -262,6 +262,17 @@ void VertexPipeline::set_state(const TransformState &state) {
 void VertexPipeline::configure() {
     view_world_ = state_.view * state_.world;
     world_view_projection_ = state_.projection * view_world_;
+    if (state_.widescreen > 1.0f && !state_.through) {
+        // Widen the frustum: the horizontal row shrinks by the same factor the
+        // projection step scales the other way, so the picture keeps its
+        // pixel size and the extra columns show world the native frustum cut.
+        const float inverse = 1.0f / state_.widescreen;
+        // Column-major storage: the x row is indices 0, 4, 8, 12.
+        world_view_projection_.m[0] *= inverse;
+        world_view_projection_.m[4] *= inverse;
+        world_view_projection_.m[8] *= inverse;
+        world_view_projection_.m[12] *= inverse;
+    }
     need_world_ = state_.lighting.enabled;
     need_normal_ = state_.lighting.enabled ||
                    (state_.texture_map.enabled && state_.texture_map.mode == TextureMode::Matrix &&
@@ -431,7 +442,9 @@ ScreenVertex VertexPipeline::project(const ClipVertex &vertex) const {
     out.specular = vertex.specular;
     out.fog = vertex.fog;
     if (state_.through) {
-        out.x = vertex.clip[0];
+        // Screen-space: never stretched, only recentred in the wider frame.
+        const float margin = state_.widescreen > 1.0f ? 240.0f * (state_.widescreen - 1.0f) : 0.0f;
+        out.x = vertex.clip[0] + margin;
         out.y = vertex.clip[1];
         out.z = vertex.clip[2];
         out.inv_w = 1.0f;
@@ -441,7 +454,9 @@ ScreenVertex VertexPipeline::project(const ClipVertex &vertex) const {
     const float w = vertex.clip[3];
     const float inv_w = w != 0.0f ? 1.0f / w : 0.0f;
     out.inv_w = inv_w;
-    out.x = vertex.clip[0] * inv_w * state_.viewport.scale[0] + state_.viewport.center[0] - state_.viewport.offset_x;
+    const float widen = state_.widescreen > 1.0f ? state_.widescreen : 1.0f;
+    out.x = (vertex.clip[0] * inv_w * state_.viewport.scale[0] +
+             state_.viewport.center[0] - state_.viewport.offset_x) * widen;
     out.y = vertex.clip[1] * inv_w * state_.viewport.scale[1] + state_.viewport.center[1] - state_.viewport.offset_y;
     out.z = std::clamp(vertex.clip[2] * inv_w * state_.viewport.scale[2] + state_.viewport.center[2], 0.0f, 65535.0f);
     return out;

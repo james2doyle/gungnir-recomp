@@ -4,6 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdio>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -2158,6 +2164,27 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         present_rect(impl_->config.display_layout, virtual_width, virtual_height,
                      static_cast<int>(impl_->swapchain_extent.width),
                      static_cast<int>(impl_->swapchain_extent.height));
+    {
+        // One line per present geometry change: the displayed rect is the
+        // evidence for the layout policy, and guessing at it has cost time.
+        static int logged_width = -1;
+        if (logged_width != virtual_width) {
+            logged_width = virtual_width;
+#if defined(__ANDROID__)
+            __android_log_print(ANDROID_LOG_INFO, "gungnir",
+                                "present_rect virtual=%dx%d target=%ux%u rect=%d,%d %dx%d layout=%d",
+                                virtual_width, virtual_height, impl_->swapchain_extent.width,
+                                impl_->swapchain_extent.height, fitted.x, fitted.y, fitted.width,
+                                fitted.height, static_cast<int>(impl_->config.display_layout));
+#else
+            std::fprintf(stderr,
+                         "present_rect virtual=%dx%d target=%ux%u rect=%d,%d %dx%d layout=%d\n",
+                         virtual_width, virtual_height, impl_->swapchain_extent.width,
+                         impl_->swapchain_extent.height, fitted.x, fitted.y, fitted.width,
+                         fitted.height, static_cast<int>(impl_->config.display_layout));
+#endif
+        }
+    }
     VkViewport viewport{static_cast<float>(fitted.x), static_cast<float>(fitted.y),
                         static_cast<float>(fitted.width), static_cast<float>(fitted.height), 0.0f, 1.0f};
     vkCmdSetViewport(impl_->command_buffer, 0, 1, &viewport);
@@ -2169,6 +2196,22 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
                          scissor_unset ? 0 : calls[i].state.scissor_y0,
                          scissor_unset ? virtual_width : calls[i].state.scissor_x1,
                          scissor_unset ? virtual_height : calls[i].state.scissor_y1};
+        // A widened frame keeps the guest's 480-wide scissor space: the scene
+        // scissor grows with the frustum, a through-mode scissor is only
+        // recentred, exactly like its vertices.
+        if (virtual_width != 480) {
+            const float widen = static_cast<float>(virtual_width) / 480.0f;
+            const float margin = 240.0f * (widen - 1.0f);
+            if (calls[i].state.through) {
+                rect.x0 = static_cast<int>(std::lround(static_cast<float>(rect.x0) + margin));
+                rect.x1 = static_cast<int>(std::lround(static_cast<float>(rect.x1) + margin));
+            } else {
+                rect.x0 = static_cast<int>(std::lround(static_cast<float>(rect.x0) * widen));
+                rect.x1 = static_cast<int>(std::lround(static_cast<float>(rect.x1) * widen));
+            }
+            rect.x0 = std::clamp(rect.x0, 0, virtual_width);
+            rect.x1 = std::clamp(rect.x1, 0, virtual_width);
+        }
         rect = scale_scissor_to_extent(rect, virtual_width, virtual_height, fitted.width, fitted.height);
         // Crop presents outside the surface, and a Vulkan scissor origin may
         // not be negative: clamp after offsetting, drop what fell off.

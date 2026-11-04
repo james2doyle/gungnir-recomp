@@ -183,6 +183,12 @@ struct TransformState {
     float fog_slope{1.0f};
     VertexLayout layout{};
     bool through{};
+    // Host widescreen widening (T16a): 1 is the native 480x272 mapping. Above
+    // 1 the perspective frustum narrows horizontally by the same factor and
+    // the mapping grows, so the scene keeps its pixel size and the frame shows
+    // more world; screen-space (through) draws are only recentred. Guest state:
+    // no.
+    float widescreen{1.0f};
 
     bool operator==(const TransformState &) const = default;
 };

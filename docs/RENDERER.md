@@ -89,7 +89,28 @@ Invariants:
   existing layouts for no input gain; `fit` therefore keeps its controls over
   the bars, as before.
 
-### Widescreen widening (T16a — PLANNED)
+### Widescreen widening (T16a — IN PROGRESS, opt-in)
+
+`--es widescreen off|display|16:9` (default `off`). `display` renders the
+perspective scene into a frame as wide as the display (`k = display_aspect /
+1.7647`, 19.5:9 → ~1.30, virtual 624x272) so `fit` presentation fills the frame
+with no bars, no distortion and nothing cut: the horizontal row of the
+world-view-projection matrix shrinks by `k` and the projection step grows by
+`k`, so the picture keeps its pixel size and the extra columns show world the
+native frustum cut off. Screen-space (through) draws are never stretched — only
+recentred by the margin — and their scissors follow the same rule.
+
+Measured on the phone (3063x1335 target, scale 1.3001, virtual 624x272): the
+presented rect becomes the full target (`rect=0,0 3063x1335`) and the HUD stays
+centred and undistorted. **Known gap:** the side columns stay black in the
+battle scene, because the title's backdrop is a full-screen `through` draw (kept
+at 480 wide and centred) and the guest culls its own 3D against the unwidened
+camera. The missing piece is the rule below — a 2D draw that covers the whole
+guest frame is a full-screen effect and must stretch with the scene — which is
+why the mode is opt-in.
+
+Original contract for the remaining work:
+
 
 Not implemented yet. The renderer-side contract it must keep:
 

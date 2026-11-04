@@ -348,6 +348,51 @@ void through_and_texture_matrix() {
           "texture matrix transforms the selected source");
 }
 
+// T16a: the scene is widened, the HUD is not. With scale k the frustum's
+// horizontal half-extent shrinks by k and the mapping grows by k, so the
+// picture keeps its pixel size and the extra columns show world that the
+// native frustum cut off; screen-space (through) draws are only recentred.
+void widescreen_widening() {
+    constexpr float k = 1.3f;
+    TransformState native = base_state();
+    native.viewport.scale = {240.0f, 136.0f, 1.0f};
+    native.viewport.center = {240.0f, 136.0f, 0.0f};
+    TransformState wide = native;
+    wide.widescreen = k;
+
+    // An off-centre point at the edge of the native frustum.
+    const ClipVertex native_clip = VertexPipeline(native).transform(position_vertex(0.5f, 0.0f, 0.5f));
+    const ScreenVertex native_screen = VertexPipeline(native).project(native_clip);
+    const ScreenVertex wide_screen = VertexPipeline(wide).project(VertexPipeline(wide).transform(position_vertex(0.5f, 0.0f, 0.5f)));
+    check(close(wide_screen.x, native_screen.x + 240.0f * (k - 1.0f), 1.0e-3f),
+          "a widened scene keeps the native pixel size and shifts only by the new margin");
+    check(close(wide_screen.y, native_screen.y), "widening never touches the vertical mapping");
+
+    // A point the native frustum clipped now lands inside the widened frame.
+    const ScreenVertex outside = VertexPipeline(wide).project(VertexPipeline(wide).transform(position_vertex(1.0f, 0.0f, 0.5f)));
+    check(outside.x > 480.0f && outside.x <= 480.0f * k,
+          "geometry beyond the native frustum lands inside the widened frame");
+
+    // Through (HUD) draws are screen-space: no scale, recentred by the margin.
+    TransformState through_native;
+    through_native.through = true;
+    TransformState through_wide = through_native;
+    through_wide.widescreen = k;
+    Vertex hud;
+    hud.position = {40.0f, 20.0f, 5.0f};
+    hud.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    const ScreenVertex hud_native = VertexPipeline(through_native).project(VertexPipeline(through_native).transform(hud));
+    const ScreenVertex hud_wide = VertexPipeline(through_wide).project(VertexPipeline(through_wide).transform(hud));
+    check(close(hud_wide.x, hud_native.x + 240.0f * (k - 1.0f), 1.0e-3f),
+          "the HUD is recentred in the widened frame, never stretched");
+    check(close(hud_wide.y, hud_native.y), "the HUD keeps its vertical position");
+
+    TransformState off = native;
+    off.widescreen = 1.0f;
+    const ScreenVertex unchanged = VertexPipeline(off).project(VertexPipeline(off).transform(position_vertex(-1.0f, -1.0f, 0.5f)));
+    check(unchanged.x == 0.0f, "widening off is exactly today's mapping");
+}
+
 void vfpu_dot_parity() {
     psprecomp::AllegrexContext ctx;
     Mat44 matrix;
@@ -402,6 +447,7 @@ int main() {
         culling();
         lighting_and_material();
         through_and_texture_matrix();
+        widescreen_widening();
         vfpu_dot_parity();
         determinism();
         std::cout << "ge_vertex_tests: OK\n";

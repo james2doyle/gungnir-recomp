@@ -149,6 +149,7 @@ void StateMachine::reset() {    regs_.fill(0u);
     transform_generation_ = 1u;
     pipeline_generation_ = 0u;
     pipeline_builds_ = 0u;
+    // Host presentation policy survives a guest reset: it is not guest state.
 }
 
 void StateMachine::set_fast_source(FastSource source) { fast_source_ = std::move(source); }
@@ -273,8 +274,15 @@ void StateMachine::command(const Command &command, const MemoryView &memory) {
     }
 }
 
+void StateMachine::set_widescreen(float scale) {
+    widescreen_ = scale > 1.0f ? scale : 1.0f;
+    ++transform_generation_;
+    pipeline_generation_ = 0u;
+}
+
 TransformState StateMachine::transform_state() const {
     TransformState state;
+    state.widescreen = widescreen_;
     state.layout = layout_;
     state.through = layout_.through;
     for (std::size_t i = 0; i < 12u; ++i) {

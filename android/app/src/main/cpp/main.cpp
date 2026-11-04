@@ -102,6 +102,9 @@ std::atomic<bool> g_interpolation_enabled{false};
 // laid onto the display, never what the guest renders.
 std::atomic<gungnir::ge::DisplayLayout> g_display_layout{gungnir::ge::DisplayLayout::Fit};
 
+// Host widescreen widening factor; 1 is the native 480x272 frame.
+double g_widescreen_scale = 1.0;
+
 const char *display_layout_name(gungnir::ge::DisplayLayout layout) {
     switch (layout) {
     case gungnir::ge::DisplayLayout::Fit: return "fit";
@@ -395,6 +398,7 @@ bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
         owned[i].indices = source.indices;
         const gungnir::ge::DrawState &in = source.state;
         gungnir::ge::VulkanDrawState &out = owned[i].state;
+        out.through = in.through;
         out.scissor_x0 = in.scissor_x0;
         out.scissor_y0 = in.scissor_y0;
         out.scissor_x1 = in.scissor_x1;
@@ -1027,6 +1031,37 @@ int main(int, char **) {
                 config.display_layout = layout;
             }
         }
+    }
+    // Widescreen widening: the perspective scene is rendered into a frame as
+    // wide as the display needs, so the picture fills it with no bars, no
+    // stretching and nothing cut. Screen-space (through) draws keep their
+    // 480-wide mapping and are only recentred. "off" is the native 480x272
+    // frame; "16:9" caps the widening at the guest's own 16:9-ish aspect.
+    {
+        const std::string mode = intent_string("widescreen");
+        // Opt-in until the full-screen 2D backdrop rule lands: widening alone
+        // leaves the sides empty in scenes whose backdrop is a through draw.
+        const std::string policy = mode.empty() ? "off" : mode;
+        double target_aspect = 0.0;
+        int window_width = 0;
+        int window_height = 0;
+        if (SDL_GetWindowSizeInPixels(window, &window_width, &window_height) && window_height > 0)
+            target_aspect = static_cast<double>(window_width) / window_height;
+        constexpr double kGuestAspect = 480.0 / 272.0;
+        constexpr double k16by9 = 16.0 / 9.0;
+        double scale = 1.0;
+        if (policy == "display") {
+            if (target_aspect > kGuestAspect) scale = target_aspect / kGuestAspect;
+        } else if (policy == "16:9") {
+            if (target_aspect > k16by9) scale = k16by9 / kGuestAspect;
+        } else if (policy != "off") {
+            GUNGNIR_LOGE("unknown_widescreen: %s\n", policy.c_str());
+        }
+        g_widescreen_scale = scale > 1.0 ? scale : 1.0;
+        config.virtual_width = static_cast<int>(std::lround(480.0 * g_widescreen_scale));
+        gungnir::hle::set_widescreen_scale(static_cast<float>(g_widescreen_scale));
+        GUNGNIR_LOGI("widescreen mode=%s scale=%.4f virtual=%dx%d\n", policy.c_str(),
+                     g_widescreen_scale, config.virtual_width, config.virtual_height);
     }
     config.driver = driver_selection;
     config.instance_extensions.assign(extensions, extensions + extension_count);
