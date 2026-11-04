@@ -166,6 +166,13 @@ struct LightingState {
 enum class CullMode : std::uint8_t { None, Front, Back };
 enum class FrontFace : std::uint8_t { Clockwise, CounterClockwise };
 
+// Presentation helpers for a widened frame (T16a). A through draw whose bounds
+// cover the guest frame is a full-frame effect (backdrop, fade, vignette) and
+// stretches with the scene; anything else keeps its pixel size and is only
+// recentred, so the HUD never distorts.
+bool covers_guest_frame(const std::vector<ScreenVertex> &vertices, int guest_width, int guest_height);
+float wide_screen_x(float x, float widen, bool fullscreen);
+
 struct TransformState {
     Mat43 world{Mat43::identity()};
     Mat43 view{Mat43::identity()};

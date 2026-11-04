@@ -59,6 +59,9 @@ struct VulkanDrawState {
     // Through-mode draws carry guest screen-space coordinates; their scissor
     // is in the 480-wide guest frame, not in a widened one.
     bool through{};
+    // Through draw whose bounds cover the guest frame: presentation stretches
+    // it with the scene instead of recentring it.
+    bool fullscreen_2d{};
     int scissor_x0{};
     int scissor_y0{};
     int scissor_x1{};

@@ -383,14 +383,41 @@ void widescreen_widening() {
     hud.color = {1.0f, 1.0f, 1.0f, 1.0f};
     const ScreenVertex hud_native = VertexPipeline(through_native).project(VertexPipeline(through_native).transform(hud));
     const ScreenVertex hud_wide = VertexPipeline(through_wide).project(VertexPipeline(through_wide).transform(hud));
-    check(close(hud_wide.x, hud_native.x + 240.0f * (k - 1.0f), 1.0e-3f),
-          "the HUD is recentred in the widened frame, never stretched");
+    check(close(hud_wide.x, hud_native.x, 1.0e-3f),
+          "through draws keep guest pixels; presentation decides how they land");
     check(close(hud_wide.y, hud_native.y), "the HUD keeps its vertical position");
 
     TransformState off = native;
     off.widescreen = 1.0f;
     const ScreenVertex unchanged = VertexPipeline(off).project(VertexPipeline(off).transform(position_vertex(-1.0f, -1.0f, 0.5f)));
     check(unchanged.x == 0.0f, "widening off is exactly today's mapping");
+}
+
+void widescreen_presentation_mapping() {
+    constexpr float k = 1.3f;
+    // A backdrop covering the guest frame is a full-frame effect: it stretches
+    // with the scene, so the margins are never empty.
+    std::vector<ScreenVertex> backdrop(4);
+    backdrop[0].x = 0.0f;   backdrop[0].y = 0.0f;
+    backdrop[1].x = 480.0f; backdrop[1].y = 0.0f;
+    backdrop[2].x = 0.0f;   backdrop[2].y = 272.0f;
+    backdrop[3].x = 480.0f; backdrop[3].y = 272.0f;
+    check(covers_guest_frame(backdrop, 480, 272), "a full-frame backdrop is classified as one");
+    check(close(wide_screen_x(480.0f, k, true), 480.0f * k, 1.0e-3f),
+          "a full-frame effect stretches across the widened frame");
+
+    // A HUD panel keeps its pixel size and is only recentred.
+    std::vector<ScreenVertex> panel(4);
+    panel[0].x = 100.0f; panel[0].y = 200.0f;
+    panel[1].x = 379.0f; panel[1].y = 200.0f;
+    panel[2].x = 100.0f; panel[2].y = 271.0f;
+    panel[3].x = 379.0f; panel[3].y = 271.0f;
+    check(!covers_guest_frame(panel, 480, 272), "a HUD panel is not a full-frame effect");
+    check(close(wide_screen_x(100.0f, k, false), 100.0f + 240.0f * (k - 1.0f), 1.0e-3f),
+          "HUD is recentred, never stretched");
+
+    check(wide_screen_x(37.0f, 1.0f, true) == 37.0f, "widening off leaves x alone");
+    check(!covers_guest_frame({}, 480, 272), "an empty draw is never a full-frame effect");
 }
 
 void vfpu_dot_parity() {
@@ -448,6 +475,7 @@ int main() {
         lighting_and_material();
         through_and_texture_matrix();
         widescreen_widening();
+        widescreen_presentation_mapping();
         vfpu_dot_parity();
         determinism();
         std::cout << "ge_vertex_tests: OK\n";

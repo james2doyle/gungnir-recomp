@@ -2205,7 +2205,7 @@ bool VulkanBackend::render_swapchain_draws(std::span<const VulkanDrawCall> calls
         if (virtual_width != 480) {
             const float widen = static_cast<float>(virtual_width) / 480.0f;
             const float margin = 240.0f * (widen - 1.0f);
-            if (calls[i].state.through) {
+            if (calls[i].state.through && !calls[i].state.fullscreen_2d) {
                 rect.x0 = static_cast<int>(std::lround(static_cast<float>(rect.x0) + margin));
                 rect.x1 = static_cast<int>(std::lround(static_cast<float>(rect.x1) + margin));
             } else {

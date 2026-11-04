@@ -89,54 +89,35 @@ Invariants:
   existing layouts for no input gain; `fit` therefore keeps its controls over
   the bars, as before.
 
-### Widescreen widening (T16a — IN PROGRESS, opt-in)
+### Adaptive widescreen (T16a)
 
-`--es widescreen off|display|16:9` (default `off`). `display` renders the
-perspective scene into a frame as wide as the display (`k = display_aspect /
-1.7647`, 19.5:9 → ~1.30, virtual 624x272) so `fit` presentation fills the frame
-with no bars, no distortion and nothing cut: the horizontal row of the
-world-view-projection matrix shrinks by `k` and the projection step grows by
-`k`, so the picture keeps its pixel size and the extra columns show world the
-native frustum cut off. Screen-space (through) draws are never stretched — only
-recentred by the margin — and their scissors follow the same rule.
+`--es widescreen adaptive|off|16:9|21:9|32:9` (default `adaptive`), modelled on
+the adaptive view in `mstan/gbarecomp`: the render frame follows the window
+instead of a fixed 480x272.
 
-Measured on the phone (3063x1335 target, scale 1.3001, virtual 624x272): the
-presented rect becomes the full target (`rect=0,0 3063x1335`) and the HUD stays
-centred and undistorted. **Known gap:** the side columns stay black in the
-battle scene, because the title's backdrop is a full-screen `through` draw (kept
-at 480 wide and centred) and the guest culls its own 3D against the unwidened
-camera. The missing piece is the rule below — a 2D draw that covers the whole
-guest frame is a full-screen effect and must stretch with the scene — which is
-why the mode is opt-in.
+- `adaptive` measures the window aspect and widens to it (`k = window_aspect /
+  1.7647`; 3063x1335 -> k = 1.3001, virtual 624x272), so presentation with
+  `fit` fills the display exactly. The aspect caps (`16:9`, `21:9`, `32:9`)
+  bound `k` for windows wider than the content should stretch to; `off` is the
+  native frame.
+- The scene is widened, not zoomed: the horizontal row of the
+  world-view-projection matrix shrinks by `k` and the projection step grows by
+  `k`, so the picture keeps its pixel size and the extra columns show world the
+  native frustum cut off.
+- Screen-space (`through`) draws are split by coverage. A draw whose bounds
+  cover the guest frame is a full-frame effect (backdrop, fade, vignette) and
+  **stretches with the scene**, so the margins are never empty; anything else
+  is HUD and keeps its pixel size, only recentred by the margin. Scissors follow
+  the same split (scene and full-frame scissors scale, HUD scissors recentre).
+- Verified on the phone: `widescreen mode=adaptive scale=1.3001 virtual=624x272`
+  with `present_rect ... rect=0,0 3063x1335` — the whole target, HUD centred and
+  undistorted, the battle backdrop continuous to both edges.
 
-Original contract for the remaining work:
-
-
-Not implemented yet. The renderer-side contract it must keep:
-
-- `widescreen` (off / display aspect / 16:9 cap) changes the projection and
-  enters the snapshot config identity.
-- 480x272 is 1.765:1, already almost 16:9 (16:9 is 483.6 px at 272 height).
-  Widening to 16:9 is a 0.7% no-op; the real mode is the display aspect
-  (19.5:9 -> 604x272, `k = 1.26`).
-- Only perspective draws widen. `through` draws and draws whose projection
-  w-row is zero stay on the 480 mapping. That 2D/3D tag does not exist on
-  `DrawState`/`VulkanDrawState` today and must be added and tested.
-- A 2D draw covering the full frame is a full-screen effect (fade, vignette,
-  letterbox bar) and stretches with the scene, otherwise fades leave unfaded
-  strips at the sides.
-- The shader normalizes with the pushed viewport (`assets/shaders/ge/mesh.vert:31`),
-  so the effective virtual width must be pushed and every vertex shifted by
-  the same origin; the 480-wide HUD then lands centred without distortion.
-- Scissors follow the draw class (widened `x*k`, 2D `x+off`).
-- Only display-buffer draws widen. A scene that renders into a 480-wide VRAM
-  target keeps the 480 mapping and is a counted gap, never a silent no-op.
-- Guest CPU culling still uses the unwidened camera, so geometry outside the
-  original frustum stays missing. That is not a renderer bug and cannot be
-  recovered host-side (only per-title camera hooks would).
-- FMV/PSMF is not implemented (every `sceMpeg` entry point is a named gap), so
-  movie pillarboxing is unit-tested with a full-screen 2D quad only and device
-  acceptance stays blocked on movie playback.
+Known limits: the guest culls its own 3D against the unwidened camera, so
+geometry outside the native frustum is never submitted and the widened columns
+show the (stretched) backdrop where the scene has nothing (a per-title camera
+hook would be the only recovery). Scenes that render into a 480-wide VRAM
+target keep the 480 mapping and are a counted gap.
 
 ## Frame interpolation (T17)
 

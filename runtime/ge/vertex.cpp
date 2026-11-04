@@ -435,6 +435,31 @@ ClipVertex VertexPipeline::transform(const Vertex &vertex) const {
     return out;
 }
 
+bool covers_guest_frame(const std::vector<ScreenVertex> &vertices, int guest_width, int guest_height) {
+    if (vertices.empty() || guest_width <= 0 || guest_height <= 0) return false;
+    float min_x = vertices.front().x;
+    float max_x = min_x;
+    float min_y = vertices.front().y;
+    float max_y = min_y;
+    for (const ScreenVertex &vertex : vertices) {
+        min_x = std::min(min_x, vertex.x);
+        max_x = std::max(max_x, vertex.x);
+        min_y = std::min(min_y, vertex.y);
+        max_y = std::max(max_y, vertex.y);
+    }
+    // A full-frame effect covers ~the whole guest frame; HUD panels, portraits
+    // and bars do not. 95% keeps a one-pixel-negative scissor admissible.
+    constexpr float kCoverage = 0.95f;
+    return max_x - min_x >= kCoverage * static_cast<float>(guest_width) &&
+           max_y - min_y >= kCoverage * static_cast<float>(guest_height);
+}
+
+float wide_screen_x(float x, float widen, bool fullscreen) {
+    if (widen <= 1.0f) return x;
+    if (fullscreen) return x * widen;  // stretches with the scene, fills the margins
+    return x + 240.0f * (widen - 1.0f); // native size, recentred
+}
+
 ScreenVertex VertexPipeline::project(const ClipVertex &vertex) const {
     ScreenVertex out;
     out.texcoord = vertex.texcoord;
@@ -442,9 +467,10 @@ ScreenVertex VertexPipeline::project(const ClipVertex &vertex) const {
     out.specular = vertex.specular;
     out.fog = vertex.fog;
     if (state_.through) {
-        // Screen-space: never stretched, only recentred in the wider frame.
-        const float margin = state_.widescreen > 1.0f ? 240.0f * (state_.widescreen - 1.0f) : 0.0f;
-        out.x = vertex.clip[0] + margin;
+        // Screen-space: the guest's own pixels. How a through draw lands in a
+        // widened frame is presentation's decision (full-frame effects stretch,
+        // HUD is only recentred), so nothing is applied here.
+        out.x = vertex.clip[0];
         out.y = vertex.clip[1];
         out.z = vertex.clip[2];
         out.inv_w = 1.0f;
