@@ -63,11 +63,11 @@ supply a field says `unknown`.
 | physical Adreno audio smoke | TBD | PENDING |
 | non-Adreno/handheld (optional, if available) | TBD | PENDING |
 
-Note 2026-11-03 (fast-forward cell): the fast-forward report signs the touch,
-pacing, audio and save/load half; the gamepad R2/R3 half is a named gap (no
-pad attached). The same session found that backgrounding ends the guest
-session (`eqomlp5a`), so the "rendering" row of the suspend/resume report
-above needs re-running before that cell is trusted again.
+Note 2026-11-03 (fast-forward cell): signed for touch, pacing, audio,
+save/load and pad control (R3 latches, R2 holds). The same session found that
+backgrounding ends the guest session (`eqomlp5a`), so the "rendering" row of
+the suspend/resume report above needs re-running before that cell is trusted
+again.
 
 ## Evidence and sign-off template
 

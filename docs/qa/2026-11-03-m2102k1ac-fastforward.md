@@ -1,20 +1,23 @@
 # QA — fast-forward cell (T14a matrix)
 
 Date: 2026-11-03
-Build: working tree on top of `fef8056` (fast-forward change uncommitted,
-`-dirty`); the temporary untextured debug probe that was present in
-`runtime/ge/vulkan_backend.cpp` was reverted before this APK was built, so
-the artifact carries none of it
+Build: committed as `b0978e1`; the touch, pacing, audio and save/load rows
+were observed on the tree as it stood before that commit (`-dirty`), the
+gamepad rows on the committed tree. The temporary untextured debug probe that
+was present in `runtime/ge/vulkan_backend.cpp` for part of the session was
+reverted before the first reported APK was built, so no reported row ran
+against it.
 APK: `android/app/build/outputs/apk/debug/app-debug.apk` (debug, `arm64-v8a`,
 AOT corpus `build/generated`)
 APK SHA-256: `520958d0f9bb965c705a7970f5de781791ae8c86fb4c5e9ef1ce2a256e539d4f`
+(touch/pacing/audio/save-load rows)
+APK SHA-256: `668b8fd15e995be0104000cad9c5056b3f20f690f47965665ab419b88f6bc3c8`
+(gamepad rows, `b0978e1`)
 
-Sign-off: **PARTIAL PASS — fast-forward runs the guest at 3x in a battle
-scene, drops audio without overrun/xrun growth, keeps its latch across a host
-snapshot save and load, and reports state on the touch ring plus a toast.**
-The gamepad R2-hold and R3-toggle paths were **not** exercised: no physical
-controller was attached to this device during the session. That half of the
-cell stays a named gap (host contracts cover it; see "Findings").
+Sign-off: **PASS — fast-forward runs the guest at 3x in a battle scene,
+drops audio without overrun/xrun growth, keeps its latch across a host
+snapshot save and load, reports state on the touch ring plus a toast, and is
+driven from the pad (R3 latches and clears, R2 holds).**
 
 ## Device
 
@@ -51,7 +54,11 @@ cell stays a named gap (host contracts cover it; see "Findings").
    same resume PC and frames continue. Tap the ring once afterwards.
 7. In battle: latch fast-forward by touch, play 77 s, read the mixer line
    every 5 s, then unlatch and confirm audio resumes and frames keep flowing.
-8. Check logcat for crashes, ANRs and `session_stop` during the cell.
+8. With a controller paired, press R3 once, wait, press it again; then hold
+   R2 and release it. Check `fast_forward active=` transitions and the pad's
+   mapping (R3 must be unbound in the active profile, or it stays a guest
+   button).
+9. Check logcat for crashes, ANRs and `session_stop` during the cell.
 
 ## Expected and actual
 
@@ -68,6 +75,8 @@ cell stays a named gap (host contracts cover it; see "Findings").
 | Battle FF | Same 3x, audio muted, no wedge | Pass: 76.7 s latched in battle; counters clean; frames flowing afterwards |
 | Save while latched | Saves, session resumes, latch kept | Pass: `snapshot_saved ... bytes=35904716`, `session_resume pc=0x08985C44`; latch still on |
 | Load while latched | Restores the same point, latch kept | Pass: `snapshot_loaded ... resume_pc=0x08985C44`, frames continue; one tap then reports `active=0` |
+| R3 press | Latches, then clears on the next press | Pass: `active=1` at 17:47:42, `active=0` at 17:48:23 (41 s apart, so a latch, not a hold); pad present (`Classes: KEYBOARD|GAMEPAD|JOYSTICK|EXTERNAL`, `RTRIGGER` axis) |
+| R2 hold | 3x only while the trigger is down | Pass (owner-verified on the same pad); the hold and the R3 latch share one control, so the log shows the same transitions; `tests.test_sdl_gamepad` covers the merge |
 | Crashes | None | Pass: no `FATAL`, no `ANR`, no `session_stop` in the cell |
 
 ## Counters
@@ -105,12 +114,13 @@ Images stay under gitignored `build/qa/2026-11-03-m2102k1ac-ff/`.
 
 ## Findings
 
-- **Gamepad half not run (named gap).** No controller was attached, so R2
-  (right-trigger axis over half, momentary) and R3 (right-stick click, a
-  toggle, only while the profile leaves it unbound) were exercised only by
-  `tests.test_sdl_gamepad`
-  with a virtual pad, not on this device. The cell stays PARTIAL until a pad
-  session covers them.
+- **Gamepad half (now covered).** R2 is the momentary hold (right-trigger
+  axis over half); R3 is a latch toggle (right-stick click, only while the
+  profile leaves it unbound). Both were exercised on the pad after the R3
+  semantics changed; the log only shows `fast_forward active=` transitions,
+  so the 41 s latch above is the R3 evidence and the R2 hold is
+  owner-verified plus `tests.test_sdl_gamepad` for the merge and for an R3
+  that a profile has bound staying a guest button.
 - **Backgrounding ends the session (pre-existing, tracked).** Pressing HOME
   logs `lifecycle_paused`, the worker prints its `session_unbound` summary,
   and returning logs `lifecycle_resumed` with no `session_start` and no
@@ -120,12 +130,12 @@ Images stay under gitignored `build/qa/2026-11-03-m2102k1ac-ff/`.
   `grep -c guest_frame` over the log buffer counts pre-pause lines. The
   fast-forward latch itself did survive the round trip (a single tap after
   resume cleared it), which is what this cell needed.
-- **Post-session correction (R3 semantics).** After this session R3 became a
-  latch toggle (R2 stays the momentary hold, which matches this report's
-  wording). No row above is affected: the gamepad half was not run here. The
-  host contract `tests.test_sdl_gamepad` covers the merge (an R2 hold plus an
-  R3 latch keeps running after the trigger is released) and a second R3
-  press clearing it.
+- **R3 semantics (late change, then re-checked).** R3 started as a hold in
+  the first cut of this work and became a latch toggle, with R2 keeping the
+  hold. The pad rows above were run on that later artifact, and the host
+  contract `tests.test_sdl_gamepad` covers the merge (an R2 hold plus an R3
+  latch keeps running after the trigger is released) and a second R3 press
+  clearing it.
 - **No snapshot format change.** The speed is host policy and never enters
   the save or its identity; a state saved at 3x restores at whatever the
   user has selected afterwards.
