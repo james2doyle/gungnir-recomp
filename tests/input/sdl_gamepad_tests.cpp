@@ -1,6 +1,7 @@
 // T11d SDL adapter contracts with a virtual gamepad: synthetic added/button/
 // axis/removed events, mapping through the profile, remap save and release.
 
+#include "input/host_controls.hpp"
 #include "input/input_state.hpp"
 #include "input/menu_navigation.hpp"
 #include "input/touch_overlay.hpp"
@@ -10,6 +11,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -68,8 +70,9 @@ void gamepad_contracts() {
         (1u << SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) |
         (1u << SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) | (1u << SDL_GAMEPAD_BUTTON_DPAD_UP) |
         (1u << SDL_GAMEPAD_BUTTON_DPAD_DOWN) | (1u << SDL_GAMEPAD_BUTTON_DPAD_LEFT) |
-        (1u << SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-    description.axis_mask = (1u << SDL_GAMEPAD_AXIS_LEFTX) | (1u << SDL_GAMEPAD_AXIS_LEFTY);
+        (1u << SDL_GAMEPAD_BUTTON_DPAD_RIGHT) | (1u << SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+    description.axis_mask = (1u << SDL_GAMEPAD_AXIS_LEFTX) | (1u << SDL_GAMEPAD_AXIS_LEFTY) |
+        (1u << SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
     description.name = "Gungnir Test Pad";
     const SDL_JoystickID id = SDL_AttachVirtualJoystick(&description);
     check(id != 0, "virtual joystick attaches");
@@ -81,7 +84,8 @@ void gamepad_contracts() {
     check(guid_text[0] != '\0', "virtual joystick has a GUID");
     const std::string mapping = std::string(guid_text) +
         ",Gungnir Test Pad,a:b0,b:b1,x:b2,y:b3,back:b4,guide:b5,start:b6,leftshoulder:b9,"
-        "rightshoulder:b10,dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,leftx:a0,lefty:a1,";
+        "rightshoulder:b10,dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,leftx:a0,lefty:a1,"
+        "rightstick:b8,righttrigger:a5,";
     check(SDL_AddGamepadMapping(mapping.c_str()) >= 0, "virtual mapping accepted");
 
     SdlGamepad gamepad("", directory);
@@ -146,6 +150,66 @@ void gamepad_contracts() {
 
     gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_LEFTX, 16384));
     check(gungnir::input::state().analog().x > 0.4f, "left x reaches the state");
+
+    gungnir::input::reset_host_controls();
+    check(!gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "fast-forward starts off on the pad");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, true));
+    check(gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "R3 toggles fast-forward on");
+    check((gungnir::input::state().buttons() & gungnir::input::kUserButtons) == 0u,
+          "R3 is host policy, not a guest button");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, false));
+    check(gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "releasing R3 leaves the latch on");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, true));
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, false));
+    check(!gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "a second R3 press toggles fast-forward off");
+
+    gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767));
+    check(gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "R2 holds fast-forward");
+    check((gungnir::input::state().buttons() & gungnir::input::kUserButtons) == 0u,
+          "R2 is host policy, not a guest button");
+    check(gungnir::input::state().analog().x > 0.4f,
+          "the right trigger leaves the left stick alone");
+    gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0));
+    check(!gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "releasing R2 returns to 1x");
+
+    // R2 is a hold and R3 a latch, so they merge: releasing the trigger keeps
+    // an R3-latched run alive, and a second R3 press ends it.
+    gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 32767));
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, true));
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, false));
+    gamepad.handle_event(axis_event(id, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0));
+    check(gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "an R3 latch keeps running after R2 is released");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, true));
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, false));
+    check(!gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "the next R3 press clears it");
+
+    // A profile that binds R3 keeps it as a guest button, so remapping a pad
+    // never loses a binding to the host control.
+    {
+        gungnir::input::GamepadProfile mapped = gungnir::input::default_gamepad_profile();
+        mapped.buttons[SDL_GAMEPAD_BUTTON_RIGHT_STICK] = gungnir::input::kLBit;
+        std::ofstream file(directory / (std::string(guid_text) + ".json"),
+            std::ios::binary | std::ios::trunc);
+        const std::string text = gungnir::input::to_json(mapped);
+        file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    }
+    gamepad.handle_event(device_event(SDL_EVENT_GAMEPAD_REMOVED, id));
+    gamepad.handle_event(device_event(SDL_EVENT_GAMEPAD_ADDED, id));
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, true));
+    check(!gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward),
+          "a mapped R3 stays out of fast-forward");
+    check((gungnir::input::state().buttons() & gungnir::input::kLBit) != 0u,
+          "a mapped R3 keeps its guest binding");
+    gamepad.handle_event(button_event(id, SDL_GAMEPAD_BUTTON_RIGHT_STICK, false));
+    gungnir::input::reset_host_controls();
 
     gamepad.begin_remap();
     for (int button = 0; button < 12; ++button)

@@ -10,6 +10,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include "audio/audio_mixer.hpp"
+#include "input/host_controls.hpp"
 #include "input/input_state.hpp"
 #include "input/menu_navigation.hpp"
 #include "input/sdl_input.hpp"
@@ -354,6 +355,9 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
         if (state->sdl_input != nullptr) state->sdl_input->release_held();
         if (state->gamepad != nullptr) state->gamepad->release_all();
         gungnir::input::state().release_all();
+        // A held trigger must not survive the pause; a latched fast-forward is
+        // the user's choice and does.
+        gungnir::input::host_controls().release_holds();
         state->background.store(true);
         if (state->session != nullptr) {
             state->session->request_stop();
@@ -372,6 +376,7 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
         if (state->sdl_input != nullptr) state->sdl_input->release_held();
         if (state->gamepad != nullptr) state->gamepad->release_all();
         gungnir::input::state().release_all();
+        gungnir::input::host_controls().release_holds();
     }
     if (event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         state->background.store(false);
@@ -681,6 +686,17 @@ Java_com_gungnir_recomp_GungnirActivity_nativeMenuPoll(JNIEnv *, jobject) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_input_HostBridge_fastForwardActive(JNIEnv *, jclass) {
+    return gungnir::input::host_controls().active(gungnir::input::HostControl::FastForward)
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_gungnir_recomp_input_HostBridge_fastForwardSpeed(JNIEnv *, jclass) {
+    return static_cast<jfloat>(gungnir::input::kFastForwardSpeed);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_gungnir_recomp_input_GamepadBridge_active(JNIEnv *, jclass) {
     auto *gamepad = g_gamepad.load();
     return gamepad != nullptr && gamepad->active() ? JNI_TRUE : JNI_FALSE;
@@ -866,6 +882,12 @@ int main(int, char **) {
     gungnir::audio::set_audio_sink(audio_sink);
 
     const bool debug_quad = intent_long("debug_quad", 0) != 0;
+    if (intent_long("fast_forward", 0) != 0) {
+        // QA form: start latched so a bounded run can measure 3x progress.
+        gungnir::input::host_controls().latch(
+            gungnir::input::HostControl::FastForward, true);
+        GUNGNIR_LOGI("fast_forward intent=on\n");
+    }
     gungnir::ge::FrameQueue frame_queue;
     gungnir::session::GameSession session;
     std::thread session_thread;
@@ -945,6 +967,7 @@ int main(int, char **) {
 
     bool running = true;
     bool first_frame = true;
+    bool fast_forward_active = false;
     std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;
@@ -980,6 +1003,17 @@ int main(int, char **) {
             }
         }
         if (!running) break;
+
+        // Fast-forward is host pacing policy. Mute the mixer while it is on so
+        // the guest's faster audio never overruns the device ring.
+        const bool fast_forward = gungnir::input::host_controls().active(
+            gungnir::input::HostControl::FastForward);
+        if (fast_forward != fast_forward_active) {
+            fast_forward_active = fast_forward;
+            mixer.set_muted(fast_forward);
+            GUNGNIR_LOGI("fast_forward active=%d speed=%.2f\n", fast_forward ? 1 : 0,
+                         gungnir::input::host_controls().speed());
+        }
 
         if (lifecycle.background.load()) {
             SDL_Delay(16);
@@ -1074,11 +1108,12 @@ int main(int, char **) {
         if (now_ticks >= next_audio_stats) {
             next_audio_stats = now_ticks + 5000;
             const gungnir::audio::MixerStats stats = mixer.stats();
-            GUNGNIR_LOGI("audio_mixer pulled=%llu underrun=%llu submitted=%llu overruns=%llu rejected=%llu "
-                         "peak=%u xruns=%d\n",
+            GUNGNIR_LOGI("audio_mixer pulled=%llu underrun=%llu submitted=%llu muted=%llu overruns=%llu "
+                         "rejected=%llu peak=%u xruns=%d\n",
                          static_cast<unsigned long long>(stats.frames_pulled),
                          static_cast<unsigned long long>(stats.underrun_frames),
                          static_cast<unsigned long long>(stats.submitted_buffers),
+                         static_cast<unsigned long long>(stats.muted_buffers),
                          static_cast<unsigned long long>(stats.overruns),
                          static_cast<unsigned long long>(stats.rejected_buffers), stats.peak,
                          audio_out != nullptr ? audio_out->xruns() : 0);

@@ -2,6 +2,7 @@
 
 #if defined(GUNGNIR_HAVE_SDL3)
 
+#include "input/host_controls.hpp"
 #include "input/input_state.hpp"
 #include "input/menu_navigation.hpp"
 
@@ -92,6 +93,14 @@ bool SdlGamepad::handle_event(const SDL_Event &event) {
         }
         if (remap_.active()) {
             if (event.gbutton.down) remap_.button(event.gbutton.button);
+        } else if (!gungnir::input::menu_navigation().open() &&
+                   event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK &&
+                   state_.profile().buttons[SDL_GAMEPAD_BUTTON_RIGHT_STICK] == 0u) {
+            // R3 is not a PSP button: while the profile leaves it unbound, a
+            // press toggles fast-forward (R2 is the momentary hold), and a pad
+            // that maps R3 keeps its binding.
+            if (event.gbutton.down)
+                gungnir::input::host_controls().toggle(gungnir::input::HostControl::FastForward);
         } else if (event.gbutton.down) {
             state_.button_down(event.gbutton.button);
         } else {
@@ -101,10 +110,18 @@ bool SdlGamepad::handle_event(const SDL_Event &event) {
         return true;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
         if (pad_ == nullptr || event.gaxis.which != id_) return true;
-        if (remap_.active())
+        if (remap_.active()) {
             remap_.axis(event.gaxis.axis, static_cast<float>(event.gaxis.value) / 32767.0f);
-        else
+        } else {
+            // The right trigger is the R2 fast-forward hold, so it never
+            // reaches the guest unless a profile uses it as a stick axis.
             state_.axis(event.gaxis.axis, static_cast<float>(event.gaxis.value) / 32767.0f);
+            if (event.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER &&
+                !gungnir::input::menu_navigation().open()) {
+                gungnir::input::host_controls().hold(
+                    gungnir::input::HostControl::FastForward, event.gaxis.value > 16384);
+            }
+        }
         publish();
         return true;
     default:
@@ -140,6 +157,7 @@ void SdlGamepad::open(SDL_JoystickID id) {
 void SdlGamepad::close() {
     if (pad_ == nullptr) return;
     state_.release_all();
+    gungnir::input::host_controls().release_holds();
     publish();
     SDL_Log("gamepad_removed name=%s", name_.c_str());
     SDL_CloseGamepad(pad_);
@@ -169,9 +187,11 @@ bool SdlGamepad::needs_remap() const {
     return !mapped;
 }
 
-void SdlGamepad::release_all() {    std::lock_guard<std::mutex> lock(mutex_);
+void SdlGamepad::release_all() {
+    std::lock_guard<std::mutex> lock(mutex_);
     state_.release_all();
     remap_.cancel();
+    gungnir::input::host_controls().release_holds();
     publish();
 }
 

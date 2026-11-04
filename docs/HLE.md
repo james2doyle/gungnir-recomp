@@ -235,6 +235,15 @@ The kernel/HLE design is adopted from TeamGDB/Yakumo (MIT, pinned
 Pacing is disabled in unit fixtures (`Kernel::set_pacing_enabled(false)`) so
 two runs see identical virtual time; interactive boots keep 59.94 Hz pacing.
 
+Interactive boots hold the virtual clock to real time at a host speed multiple
+(`Kernel::speed()`): 1.0 nominal, `kFastForwardSpeed` (3.0) while fast-forward
+is held or latched. `Kernel::pace_step()` is the pure decision (how long to
+sleep, whether to drop the debt), so the multiple is tested without sleeping;
+a speed change rebases the hold instead of charging the new multiple for time
+already spent. The vblank cadence, VTimers and every emulated deadline are
+unchanged: fast-forward buys wall time, not guest frames, and a snapshot never
+records the multiple.
+
 ## Commands
 
 ```sh

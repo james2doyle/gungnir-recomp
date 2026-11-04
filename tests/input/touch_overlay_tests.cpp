@@ -2,8 +2,12 @@
 // multi-pointer hit-testing, floating stick, d-pad directions, edit clamping
 // and the versioned JSON layout.
 
+#include "input/host_controls.hpp"
+#include "input/input_state.hpp"
 #include "input/touch_layout_store.hpp"
 #include "input/touch_overlay.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -17,6 +21,7 @@
 namespace {
 
 using gungnir::input::Analog;
+using gungnir::input::HostControl;
 using gungnir::input::TouchControl;
 using gungnir::input::TouchInsets;
 using gungnir::input::TouchOverlay;
@@ -239,6 +244,84 @@ void json_round_trip() {
           "reloaded radius matches");
 }
 
+void fast_forward_control() {
+    gungnir::input::reset_host_controls();
+    gungnir::input::reset_state();
+    TouchOverlay overlay;
+    overlay.set_viewport(1280, 720, TouchInsets{});
+    const auto ff = overlay.placement(TouchControl::FastForward);
+    check(near(ff.cx, 0.43f) && near(ff.cy, 0.08f), "fast-forward defaults next to Select");
+    check(ff.cx < overlay.placement(TouchControl::Select).cx, "fast-forward sits left of Select");
+
+    const float x = 0.43f * 1280.0f;
+    const float y = 0.08f * 720.0f;
+    overlay.publish();
+    check(gungnir::input::state().buttons() == 0u, "an idle overlay holds no guest button");
+
+    press(overlay, 11, x, y);
+    check(gungnir::input::host_controls().active(HostControl::FastForward),
+          "a tap latches fast-forward");
+    check(overlay.buttons() == 0u, "the fast-forward tap is not a guest button");
+    overlay.publish();
+    check(gungnir::input::state().buttons() == 0u, "publishing it holds no guest button");
+    release(overlay, 11);
+    check(snapshot_pressed(overlay, TouchControl::FastForward),
+          "the button draws active while latched");
+
+    press(overlay, 12, x, y);
+    release(overlay, 12);
+    check(!gungnir::input::host_controls().active(HostControl::FastForward),
+          "a second tap returns to 1x");
+    check(!snapshot_pressed(overlay, TouchControl::FastForward),
+          "the button stops drawing active");
+
+    gungnir::input::host_controls().hold(HostControl::FastForward, true);
+    check(snapshot_pressed(overlay, TouchControl::FastForward),
+          "a held gamepad source lights the same button");
+    gungnir::input::host_controls().hold(HostControl::FastForward, false);
+
+    press(overlay, 13, 0.82f * 1280.0f, 0.74f * 720.0f);
+    press(overlay, 14, x, y);
+    check(overlay.buttons() == gungnir::input::kCrossBit,
+          "tapping fast-forward leaves a held button alone");
+    release(overlay, 14);
+    release(overlay, 13);
+    gungnir::input::reset_host_controls();
+    gungnir::input::reset_state();
+}
+
+void layout_v1_migrates() {
+    TouchOverlay overlay;
+    overlay.set_viewport(1280, 720, TouchInsets{});
+    overlay.move(TouchControl::Cross, -40.0f, 30.0f);
+    const float cross_cx = overlay.placement(TouchControl::Cross).cx;
+
+    nlohmann::json doc = nlohmann::json::parse(overlay.to_json());
+    check(doc["version"].get<int>() == 2, "the layout saves the current schema version");
+    doc["version"] = 1;
+    for (auto it = doc["controls"].begin(); it != doc["controls"].end(); ++it) {
+        if ((*it)["control"] == "fast_forward") {
+            doc["controls"].erase(it);
+            break;
+        }
+    }
+    check(doc["controls"].size() == 10u, "a version 1 layout has no fast-forward entry");
+
+    TouchOverlay migrated;
+    migrated.set_viewport(1280, 720, TouchInsets{});
+    check(migrated.load_json(doc.dump()) == TouchOverlay::LoadStatus::Ok,
+          "a version 1 layout still loads");
+    check(near(migrated.placement(TouchControl::Cross).cx, cross_cx),
+          "version 1 edits survive the migration");
+    check(near(migrated.placement(TouchControl::FastForward).cx, 0.43f),
+          "a version 1 layout gives fast-forward its default placement");
+
+    doc["controls"].erase(doc["controls"].begin());
+    TouchOverlay broken;
+    check(broken.load_json(doc.dump()) == TouchOverlay::LoadStatus::Corrupt,
+          "a version 1 layout missing a real control is corrupt");
+}
+
 void store_round_trip() {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / "gungnir-touch-layout-test";
@@ -320,6 +403,8 @@ int main() {
         edit_move_and_resize();
         json_round_trip();
         json_fallbacks();
+        fast_forward_control();
+        layout_v1_migrates();
         store_round_trip();
     } catch (const std::exception &error) {
         std::cerr << "touch_overlay_tests: FAILED: " << error.what() << "\n";

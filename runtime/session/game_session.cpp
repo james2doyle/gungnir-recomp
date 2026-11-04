@@ -13,6 +13,8 @@
 #include "hle/hle_module.hpp"
 #include "hle/kernel.hpp"
 
+#include "input/host_controls.hpp"
+
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/elf32.hpp"
@@ -229,6 +231,11 @@ bool GameSession::start(const Config &config, gungnir::audio::AudioSink *sink, s
         gungnir::hle::kernel() = gungnir::hle::Kernel{};
         gungnir::hle::kernel().install(*impl_->runtime, module->gp, impl_->image_end);
         gungnir::hle::kernel().set_pacing_enabled(config.pacing);
+        // Fast-forward is a host pacing multiple, not a guest change: the
+        // vblank cadence and every emulated deadline stay as they are, and
+        // only the hold against real time shrinks.
+        gungnir::hle::kernel().set_speed_provider(
+            [] { return gungnir::input::host_controls().speed(); });
         gungnir::hle::reset_media_state();
         gungnir::hle::reset_modules();
         gungnir::hle::register_main_module(module->name, config.load_base,

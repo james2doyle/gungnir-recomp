@@ -24,7 +24,7 @@ milestone QA records.
 | M2 | Gungnir analyzed, AOT generated locally | **closed** (T5; `data/milestones.json`) |
 | M3 | Bounded boot on Linux desktop | **closed** (T6+T7; ledger: `data/milestones.json`) |
 | M4 | **Title screen on adb device** | **in progress** (title, menus, and real gameplay into battles verified on device, including an in-game save/load round trip; milestone QA records pending) |
-| M5 | Hardening: audio, saves, texture upscaling, driver picker, perf | **in progress** (memory-stick saves and host save states working; battle BGM/stall fixes in; perf profiling ongoing) |
+| M5 | Hardening: audio, saves, fast-forward, texture upscaling, driver picker, perf | **in progress** (memory-stick saves and host save states working; battle BGM/stall fixes in; fast-forward implemented and awaiting its device cell; perf profiling ongoing) |
 
 Analysis details and the current census: [`docs/ANALYSIS.md`](docs/ANALYSIS.md);
 bring-up findings journal: [`docs/BRINGUP.md`](docs/BRINGUP.md).

@@ -181,7 +181,7 @@ Expected on device, once the session starts:
 session_start elf=...
 first frame <width>x<height>
 guest_frame=<n> draws=<n> vertices=<n>
-audio_mixer pulled=<n> underrun=<n> peak=<n> xruns=<n>
+audio_mixer pulled=<n> underrun=<n> submitted=<n> muted=<n> overruns=<n> peak=<n> xruns=<n>
 ```
 
 To capture evidence, use `scripts/android/screenshot.sh`; it writes a

@@ -55,6 +55,10 @@ changes what snapshots mean); the config hash binds `load_base` and
 - Gap-log dedup sets, draw/gap sinks, frame sinks, flip observers, vblank
   hooks, pacing bases: host closures or derived logs, re-established by the
   host or restarted empty.
+- Fast-forward hold/latch and the pacing multiple: host execution policy,
+  like the pacing bases. A snapshot never records it and loading one keeps
+  whatever the user currently has selected, so a state saved at 3x restores
+  at 1x (or the reverse) without touching the guest clock.
 - The disc image and the memory-stick directory: session config. A file
   that no longer resolves fails the load (`snapshot_open_failed`,
   `snapshot_bad_config`) instead of loading a half state.

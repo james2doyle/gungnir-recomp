@@ -34,7 +34,8 @@ public final class TouchOverlayView extends View {
     private static final int R = 7;
     private static final int START = 8;
     private static final int SELECT = 9;
-    private static final int CONTROL_COUNT = 10;
+    private static final int FAST_FORWARD = 10;
+    private static final int CONTROL_COUNT = 11;
     private static final int STRIDE = 5;
 
     private final Paint outline = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -47,6 +48,7 @@ public final class TouchOverlayView extends View {
     private boolean editing;
     private boolean suppressed;
     private boolean remapToastShown;
+    private boolean fastForwardDrawn;
     private final Runnable gamepadPoll = new Runnable() {
         @Override
         public void run() {
@@ -54,6 +56,13 @@ public final class TouchOverlayView extends View {
             if (!suppressed) {
                 int desired = pad ? INVISIBLE : VISIBLE;
                 if (getVisibility() != desired) setVisibility(desired);
+            }
+            // The FF ring lights for a held gamepad trigger too, which arrives
+            // without a touch event to redraw.
+            boolean fastForward = HostBridge.fastForwardActive();
+            if (fastForward != fastForwardDrawn) {
+                fastForwardDrawn = fastForward;
+                invalidate();
             }
             if (!pad) {
                 remapToastShown = false;
@@ -275,6 +284,9 @@ public final class TouchOverlayView extends View {
                     break;
                 case SELECT:
                     drawButton(canvas, cx, cy, radius, pressed, "SEL");
+                    break;
+                case FAST_FORWARD:
+                    drawButton(canvas, cx, cy, radius, pressed, "FF");
                     break;
                 default:
                     break;

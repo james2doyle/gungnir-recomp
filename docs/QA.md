@@ -24,9 +24,16 @@ recorded. PPSSPP is an oracle only.
 7. Save/load: memstick save then load through the game's own path; confirm
    the round trip.
 8. Audio smoke: music/SFX audible, no `underrun` growth, no xruns.
-9. Soak: 30 minutes of attended play on at least one physical device;
+9. Fast-forward: hold R2, press R3 (a toggle), and tap the FF ring next to
+   SELECT (also a toggle).
+   Progress must run about 3x per wall second, the ring lights and the
+   `Fast-forward 3x` toast shows, audio drops without `overruns`/`xruns`
+   growth (mixer `underrun` and `muted` grow, which is the expected mute
+   shape), and a latched state survives background/foreground. A held R2 must
+   not survive the pause.
+10. Soak: 30 minutes of attended play on at least one physical device;
    record crash/thermal/audio counters, not frames.
-10. Findings: fix red-first where host-testable (reproducing test before
+11. Findings: fix red-first where host-testable (reproducing test before
     the fix); file device-only defects as tracked dex tasks and link them
     from the session report.
 
@@ -50,10 +57,17 @@ supply a field says `unknown`.
 | physical Adreno touch menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno suspend/resume | 2026-11-03-m2102k1ac-resume.md | SIGNED |
+| physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
 | physical Adreno audio smoke | TBD | PENDING |
 | non-Adreno/handheld (optional, if available) | TBD | PENDING |
+
+Note 2026-11-03 (fast-forward cell): the fast-forward report signs the touch,
+pacing, audio and save/load half; the gamepad R2/R3 half is a named gap (no
+pad attached). The same session found that backgrounding ends the guest
+session (`eqomlp5a`), so the "rendering" row of the suspend/resume report
+above needs re-running before that cell is trusted again.
 
 ## Evidence and sign-off template
 

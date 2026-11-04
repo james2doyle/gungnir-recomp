@@ -140,6 +140,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/input/gamepad_profile.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_remap.cpp"
         "${ARG_ROOT}/runtime/input/gamepad_state.cpp"
+        "${ARG_ROOT}/runtime/input/host_controls.cpp"
         "${ARG_ROOT}/runtime/input/input_state.cpp"
         "${ARG_ROOT}/runtime/input/keyboard_map.cpp"
         "${ARG_ROOT}/runtime/input/menu_navigation.cpp"

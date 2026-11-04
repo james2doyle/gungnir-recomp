@@ -36,6 +36,15 @@ dropping PCM.
   a bad buffer (a malformed buffer increments `rejected_buffers` and still
   stops the run loudly);
 - `peak` is the largest magnitude actually sent to the device;
+- `set_muted(true)` (fast-forward) drops submissions instead of mixing them:
+  the guest produces audio faster than the device plays it, so each dropped
+  buffer increments `muted_buffers` and the queued timeline is cleared. It is
+  never a `rejected_buffers` or an `overrun`, because the buffers are valid
+  and the ring is not full. `underrun_frames` keeps growing while muted,
+  because the device is served the silence the mixer has; that count is the
+  expected shape of a mute, not a fault. Unmuting restarts each channel one
+  lead ahead of the device, so a stale timeline never plays after a
+  fast-forward burst;
 - `reset()` clears the timeline and counters.
 
 The device layer asks for a fixed block (typically 256-1024 frames), so the

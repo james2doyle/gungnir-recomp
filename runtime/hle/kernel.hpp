@@ -276,12 +276,15 @@ public:
     void resync_real_time() noexcept { pacing_started_ = false; }
     // The moment of real time the hold to real time maps `virtual_us` of
     // emulated time to; empty while emulated time is not held to real time.
+    // The span shrinks with the pacing speed, so a fast-forward control keeps
+    // interpolation honest instead of presenting at the wrong moment.
     [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> real_time_of(
         std::uint64_t virtual_us) const noexcept {
         if (!pacing_enabled_ || !pacing_started_) return std::nullopt;
+        const std::int64_t span =
+            static_cast<std::int64_t>(virtual_us) - static_cast<std::int64_t>(pacing_virtual_base_);
         return pacing_real_base_ +
-            std::chrono::microseconds(
-                static_cast<std::int64_t>(virtual_us) - static_cast<std::int64_t>(pacing_virtual_base_));
+            std::chrono::microseconds(paced_real_us(span, pacing_speed_));
     }
     // Frame interpolation presents between the game's flips from two places.
     // The idle hook runs while the kernel waits for real time to catch up
@@ -342,6 +345,27 @@ public:
     // the virtual clock held to real time at 59.94 Hz.
     void set_pacing_enabled(bool enabled) noexcept { pacing_enabled_ = enabled; pacing_started_ = false; }
     [[nodiscard]] bool pacing_enabled() const noexcept { return pacing_enabled_; }
+
+    // Host pacing policy. Emulated time is held to real time at this multiple
+    // of PSP speed, so fast-forward runs the game ahead without changing what
+    // the guest sees. Anything not positive is nominal.
+    using SpeedProvider = std::function<double()>;
+    void set_speed_provider(SpeedProvider provider) { speed_provider_ = std::move(provider); }
+    [[nodiscard]] double speed() const;
+
+    // One pacing hold: how long the emulation thread waits for real time, and
+    // whether the accumulated debt is dropped instead of raced to make up.
+    struct PaceStep {
+        std::int64_t sleep_us{};
+        bool rebase{};
+    };
+    // The hold for `virtual_us` of emulated time that took `real_us` of wall
+    // clock at `speed`. Pure, so the multiplier is testable without sleeping.
+    [[nodiscard]] static PaceStep pace_step(
+        std::int64_t virtual_us, std::int64_t real_us, double speed) noexcept;
+    // Real microseconds `virtual_us` of emulated time occupies at `speed`.
+    [[nodiscard]] static std::int64_t paced_real_us(
+        std::int64_t virtual_us, double speed) noexcept;
 
     // Synchronization objects ---------------------------------------------
     std::map<SceUID, Semaphore> semaphores;
@@ -456,6 +480,9 @@ private:
     bool pacing_enabled_{true};
     std::chrono::steady_clock::time_point pacing_real_base_{};
     std::uint64_t pacing_virtual_base_{};
+    SpeedProvider speed_provider_;
+    // Last sampled provider value; a change rebases the hold.
+    double pacing_speed_{1.0};
     IdleHook idle_hook_;
     PollHook poll_hook_;
     std::uint64_t next_vblank_us_{kVBlankPeriodUs};

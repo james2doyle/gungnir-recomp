@@ -53,6 +53,12 @@ bool MixerSink::submit(const AudioBuffer &buffer) {
     }
 
     std::lock_guard lock(mutex_);
+    if (muted_) {
+        // Fast-forward: the guest produces audio faster than the device plays
+        // it. Drop it, counted, instead of overrunning the ring.
+        ++stats_.muted_buffers;
+        return true;
+    }
     if (write_head_ > read_ && write_head_ - read_ >= capacity_frames_) {
         ++stats_.overruns;
         reset_locked();
@@ -122,6 +128,18 @@ void MixerSink::reset() {
     std::lock_guard lock(mutex_);
     reset_locked();
     stats_ = {};
+}
+
+void MixerSink::set_muted(bool muted) {
+    std::lock_guard lock(mutex_);
+    if (muted_ == muted) return;
+    muted_ = muted;
+    if (muted_) reset_locked();
+}
+
+bool MixerSink::muted() const {
+    std::lock_guard lock(mutex_);
+    return muted_;
 }
 
 MixerStats MixerSink::stats() const {

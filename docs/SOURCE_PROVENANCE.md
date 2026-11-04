@@ -584,3 +584,20 @@ is modelled because the title only reads GPI.
   carried to the renderer; full-screen 2D effects stretch with the scene;
   scenes that render into a 480-wide target stay at 480 and are counted as
   a gap. No third-party code copied (AGENTS #0).
+
+### Fast-forward reference review (2026-11-03)
+
+- `hrydgard/ppsspp` (GPL-2.0-or-later): `Core/HLE/sceDisplay.cpp` keeps a
+  host flip limiter for fast-forward and `Core/HW/StereoResampler.cpp`
+  shrinks its buffer cap while fast-forwarding so audio is dropped without
+  counting an overrun. `UI/GamepadEmu.cpp` places a dedicated
+  `touchFastForwardKey` button next to the standard controls, and
+  `Core/KeyMap.cpp` registers fast-forward as a virtual key. Behavioral
+  reference only; no code copied.
+- Decision: fast-forward is a host pacing multiple over an unchanged 59.94 Hz
+  guest clock, never a guest-clock or vblank change. Audio is dropped and
+  counted (`muted_buffers`) with the timeline restarted on unmute, matching
+  the resampler's "don't fill the buffer while fast-forwarding" reasoning
+  without adopting its resampler. Gamepad R2/R3 and a dedicated touch ring
+  drive it; the ring's latch and the trigger's hold merge, and the pad never
+  takes a binding a profile assigns. No third-party code copied (AGENTS #0).

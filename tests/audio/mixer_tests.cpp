@@ -111,6 +111,31 @@ void late_channel_resyncs() {
         "a resynced channel never lands in the past");
 }
 
+void muted_submissions_are_counted_and_silent() {
+    MixerSink sink(64u, 0u);
+    const std::vector<std::int16_t> stereo = {100, -100, 200, -200};
+    check(sink.submit(buffer(stereo, 2u)), "a buffer accepted before muting");
+    check(sink.available_frames() == 2u, "the unmuted buffer queues");
+
+    sink.set_muted(true);
+    check(sink.muted(), "the mixer reports the mute");
+    check(sink.available_frames() == 0u, "muting drops the audio already queued");
+    check(sink.submit(buffer(stereo, 2u)), "a muted submission is accepted, not rejected");
+    check(sink.stats().muted_buffers == 1u, "muted buffers are counted");
+    check(sink.stats().submitted_buffers == 1u, "muted buffers do not reach the mix");
+    check(sink.available_frames() == 0u, "muted buffers queue nothing");
+    check(sink.stats().overruns == 0u, "muting is never counted as an overrun");
+
+    sink.set_muted(false);
+    check(!sink.muted(), "the mixer clears the mute");
+    check(sink.submit(buffer(stereo, 2u)), "a buffer accepted after unmuting");
+    check(sink.stats().muted_buffers == 1u, "unmuting stops the mute count");
+    std::array<std::int16_t, 8> output{};
+    sink.pull(output);
+    check(output[0] == 100 && output[1] == -100,
+        "the first unmuted buffer plays from the restarted timeline");
+}
+
 } // namespace
 
 int main() {
@@ -118,6 +143,7 @@ int main() {
     channels_mix_instead_of_queueing();
     overflow_restarts_the_timeline();
     late_channel_resyncs();
+    muted_submissions_are_counted_and_silent();
     if (failures != 0) {
         std::cerr << "audio_mixer_tests: " << failures << " failure(s)\n";
         return 1;

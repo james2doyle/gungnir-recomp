@@ -1554,6 +1554,42 @@ void async_io_contracts(const std::filesystem::path &iso, const std::filesystem:
     check(io("sceIoClose", {seek_fd}) == 0u, "seek fixture closes");
 }
 
+// Fast-forward pacing: the hold maps emulated time onto real time at the
+// host's speed multiple, so 3x advances three seconds of guest time per
+// second of wall clock, and a stale debt is dropped instead of raced.
+void pacing_contracts() {
+    const Kernel::PaceStep nominal = Kernel::pace_step(30'000, 10'000, 1.0);
+    check(nominal.sleep_us == 20'000, "nominal pacing holds for the remaining 20 ms");
+    check(!nominal.rebase, "nominal pacing keeps the base");
+
+    const Kernel::PaceStep fast = Kernel::pace_step(30'000, 10'000, 3.0);
+    check(fast.sleep_us == 0, "3x runs 30 ms of emulated time in 10 ms of wall clock");
+    check(Kernel::pace_step(30'000, 5'000, 3.0).sleep_us == 5'000,
+        "3x holds only the wall time the guest is still ahead by");
+    check(Kernel::pace_step(30'000, 2'000, 3.0).sleep_us == 8'000,
+        "a faster speed shortens the hold");
+    check(Kernel::pace_step(30'000, 30'000, 3.0).sleep_us == 0,
+        "3x never holds once real time has overtaken the scaled span");
+
+    check(Kernel::pace_step(500'000, 0, 1.0).sleep_us == 100'000, "the hold is capped at 100 ms");
+    check(Kernel::pace_step(500'000, 0, 3.0).sleep_us == 100'000,
+        "the cap does not change with speed");
+    check(Kernel::pace_step(999, 0, 1.0).sleep_us == 0, "a sub-millisecond lead does not sleep");
+    check(Kernel::pace_step(0, 200'000, 1.0).rebase, "a long lag drops the debt");
+    check(Kernel::pace_step(0, 200'000, 3.0).rebase, "the lag test scales with speed");
+
+    check(Kernel::paced_real_us(30'000, 1.0) == 30'000, "nominal speed keeps the span");
+    check(Kernel::paced_real_us(30'000, 3.0) == 10'000, "3x maps a span to a third of the wall time");
+    check(Kernel::paced_real_us(30'000, 0.0) == 30'000, "a non-positive speed falls back to nominal");
+
+    Kernel probe;
+    check(probe.speed() == 1.0, "a kernel without a provider runs at nominal speed");
+    probe.set_speed_provider([] { return 3.0; });
+    check(probe.speed() == 3.0, "the kernel samples the host speed");
+    probe.set_speed_provider([] { return -1.0; });
+    check(probe.speed() == 1.0, "a non-positive host speed falls back to nominal");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1590,6 +1626,7 @@ int main(int argc, char **argv) {
         atrac_contracts();
         lwmutex_contracts();
         utility_dialog_contracts();
+        pacing_contracts();
         if (!memory_stick.empty()) {
             std::filesystem::create_directories(memory_stick);
             if (!iso.empty()) {

@@ -32,6 +32,7 @@ add_library(gungnir_input STATIC
     runtime/input/gamepad_profile.cpp
     runtime/input/gamepad_remap.cpp
     runtime/input/gamepad_state.cpp
+    runtime/input/host_controls.cpp
     runtime/input/input_state.cpp
     runtime/input/keyboard_map.cpp
     runtime/input/menu_navigation.cpp
@@ -46,8 +47,14 @@ target_link_libraries(input_tests PRIVATE gungnir_input)
 set_target_properties(input_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 
+add_executable(host_controls_tests tests/input/host_controls_tests.cpp)
+target_link_libraries(host_controls_tests PRIVATE gungnir_input)
+set_target_properties(host_controls_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
 add_executable(touch_overlay_tests tests/input/touch_overlay_tests.cpp)
 target_link_libraries(touch_overlay_tests PRIVATE gungnir_input)
+target_include_directories(touch_overlay_tests PRIVATE ${CMAKE_SOURCE_DIR}/third_party/nlohmann-json)
 set_target_properties(touch_overlay_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
 

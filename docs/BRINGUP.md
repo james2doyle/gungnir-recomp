@@ -1364,3 +1364,32 @@ override and request write-back, `kModeListSave = 5`, red-first host test.
 Device proof: menu save plus menu load plus reset-and-load-from-title all on
 the clean build; `ULUS10592GUN9THSTORY00/` (PARAM.SFO, STORY, icons) verified
 on the memstick via `run-as`.
+
+## 2026-11-03 — Backgrounding ends the guest session (device, open)
+
+**Symptom.** Press HOME while a session runs, then bring the activity back:
+`lifecycle_paused`, the worker prints its `session_unbound` summary, then
+`lifecycle_resumed 3063x1335` on return — with no `session_start` and no
+further `guest_frame` lines. The screen keeps the last presented frame
+indefinitely. Observed during the fast-forward QA cell
+(`docs/qa/2026-11-03-m2102k1ac-fastforward.md`), at 17:28:03 local.
+
+**Falsification.** Not a surface or rendering recovery problem: the swapchain
+is recreated on resume (`lifecycle_resumed <w>x<h>`), the touch overlay and
+the host fast-forward control keep working, and only guest work stops. Not a
+fast-forward interaction: the stop is logged 227 ms after
+`lifecycle_paused` and 3 s before the foreground event, and the host control
+never touches the session thread.
+
+**Root cause.** `LifecycleState::lifecycle_watch` calls
+`session->request_stop()` on `SDL_EVENT_WILL_ENTER_BACKGROUND`
+(`android/app/src/main/cpp/main.cpp`). `run_session_worker` runs
+`session.run()` exactly once and the foreground branch only resumes audio and
+rebuilds the surface, so nothing relaunches or resumes the guest.
+
+**Regression / gap.** Filed as `eqomlp5a`; no host test yet because the fix is
+a policy choice (keep running while backgrounded vs. resume from a host
+snapshot on foreground) and either path needs its own seam. The rendering row
+of `docs/qa/2026-11-03-m2102k1ac-resume.md` is under re-check: a
+`grep -c guest_frame` over the log buffer also counts pre-pause lines, and
+this observation contradicts its "guest frames kept flowing" claim.

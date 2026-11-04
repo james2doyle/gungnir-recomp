@@ -95,6 +95,7 @@ adb shell am start -n com.gungnir.recomp/.GungnirActivity \
 | `stall_seconds` | 30 | report a guest thread that stops progressing for this long; 0 disables |
 | `stop_at_flip` | false | stop at the first `sceDisplaySetFrameBuf` |
 | `pacing` | true | pace the guest clock to real time (59.94 Hz vblanks) |
+| `fast_forward` | false | start with fast-forward latched (QA form; 3x pacing, audio muted) |
 | `debug_quad` | false | draw the synthetic test quad instead of the guest |
 | `audio_smoke` | false | run the AAudio/SAS smoke instead of a game session |
 | `audio_smoke_ms` | 500 | smoke duration |
@@ -106,11 +107,12 @@ audio_output_ready
 session_start elf=...
 first frame <width>x<height>
 guest_frame=<n> draws=<n> vertices=<n> ge_gaps=<n>
-audio_mixer pulled=<n> underrun=<n> submitted=<n> overruns=<n> rejected=<n> peak=<n> xruns=<n>
+audio_mixer pulled=<n> underrun=<n> submitted=<n> muted=<n> overruns=<n> rejected=<n> peak=<n> xruns=<n>
 session_stop cause=<first_flip|dispatch_limit|wall_clock|missing_import|host_stop|guest_stop|scheduler_deadlock> dispatches=<n> flips=<n> imports_bound=<n> imports_total=<n> stop_pc=<addr>
 session_stop_reason=<reason>
 session_unbound=<library>:<nid>          (one line per unbound import)
 guest_stall seconds=<n> flips=<n> inflight=<library::name|none> last_import=<library::name|none>
+fast_forward active=<0|1> speed=<n>          (on every change)
 ```
 
 `imports_unbound` is the number of counted gaps (the JSON report lists them);
@@ -118,6 +120,11 @@ guest_stall seconds=<n> flips=<n> inflight=<library::name|none> last_import=<lib
 its library and NID. `overruns` and
 `rejected` describe the audio mixer (a rejected buffer is a programming error);
 `xruns` is the AAudio underrun count from the driver.
+`fast_forward active=1` means the pacing hold is running at 3x and the mixer
+is dropping the guest's audio (`muted_buffers` grows, `overruns` does not).
+A bounded run with `--ez fast_forward true` advances about three times as
+much guest progress per wall second as an unpaced-at-1x run, which is the
+host half of the device check; the phone measurement stays with QA.
 
 `guest_stall` is emitted at most once per session by the frame watchdog: it
 fires when no guest frame reaches the display for `stall_seconds`, which covers

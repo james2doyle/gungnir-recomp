@@ -149,6 +149,7 @@ python3 -m unittest tests.test_touch_overlay -v    # T11b layout/pointer/edit/JS
 python3 -m unittest tests.test_touch_haptics -v    # T11c touch-haptics policy
 python3 -m unittest tests.test_gamepad -v          # T11d profiles/state/remap
 python3 -m unittest tests.test_sdl_gamepad -v      # T11d virtual-gamepad adapter
+python3 -m unittest tests.test_host_controls -v    # fast-forward hold/latch + kernel pacing multiple
 python3 -m unittest tests.test_input_suite -v      # consolidated T11 gate + docs
 python3 -m unittest tests.test_audio_mixer -v      # T12a mixer ring/volumes/underrun
 python3 -m unittest tests.test_sdl_audio -v        # T12a SDL3 tone smoke

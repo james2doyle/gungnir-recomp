@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -508,33 +509,64 @@ bool Kernel::pace_to_real_time() {
     }
     using Clock = std::chrono::steady_clock;
     const Clock::time_point now = Clock::now();
-    if (!pacing_started_) {
+    const double speed = this->speed();
+    if (!pacing_started_ || speed != pacing_speed_) {
+        // Starting, or the host changed the multiple: hold from this moment
+        // rather than charging the new speed for time already spent.
         pacing_started_ = true;
+        pacing_speed_ = speed;
         pacing_real_base_ = now;
         pacing_virtual_base_ = now_us_;
         return true;
     }
     const std::int64_t real_us = std::chrono::duration_cast<std::chrono::microseconds>(now - pacing_real_base_).count();
     const std::int64_t virtual_us = static_cast<std::int64_t>(now_us_ - pacing_virtual_base_);
-    const std::int64_t ahead_us = virtual_us - real_us;
-    // Ahead of real time: wait. More than a tenth of a second behind (a slow
-    // frame, a load): drop the debt instead of racing to make it up.
-    constexpr std::int64_t kMinSleepUs = 1000;
-    constexpr std::int64_t kMaxSleepUs = 100000;
-    constexpr std::int64_t kMaxLagUs = 100000;
-    if (ahead_us >= kMinSleepUs) {
-        const Clock::time_point wake = now + std::chrono::microseconds(std::min(ahead_us, kMaxSleepUs));
+    const PaceStep step = pace_step(virtual_us, real_us, speed);
+    // Ahead of real time at this speed: wait. More than a tenth of a second
+    // behind (a slow frame, a load): drop the debt instead of racing to make
+    // it up.
+    if (step.rebase) {
+        pacing_real_base_ = now;
+        pacing_virtual_base_ = now_us_;
+    } else if (step.sleep_us > 0) {
+        const Clock::time_point wake = now + std::chrono::microseconds(step.sleep_us);
         Clock::time_point sleep_start = now;
         if (idle_hook_) {
             idle_hook_(wake);
             sleep_start = Clock::now();
         }
         if (sleep_start < wake) std::this_thread::sleep_until(wake);
-    } else if (ahead_us < -kMaxLagUs) {
-        pacing_real_base_ = now;
-        pacing_virtual_base_ = now_us_;
     }
     return true;
+}
+
+double Kernel::speed() const {
+    if (!speed_provider_) return 1.0;
+    const double value = speed_provider_();
+    // A provider that reports a non-positive or non-finite multiple is a
+    // programming error; run at PSP speed rather than stopping the clock.
+    return std::isfinite(value) && value > 0.0 ? value : 1.0;
+}
+
+std::int64_t Kernel::paced_real_us(std::int64_t virtual_us, double speed) noexcept {
+    if (!(speed > 0.0)) speed = 1.0;
+    return static_cast<std::int64_t>(
+        std::llround(static_cast<double>(virtual_us) / speed));
+}
+
+Kernel::PaceStep Kernel::pace_step(
+    std::int64_t virtual_us, std::int64_t real_us, double speed) noexcept {
+    const std::int64_t ahead_us = paced_real_us(virtual_us, speed) - real_us;
+    constexpr std::int64_t kMinSleepUs = 1000;
+    constexpr std::int64_t kMaxSleepUs = 100000;
+    constexpr std::int64_t kMaxLagUs = 100000;
+    PaceStep step;
+    if (ahead_us >= kMinSleepUs) {
+        step.sleep_us = std::min(ahead_us, kMaxSleepUs);
+    } else if (ahead_us < -kMaxLagUs) {
+        step.rebase = true;
+    }
+    return step;
 }
 
 std::optional<std::uint64_t> Kernel::next_event_us() const {

@@ -1,5 +1,7 @@
 #include "input/touch_overlay.hpp"
 
+#include "input/host_controls.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -16,6 +18,10 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kMinRadius = 0.025f;
 constexpr float kMaxRadius = 0.22f;
 constexpr float kStickSplit = 0.5f;
+// Version 2 adds the fast-forward button. A version 1 file carries every
+// control it knew about except fast-forward, which takes its default.
+constexpr int kLayoutVersion = 2;
+constexpr std::size_t kLayoutV1Controls = 10u;
 
 const char *control_name(TouchControl control) {
     switch (control) {
@@ -39,6 +45,8 @@ const char *control_name(TouchControl control) {
         return "start";
     case TouchControl::Select:
         return "select";
+    case TouchControl::FastForward:
+        return "fast_forward";
     case TouchControl::Count:
         break;
     }
@@ -68,6 +76,7 @@ std::array<TouchPlacement, kTouchControls> default_placements() {
         {TouchControl::R, 0.94f, 0.10f, 0.050f, true},
         {TouchControl::Start, 0.52f, 0.08f, 0.038f, true},
         {TouchControl::Select, 0.48f, 0.08f, 0.038f, true},
+        {TouchControl::FastForward, 0.43f, 0.08f, 0.038f, true},
     }};
 }
 
@@ -118,9 +127,10 @@ bool TouchOverlay::point_in(const TouchPlacement &placement, float x, float y, f
 TouchControl TouchOverlay::control_at(float x, float y, bool include_stick) const noexcept {
     // Face and shoulder controls win over the d-pad when they overlap; the
     // floating stick is never a game hit target, only an edit target.
-    constexpr std::array<TouchControl, 9> order{
+    constexpr std::array<TouchControl, 10> order{
         TouchControl::Triangle, TouchControl::Circle, TouchControl::Cross, TouchControl::Square,
-        TouchControl::L, TouchControl::R, TouchControl::Start, TouchControl::Select, TouchControl::Dpad};
+        TouchControl::L, TouchControl::R, TouchControl::Start, TouchControl::Select,
+        TouchControl::FastForward, TouchControl::Dpad};
     for (const TouchControl control : order) {
         if (point_in(placement(control), x, y, 0.0f)) return control;
     }
@@ -260,6 +270,9 @@ TouchControl TouchOverlay::touch_down(int pointer, float x, float y) {
         return TouchControl::Dpad;
     }
     if (hit != TouchControl::Count) {
+        // Fast-forward is host execution policy, not a guest button: a tap
+        // latches it for the session and the release changes nothing.
+        if (hit == TouchControl::FastForward) host_controls().toggle(HostControl::FastForward);
         entry->role = Role::Control;
         entry->control = hit;
         return hit;
@@ -400,6 +413,9 @@ std::array<TouchDrawControl, kTouchControls> TouchOverlay::snapshot() const noex
             draw.pressed = stick_pointer_ >= 0;
         } else if (placement.control == TouchControl::Dpad) {
             draw.pressed = dpad != 0u;
+        } else if (placement.control == TouchControl::FastForward) {
+            // Any source lights the button, including a held gamepad trigger.
+            draw.pressed = host_controls().active(HostControl::FastForward);
         } else {
             ButtonMask bit = 0u;
             draw.pressed = control_bit(placement.control, bit) && (buttons() & bit) != 0u;
@@ -488,7 +504,7 @@ void TouchOverlay::reset_layout() {
 
 std::string TouchOverlay::to_json() const {
     nlohmann::json root;
-    root["version"] = 1;
+    root["version"] = kLayoutVersion;
     nlohmann::json controls = nlohmann::json::array();
     for (const TouchPlacement &placement : placements_) {
         controls.push_back({{"control", control_name(placement.control)},
@@ -512,10 +528,11 @@ TouchOverlay::LoadStatus TouchOverlay::load_json(std::string_view text) {
         return LoadStatus::Corrupt;
     const int version = root["version"].get<int>();
     if (version < 1) return LoadStatus::Older;
-    if (version != 1) return LoadStatus::Corrupt;
-    if (!root.contains("controls") || !root["controls"].is_array() ||
-        root["controls"].size() != kTouchControls)
+    if (version > kLayoutVersion) return LoadStatus::Corrupt;
+    if (!root.contains("controls") || !root["controls"].is_array())
         return LoadStatus::Corrupt;
+    const std::size_t expected_controls = version >= 2 ? kTouchControls : kLayoutV1Controls;
+    if (root["controls"].size() != expected_controls) return LoadStatus::Corrupt;
 
     auto candidate = placements_;
     std::array<bool, kTouchControls> seen{};
@@ -542,8 +559,12 @@ TouchOverlay::LoadStatus TouchOverlay::load_json(std::string_view text) {
             return LoadStatus::Corrupt;
         candidate[index] = placement;
     }
-    for (const bool present : seen) {
-        if (!present) return LoadStatus::Corrupt;
+    for (std::size_t i = 0; i < kTouchControls; ++i) {
+        if (seen[i]) continue;
+        // A version 1 layout predates fast-forward and cannot carry it;
+        // every control that version knew about must still be present.
+        if (version == 1 && static_cast<TouchControl>(i) == TouchControl::FastForward) continue;
+        return LoadStatus::Corrupt;
     }
     placements_ = candidate;
     clamp_all();

@@ -40,7 +40,7 @@ and resets it, `sceCtrlPeekLatch` returns it without resetting.
 `TouchOverlayView` draws a pixel snapshot from
 `runtime/input/touch_overlay.*` and forwards `MotionEvent`s by pointer id.
 Controls: floating analog stick, 8-way d-pad, Cross/Circle/Square/Triangle,
-L/R, START/SELECT.
+L/R, START/SELECT and FF (the fast-forward toggle, left of SELECT).
 
 - The stick appears where a finger lands in the left half (outside placed
   controls) and its origin follows when the thumb passes the reach.
@@ -91,7 +91,9 @@ disconnect (400 ms Java poll of `GamepadBridge.active()`).
 Profiles are pure data. Buttons are indexed by `SDL_GamepadButton`; the
 left stick uses `SDL_GamepadAxis` X/Y. The mapping is: South/Cross,
 East/Circle, West/Square, North/Triangle, Back/Select, Start/Start,
-shoulders L/R, d-pad Up/Down/Left/Right.
+shoulders L/R, d-pad Up/Down/Left/Right. The right stick click (R3) and the
+right trigger (R2) are not PSP buttons: while a profile leaves them unbound
+they drive fast-forward instead of the guest (see below).
 
 - Shipped profiles live in
   `android/app/src/main/assets/input_profiles/profiles.json` and are matched
@@ -133,6 +135,40 @@ The X and Y axes must be distinct; reusing the X axis for Y is rejected, and
 a saved profile with equal axes is corrupt. `Save` writes the per-GUID file
 and uses it immediately; `Reset profile` restores the default. Save failures
 are returned to the dialog.
+
+## Fast-forward
+
+Fast-forward is host execution policy, not guest input. `HostControls`
+(`runtime/input/host_controls.*`) owns a hold and a latch per control:
+
+- **hold** — momentary: the R2 trigger (axis over half). Releasing returns
+  to 1x.
+- **latch** — a toggle: the FF touch button and a press of R3 (right-stick
+  click). One press latches, the next clears, and the release changes
+  nothing.
+
+`active()` is hold OR latch, so a held trigger and a latched button never
+fight; `release_holds()` on background/focus loss drops the momentary source
+and leaves the latch (the user's choice survives suspend/resume).
+`speed()` is 1.0 idle and `kFastForwardSpeed` (3.0) active.
+
+The control never reaches `sceCtrl`: FF is not a PSP button, so a tap on the
+FF ring publishes no guest bit and a held R2/R3 changes no pad byte. The
+kernel's pacing hold consumes the speed (see `HLE.md`), the mixer mutes while
+it is active (see `AUDIO.md`), and the Android shell lights the FF ring for
+any source and toasts `Fast-forward 3x` / `Fast-forward off` on each change
+(the ring is the persistent state; the toast is only feedback, as save/load
+do).
+
+Rules that keep a binding from being stolen:
+
+- R3 only toggles fast-forward while the connected profile leaves
+  `SDL_GAMEPAD_BUTTON_RIGHT_STICK` unbound. A user remap that binds R3 to a
+  PSP button wins, and the wizard never maps R2 or R3.
+- The menu overlay is modal: neither R2 nor R3 acts on the game while
+  Settings is open.
+- Desktop keyboard/mouse input has no fast-forward binding; it is a pad and
+  touch feature.
 
 ## Keyboard and mouse (desktop development)
 
@@ -199,6 +235,7 @@ python3 -m unittest tests.test_touch_overlay -v
 python3 -m unittest tests.test_touch_haptics -v
 python3 -m unittest tests.test_gamepad -v
 python3 -m unittest tests.test_sdl_gamepad -v
+python3 -m unittest tests.test_host_controls -v
 python3 -m unittest tests.test_menu_navigation -v
 python3 -m unittest tests.test_input_suite -v
 ```
@@ -220,6 +257,11 @@ device remains the arm64 phone; see
   path; no-vibrator behavior is covered by the absent-sink host contract and
   `performHapticFeedback` returning false.
 - Gamepad rumble and battle haptics are T13/M5.
+- Fast-forward audio is dropped, not time-stretched: the mixer counts
+  `muted_buffers` and restarts its timeline on unmute. A pitch-preserving
+  stretcher does not exist.
+- Fast-forward has one speed (3x, `kFastForwardSpeed`); a configurable
+  multiple is not exposed.
 - Menu navigation is one action per press: a held d-pad does not repeat.
   Every queued press is applied on the next frame; the queue holds eight, so a
   UI stall longer than about eight presses can still drop the oldest.

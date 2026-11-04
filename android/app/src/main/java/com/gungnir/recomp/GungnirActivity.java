@@ -19,6 +19,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.gungnir.recomp.input.GamepadBridge;
+import com.gungnir.recomp.input.HostBridge;
 import com.gungnir.recomp.input.TouchOverlayView;
 
 import org.libsdl.app.SDLActivity;
@@ -42,7 +43,8 @@ public final class GungnirActivity extends SDLActivity {
     private TouchOverlayView touchOverlay;
     private DriverStore driverStore;
     private boolean customDriversSupported;
-    private boolean menuPolling;
+    private boolean uiPolling;
+    private boolean fastForwardShown;
 
     private static native boolean nativeGameDataImported(String path);
 
@@ -351,15 +353,17 @@ public final class GungnirActivity extends SDLActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        menuPolling = true;
-        pollMenu();
+        uiPolling = true;
+        pollHostUi();
     }
 
-    private void pollMenu() {
-        if (!menuPolling) return;
+    /** One animation-frame loop for host UI: menu actions from the gamepad and
+     *  the fast-forward indicator. */
+    private void pollHostUi() {
+        if (!uiPolling) return;
         // Drain everything this frame produced: one action per animation frame
         // made a fast d-pad roll look like dropped presses.
-        while (menuPolling) {
+        while (uiPolling) {
             final int packed = nativeMenuPoll();
             if (packed == 0) break;
             final int action = packed & 0xFF;
@@ -374,12 +378,21 @@ public final class GungnirActivity extends SDLActivity {
                 }
             }
         }
-        if (menuPolling) getWindow().getDecorView().postOnAnimation(this::pollMenu);
+        // The FF ring is a latch, so it already shows the state; the toast is
+        // only feedback on the change, matching save/load.
+        boolean fastForward = HostBridge.fastForwardActive();
+        if (fastForward != fastForwardShown) {
+            fastForwardShown = fastForward;
+            Toast.makeText(this, fastForward
+                    ? "Fast-forward " + Math.round(HostBridge.fastForwardSpeed()) + "x"
+                    : "Fast-forward off", Toast.LENGTH_SHORT).show();
+        }
+        if (uiPolling) getWindow().getDecorView().postOnAnimation(this::pollHostUi);
     }
 
     @Override
     protected void onPause() {
-        menuPolling = false;
+        uiPolling = false;
         GamepadBridge.cancelRemap();
         if (touchOverlay != null) {
             touchOverlay.releaseAll();

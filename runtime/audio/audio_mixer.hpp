@@ -15,6 +15,7 @@ struct MixerStats {
     std::uint64_t frames_pulled{};
     std::uint64_t underrun_frames{};
     std::uint64_t submitted_buffers{};
+    std::uint64_t muted_buffers{};
     std::uint64_t overruns{};
     std::uint64_t rejected_buffers{};
     std::uint64_t resyncs{};
@@ -40,6 +41,14 @@ public:
 
     void reset() override;
 
+    // Fast-forward drops the guest's audio instead of letting it outrun the
+    // device and overrun the ring. Muting clears the queued timeline; each
+    // dropped submission is counted, and none is a rejected buffer. The first
+    // buffer after unmuting restarts the channels one lead ahead of the
+    // device, so a stale timeline never plays.
+    void set_muted(bool muted);
+    [[nodiscard]] bool muted() const;
+
     [[nodiscard]] MixerStats stats() const;
     [[nodiscard]] std::size_t available_frames() const;
     [[nodiscard]] std::size_t capacity_frames() const noexcept { return capacity_frames_; }
@@ -58,6 +67,7 @@ private:
     std::vector<std::int32_t> ring_;
     std::uint64_t read_{};
     std::uint64_t write_head_{};
+    bool muted_{};
     std::array<ChannelState, 9> channels_{};
     MixerStats stats_{};
     mutable std::mutex mutex_;

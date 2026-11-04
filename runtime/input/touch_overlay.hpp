@@ -32,6 +32,9 @@ enum class TouchControl : std::uint8_t {
     R,
     Start,
     Select,
+    // Host control, not a PSP button: the touch overlay latches fast-forward
+    // and never publishes it to sceCtrl.
+    FastForward,
     Count,
 };
 
