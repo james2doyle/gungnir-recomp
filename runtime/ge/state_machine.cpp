@@ -706,6 +706,7 @@ void StateMachine::draw_primitive(const Command &command, const MemoryView &memo
         draw.state.stencil.zfail = stencil_op_from_ge((ops >> 8u) & 7u);
         draw.state.stencil.zpass = stencil_op_from_ge((ops >> 16u) & 7u);
     }
+    draw.state.through = layout_.through;
     draw.state.fog_enabled = reg_on(0x1Fu) && !draw.state.clear && !layout_.through;
     draw.state.fog_color = reg_param(0xCFu);
     if (reg_on(0x17u) && !layout_.through && (reg_param(0x50u) & 1u) == 0u) gap("flat_shading_unsupported");

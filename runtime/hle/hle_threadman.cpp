@@ -1,5 +1,6 @@
 // ThreadManForUser and Kernel_Library: threads, time, semaphores, event flags,
 // mutexes, callbacks, VTimers and interrupt masking.
+#include "hle/cadence.hpp"
 #include "hle/hle_common.hpp"
 
 #include "psprecomp/common.hpp"
@@ -151,9 +152,13 @@ void register_threads(HleRegistrar &hle) {
         kernel().finish(ctx, 0u);
     });
 
-    const auto delay = [](Runtime &, AllegrexContext &ctx) { kernel().delay_current(ctx, arg(ctx, 0)); };
+    const auto delay = [](Runtime &, AllegrexContext &ctx) {
+        note_delay(arg(ctx, 0));
+        kernel().delay_current(ctx, arg(ctx, 0));
+    };
     hle.add("ThreadManForUser", "sceKernelDelayThread", delay);
     hle.add("ThreadManForUser", "sceKernelDelayThreadCB", [](Runtime &, AllegrexContext &ctx) {
+        note_delay(arg(ctx, 0));
         (void)kernel().deliver_callbacks();
         kernel().delay_current(ctx, arg(ctx, 0));
     });

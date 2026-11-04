@@ -11,6 +11,8 @@
 #include "audio/audio_sink.hpp"
 #include "ge/software.hpp"
 #include "ge/targets.hpp"
+#include "hle/cadence.hpp"
+#include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
 #include "input/input_state.hpp"
 #include "session/game_session.hpp"
@@ -185,6 +187,8 @@ int main(int argc, char **argv) {
         }
         session.run();
         session.runtime().report_hle_histogram(25u);
+        std::cerr << gungnir::hle::format_cadence(gungnir::hle::cadence_snapshot()) << "\n";
+        if (std::getenv("GUNGNIR_HLE_RING") != nullptr) gungnir::hle::dump_hle_ring(std::cerr);
         if (!snapshot_out.empty() && !session.save_snapshot(snapshot_out, error)) {
             std::cerr << "boot_runner: " << error << "\n";
             return 1;

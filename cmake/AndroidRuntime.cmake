@@ -118,6 +118,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/audio/audio_sink.cpp"
         "${ARG_ROOT}/runtime/audio/sas_core.cpp"
         "${ARG_ROOT}/runtime/audio/atrac_file.cpp"
+        "${ARG_ROOT}/runtime/hle/cadence.cpp"
         "${ARG_ROOT}/runtime/hle/hle_common.cpp"
         "${ARG_ROOT}/runtime/hle/kernel.cpp"
         "${ARG_ROOT}/runtime/hle/hle_atrac.cpp"

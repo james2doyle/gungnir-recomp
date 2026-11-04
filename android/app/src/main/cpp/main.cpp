@@ -2,6 +2,7 @@
 #include "ge/state_machine.hpp"
 #include "ge/targets.hpp"
 #include "ge/vulkan_backend.hpp"
+#include "hle/cadence.hpp"
 #include "hle/hle_media.hpp"
 
 #include <SDL3/SDL.h>
@@ -1209,6 +1210,8 @@ int main(int, char **) {
                          static_cast<unsigned long long>(stats.overruns),
                          static_cast<unsigned long long>(stats.rejected_buffers), stats.peak,
                          audio_out != nullptr ? audio_out->xruns() : 0);
+            const gungnir::hle::CadenceCounters cadence = gungnir::hle::cadence_snapshot();
+            GUNGNIR_LOGI("%s\n", gungnir::hle::format_cadence(cadence).c_str());
         }
         if (first_frame) {
             GUNGNIR_LOGI("first frame %dx%d\n", width, height);

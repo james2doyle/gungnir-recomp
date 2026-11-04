@@ -3,6 +3,7 @@
 // Usage: hle_media_tests --nids CSV
 // Exit 0 on success, 1 on a failed contract, 2 on usage.
 
+#include "hle/cadence.hpp"
 #include "hle/hle_common.hpp"
 #include "hle/hle_media.hpp"
 #include "hle/kernel.hpp"
@@ -303,6 +304,76 @@ void draw_retention_contracts() {
     gungnir::hle::set_ge_frame_sink(nullptr);
 }
 
+void cadence_contracts() {
+    using gungnir::hle::cadence_snapshot;
+    gungnir::hle::reset_cadence();
+    gungnir::hle::note_vblank_wait(3u, 0u);
+    gungnir::hle::note_vblank_wait(3u, 0u);
+    gungnir::hle::note_vblank_wait(99u, 0u);
+    gungnir::hle::CadenceCounters counters = cadence_snapshot();
+    check(counters.vblank_waits == 3u, "cadence counts every vblank wait");
+    check(counters.vblank_wait_counts[3] == 2u, "cadence histograms the requested vblank count");
+    check(counters.vblank_wait_counts[15] == 1u, "the wait histogram clamps at 15");
+
+    gungnir::hle::note_delay(500u);
+    gungnir::hle::note_delay(5'000u);
+    gungnir::hle::note_delay(20'000u);
+    gungnir::hle::note_delay(40'000u);
+    counters = cadence_snapshot();
+    check(counters.delay_calls == 4u, "cadence counts every guest delay");
+    check(counters.delay_us_total == 65'500u, "cadence sums the delivered delay");
+    check(counters.delay_us_max == 40'000u, "cadence tracks the longest delay");
+    check(counters.delay_buckets[0] == 1u && counters.delay_buckets[1] == 1u &&
+              counters.delay_buckets[2] == 1u && counters.delay_buckets[3] == 1u,
+        "each delay lands in its bucket");
+
+    gungnir::hle::note_audio_block(1'000u);
+    gungnir::hle::note_audio_block(2'000u);
+    counters = cadence_snapshot();
+    check(counters.audio_block_calls == 2u && counters.audio_block_us_total == 3'000u,
+        "cadence sums the audio drain a blocking submission waited for");
+
+    gungnir::ge::Draw through;
+    through.state.through = true;
+    through.vertices.resize(3u);
+    gungnir::ge::Draw transform;
+    transform.vertices.resize(4u);
+    gungnir::hle::note_flip(std::span<const gungnir::ge::Draw>(&through, 1u), 10u);
+    gungnir::hle::note_flip(std::span<const gungnir::ge::Draw>(&transform, 1u), 13u);
+    counters = cadence_snapshot();
+    check(counters.flips == 2u, "cadence counts flips");
+    check(counters.draws_2d == 1u && counters.draws_3d == 1u,
+        "through draws are 2D and transform draws are 3D");
+    check(counters.vertices == 7u, "cadence sums the presented vertices");
+    check(counters.flip_vblanks[3] == 1u, "cadence records the vblanks between flips");
+
+    const std::string line = gungnir::hle::format_cadence(counters);
+    check(line.rfind("cadence flips=2 ", 0u) == 0u, "the cadence line starts with the flip count");
+    check(line.find("waithist=") != std::string::npos &&
+              line.find("flipvblank=") != std::string::npos,
+        "the cadence line carries both histograms");
+
+    // The frame interval split: a flip at vblank 0, the wait issued at 1, the
+    // wake at 3 and the flip at 3 means one wasted vblank before the wait and
+    // none after it.
+    gungnir::hle::reset_cadence();
+    gungnir::ge::Draw alone;
+    alone.vertices.resize(1u);
+    gungnir::hle::note_flip(std::span<const gungnir::ge::Draw>(&alone, 1u), 0u);
+    gungnir::hle::note_vblank_wait(2u, 1u);
+    gungnir::hle::note_vblank_wait_wake(3u);
+    gungnir::hle::note_flip(std::span<const gungnir::ge::Draw>(&alone, 1u), 3u);
+    counters = cadence_snapshot();
+    check(counters.wait_after_flip[1] == 1u, "cadence records the vblanks before the wait");
+    check(counters.flip_vblanks[3] == 1u, "the flip interval is the whole frame");
+    check(counters.flip_after_wait[0] == 1u, "a flip right after the wake is not charged an extra vblank");
+
+    gungnir::hle::reset_cadence();
+    counters = cadence_snapshot();
+    check(counters.flips == 0u && counters.vblank_waits == 0u && counters.delay_calls == 0u,
+        "reset clears every cadence counter");
+}
+
 void rtc_contracts() {
     Fixture f(test_nids_path());
     check(f.call("sceRtc", "sceRtcGetCurrentTick", {Fixture::kOutput}) == 0u, "RTC tick succeeds");
@@ -331,6 +402,7 @@ int main(int argc, char **argv) {
         ge_contracts();
         draw_retention_contracts();
         rtc_contracts();
+        cadence_contracts();
         std::cout << "hle_media_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

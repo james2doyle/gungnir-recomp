@@ -1,5 +1,7 @@
 #include "hle/hle_media.hpp"
 
+#include "hle/cadence.hpp"
+
 #include "ge/display_list.hpp"
 #include "ge/state_machine.hpp"
 #include "input/input_state.hpp"
@@ -237,6 +239,7 @@ void register_display(HleRegistrar &hle) {
             std::vector<gungnir::ge::Draw> draws;
             draws.swap(media().pending_draws);
             media().ge.end_frame();
+            note_flip(draws, kernel().vblank_count());
             if (media().frame_sink) media().frame_sink(draws);
             if (media().flip_observer) media().flip_observer();
         }
@@ -255,6 +258,7 @@ void register_display(HleRegistrar &hle) {
         WaitState wait{};
         wait.type = WaitType::VBlank;
         wait.value = 1u;
+        note_vblank_wait(1u, kernel().vblank_count());
         kernel().block(ctx, wait, 0u);
     };
     hle.add("sceDisplay", "sceDisplayWaitVblankStart", wait_vblank);
@@ -266,6 +270,7 @@ void register_display(HleRegistrar &hle) {
         WaitState wait{};
         wait.type = WaitType::VBlank;
         wait.value = std::max(1u, arg(ctx, 0));
+        note_vblank_wait(wait.value, kernel().vblank_count());
         kernel().block(ctx, wait, 0u);
     });
     hle.add("sceDisplay", "sceDisplayWaitVblank", wait_vblank);
@@ -379,6 +384,7 @@ DisplayState &display_state() {
 
 void reset_media_state() {
     media() = MediaState{};
+    reset_cadence();
     MediaState &state = media();
     state.ge.set_draw_sink([&state](gungnir::ge::Draw draw) {
         state.pending_draws.push_back(std::move(draw));

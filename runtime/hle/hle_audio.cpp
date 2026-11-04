@@ -4,6 +4,8 @@
 // virtual clock, so pacing stays deterministic and headless runs do not sleep.
 #include "hle/hle_audio.hpp"
 
+#include "hle/cadence.hpp"
+
 #include "audio/audio_sink.hpp"
 #include "audio/sas_core.hpp"
 #include "hle/kernel.hpp"
@@ -146,6 +148,7 @@ std::uint32_t enqueue_blocking(Runtime &rt, AllegrexContext &ctx, std::size_t in
     channel.waiting_left = left;
     channel.waiting_right = right;
     const std::uint32_t remaining = remaining_at(channel, now);
+    note_audio_block(drain_us(remaining));
     WaitState wait{};
     wait.type = WaitType::Audio;
     wait.object = static_cast<SceUID>(index + 1u);

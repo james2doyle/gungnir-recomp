@@ -79,6 +79,7 @@ add_library(gungnir_hle STATIC
     runtime/audio/audio_mixer.cpp
     runtime/audio/audio_sink.cpp
     runtime/audio/sas_core.cpp
+    runtime/hle/cadence.cpp
     runtime/hle/hle_common.cpp
     runtime/hle/kernel.cpp
     runtime/hle/hle_atrac.cpp

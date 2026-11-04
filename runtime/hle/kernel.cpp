@@ -1,5 +1,7 @@
 #include "kernel.hpp"
 
+#include "hle/cadence.hpp"
+
 #include "session/snapshot.hpp"
 
 #include "psprecomp/common.hpp"
@@ -1086,6 +1088,7 @@ void Kernel::on_vblank() {
             continue;
         }
         wake(*thread, thread->context.gpr[2]);
+        note_vblank_wait_wake(vblank_count_);
     }
     const auto handlers = sub_interrupts.find(kVBlankInterrupt);
     if (handlers == sub_interrupts.end()) return;

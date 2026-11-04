@@ -28,6 +28,9 @@ using MemoryView = std::function<bool(std::uint32_t address, std::uint8_t *out, 
 using FastSource = std::function<std::span<const std::uint8_t>(std::uint32_t address, std::size_t size)>;
 
 struct DrawState {
+    // GE through mode: screen-space vertices, no transform. 2D/HUD draws are
+    // through draws; they are never interpolation candidates.
+    bool through{};
     int scissor_x0{};
     int scissor_y0{};
     int scissor_x1{};
