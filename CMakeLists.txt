@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(gungnir-recomp C CXX)
 
+include(cmake/BoundedStack.cmake)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
@@ -257,13 +259,19 @@ find_package(ZLIB REQUIRED)
 add_library(gungnir_platform STATIC
     runtime/platform/android/game_data.cpp
     runtime/platform/android/assets.cpp
-    runtime/platform/android/affinity.cpp)
+    runtime/platform/android/affinity.cpp
+    runtime/platform/android/stack_space.cpp)
 target_include_directories(gungnir_platform PUBLIC runtime)
 target_link_libraries(gungnir_platform PUBLIC ZLIB::ZLIB)
 
 add_executable(game_data_tests tests/platform/game_data_tests.cpp)
 target_link_libraries(game_data_tests PRIVATE gungnir_platform)
 set_target_properties(game_data_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
+
+add_executable(stack_space_tests tests/platform/stack_space_tests.cpp)
+target_link_libraries(stack_space_tests PRIVATE gungnir_platform)
+set_target_properties(stack_space_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
 
 add_executable(affinity_tests tests/platform/affinity_tests.cpp)
@@ -281,6 +289,13 @@ target_include_directories(gungnir_adreno PUBLIC
     third_party/miniz
     third_party/nlohmann-json)
 target_link_libraries(gungnir_adreno PUBLIC yakumo)
+
+# Every runtime library runs on the Android shell's own threads, whose stacks
+# are not ours to size (see cmake/BoundedStack.cmake).
+foreach(runtime_target gungnir_input gungnir_hle gungnir_ge gungnir_tex
+                         gungnir_platform gungnir_adreno)
+    gungnir_bound_stack_frames(${runtime_target})
+endforeach()
 
 add_executable(driver_package_tests tests/platform/driver_package_tests.cpp)
 target_link_libraries(driver_package_tests PRIVATE gungnir_adreno)

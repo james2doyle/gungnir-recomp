@@ -138,6 +138,7 @@ python3 -m unittest tests.test_android_build -v     # TC-9.1 Android build skele
 python3 -m unittest tests.test_android_app -v       # SDL3 pin/fetch + shell scripts
 python3 -m unittest tests.test_game_data -v         # TC-9.3 game-data identity gate
 python3 -m unittest tests.test_affinity -v          # T9e CPU affinity/priority
+python3 -m unittest tests.test_startup_limits -v    # stack budget + cold-boot gate
 python3 -m unittest tests.test_android_suite -v     # consolidated T9 gate
 python3 -m unittest tests.test_adreno_docs -v       # T10a driver contract + pins
 python3 -m unittest tests.test_driver_package -v    # T10b driver zip inspector
@@ -280,6 +281,24 @@ SDL3, game-data and affinity modules, checks `docs/ANDROID.md` and the T9 QA
 report, and verifies that screenshots land under the gitignored `build/qa/`
 tree. Device and emulator evidence is in
 `docs/qa/2026-10-30-t9-android-shell.md`; tests never substitute for it.
+
+`tests/test_startup_limits.py` guards the shell's stack budget. The runtime
+shares the SDL thread's stack (SDLActivity's Java thread, about 1 MiB) and the
+session worker's `std::thread`, so a single oversized local frame is a
+device-only crash: the game-data identity gate kept a 1 MiB scratch buffer as
+a local and overflowed at startup, intermittently, with any small change
+tipping it. Four contracts hold the line. `game_data_tests` runs the identity
+gate on a thread given 512 KiB and fails with the signal if it does not fit.
+`stack_space_tests` checks that `current_stack_space()` reports the calling
+thread's limit, use and headroom, that a thread given 256 KiB reports its own
+limit, and that headroom falls as the frame deepens. The build gate
+(`cmake/BoundedStack.cmake`, `-Werror=frame-larger-than=16384`) is applied to
+every runtime library in both build roots, so the mutation that reintroduces
+the buffer fails the build instead of the phone (verified: the old code is
+rejected with a 1,049,152-byte frame). `scripts/android/qa-startup.sh` runs
+the cold boot ten times and fails on any crash. Host evidence is not device
+evidence: the boot margin itself comes from `stack_space thread=main` in the
+boot log.
 
 `tests/test_adreno_docs.py` is the T10a contract gate. It asserts the
 libadrenotools and liblinkernsbypass fetch pins (commit, archive SHA-256,

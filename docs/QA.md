@@ -13,7 +13,11 @@ recorded. PPSSPP is an oracle only.
    and launches with a frame proof; bare `install.sh` always needs `run.sh`
    after it).
 2. Cold boot: force-stop the app, clear it from recents, launch from the
-   launcher. Record first-frame time and any stall.
+   launcher. Record first-frame time and any stall. Run
+   `scripts/android/qa-startup.sh` (ten launches) once per build: no launch may
+   leave a `Fatal signal` in the crash buffer, and `stack_space thread=main`
+   records the margin the SDL thread actually had. One good boot is not
+   evidence — the runtime shares that thread's ~1 MiB stack.
 3. Title screen: confirm art, menu and copyright line upright at the fitted
    aspect; text legible at 1x.
 4. Menu input: drive every entry by touch, then by gamepad (paired pad and

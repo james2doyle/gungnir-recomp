@@ -13,6 +13,10 @@
 #include <string>
 #include <vector>
 
+#include <pthread.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <zlib.h>
 
 namespace {
@@ -137,6 +141,59 @@ void asset_stamp() {
     check(!version_stamp_matches("", "1"), "missing asset stamp is a mismatch");
 }
 
+// The identity gate runs on the SDL thread, whose stack is about one megabyte.
+// A verifier that keeps its scratch space on the stack eats that whole budget
+// and leaves no room for the calls it makes afterwards, so the gate has to fit
+// well below it. The check runs in a child process on a narrowed thread: the
+// overflow is a SIGSEGV (not an exception), and a child keeps it reportable.
+constexpr std::size_t kIdentityStackBudget = 512u * 1024u;
+
+struct VerificationRun {
+    std::filesystem::path path;
+    GameIdentity identity;
+    bool ok = false;
+};
+
+void *run_verification(void *argument) {
+    auto *run = static_cast<VerificationRun *>(argument);
+    const GameDataResult result = verify_game_data(run->path, run->identity);
+    run->ok = result.ok;
+    return nullptr;
+}
+
+void identity_fits_a_small_stack() {
+    const fs::path directory = make_temp_dir();
+    const std::vector<std::uint8_t> bytes = pattern(64u * 1024u, 11);
+    const fs::path iso = directory / "game.iso";
+    write_file(iso, bytes);
+
+    const pid_t child = fork();
+    check(child >= 0, "the small-stack check can fork");
+    if (child == 0) {
+        pthread_attr_t attributes;
+        pthread_attr_init(&attributes);
+        const int sized = pthread_attr_setstacksize(&attributes, kIdentityStackBudget);
+        VerificationRun run{iso, identity_of(bytes)};
+        pthread_t thread{};
+        const int created =
+            sized == 0 ? pthread_create(&thread, &attributes, run_verification, &run) : sized;
+        if (created == 0) pthread_join(thread, nullptr);
+        _exit(created == 0 && run.ok ? 0 : 1);
+    }
+
+    int status = 0;
+    waitpid(child, &status, 0);
+    std::error_code error;
+    fs::remove_all(directory, error);
+    if (WIFSIGNALED(status)) {
+        throw std::runtime_error("identity gate overflows a " +
+                                 std::to_string(kIdentityStackBudget / 1024u) +
+                                 " KiB stack (signal " + std::to_string(WTERMSIG(status)) + ")");
+    }
+    check(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "identity gate completes within a 512 KiB stack");
+}
+
 } // namespace
 
 int main() {
@@ -144,6 +201,7 @@ int main() {
         identity_gate();
         discovery_and_selection();
         asset_stamp();
+        identity_fits_a_small_stack();
         std::cout << "game_data_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

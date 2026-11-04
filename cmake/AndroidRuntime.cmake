@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+include("${CMAKE_CURRENT_LIST_DIR}/BoundedStack.cmake")
+
 # Builds the shared runtime library used by the Android shell. The GE sources
 # are the same files the desktop build compiles; only the platform entry point
 # and the SDL/Vulkan linkage differ.
@@ -162,6 +164,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/android/game_data.cpp"
         "${ARG_ROOT}/runtime/platform/android/assets.cpp"
         "${ARG_ROOT}/runtime/platform/android/affinity.cpp"
+        "${ARG_ROOT}/runtime/platform/android/stack_space.cpp"
         "${ARG_ROOT}/runtime/platform/sdl_gamepad.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/loader.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
@@ -194,6 +197,9 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/third_party/volk")
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_options(${target} PRIVATE -Wall -Wextra -O2 -fno-lto)
+    # This library shares its stack with SDLActivity's Java thread; a large
+    # local frame is a device-only crash (see cmake/BoundedStack.cmake).
+    gungnir_bound_stack_frames(${target})
     target_link_libraries(${target} PRIVATE SDL3::SDL3-static vulkan android aaudio log z)
     target_link_libraries(${target} PRIVATE gungnir_atrac3p)
     target_compile_definitions(${target} PRIVATE GUNGNIR_HAVE_SDL3=1)

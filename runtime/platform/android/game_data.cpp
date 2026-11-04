@@ -1,10 +1,11 @@
 #include "platform/android/game_data.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
+#include <cstddef>
 #include <fstream>
 #include <system_error>
+#include <vector>
 
 #include <zlib.h>
 
@@ -20,6 +21,12 @@ std::string lowercase(std::string text) {
 bool is_iso(const std::filesystem::path &path) {
     return lowercase(path.extension().string()) == ".iso";
 }
+
+// One megabyte of streaming window. It lives on the heap because the identity
+// gate runs on the SDL thread, whose stack is about that size: as a local it
+// consumed the whole stack and left no room for the reads themselves
+// (build/qa evidence: a 1,049,040-byte frame).
+constexpr std::size_t kVerifyChunk = 1u << 20;
 
 } // namespace
 
@@ -65,7 +72,7 @@ GameDataResult verify_game_data(const std::filesystem::path &path, GameIdentity 
         return result;
     }
     uLong crc = crc32(0L, Z_NULL, 0);
-    std::array<unsigned char, 1u << 20> buffer{};
+    std::vector<unsigned char> buffer(kVerifyChunk);
     while (file) {
         file.read(reinterpret_cast<char *>(buffer.data()),
                   static_cast<std::streamsize>(buffer.size()));

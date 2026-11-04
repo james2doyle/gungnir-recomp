@@ -27,6 +27,7 @@
 #include "platform/android/audio_smoke.hpp"
 #include "platform/android/aaudio_out.hpp"
 #include "platform/android/game_data.hpp"
+#include "platform/android/stack_space.hpp"
 #include "platform/sdl_gamepad.hpp"
 #include "session/game_session.hpp"
 #include "session/session_lifecycle.hpp"
@@ -146,7 +147,21 @@ void sleep_for_next_frame(gungnir::ge::FrameQueue &queue,
     queue.wait_for_next(slice);
 }
 
+void log_stack_space(const char *thread) {
+    const gungnir::platform::StackSpace space = gungnir::platform::current_stack_space();
+    if (!space.known) {
+        GUNGNIR_LOGE("stack_space thread=%s unavailable\n", thread);
+        return;
+    }
+    GUNGNIR_LOGI("stack_space thread=%s limit_kb=%zu used_kb=%zu headroom_kb=%zu\n", thread,
+                 space.limit_bytes / 1024u, space.used_bytes / 1024u,
+                 space.headroom_bytes / 1024u);
+}
+
 void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool> &finished) {
+    // The guest runs on this thread, so its stack is the budget every HLE and
+    // recompiled frame shares. Report it once instead of assuming a size.
+    log_stack_space("session");
     session.run();
     const gungnir::session::Result &result = session.result();
     GUNGNIR_LOGI("%s\n", gungnir::session::summary_line(result).c_str());
@@ -912,6 +927,7 @@ Java_com_gungnir_recomp_input_GamepadBridge_resetProfile(JNIEnv *env, jclass) {
 #endif
 
 int main(int, char **) {
+    log_stack_space("main");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         GUNGNIR_LOGE("sdl_init_failed: %s\n", SDL_GetError());
         return 1;

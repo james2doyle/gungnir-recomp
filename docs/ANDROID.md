@@ -54,6 +54,7 @@ ADB_SERIAL=<serial> scripts/android/run.sh        # waits for "session_stop" or 
 ADB_SERIAL=<serial> scripts/android/logcat.sh     # gungnir/SDL/crash tags
 ADB_SERIAL=<serial> scripts/android/screenshot.sh # PNG under build/qa/android/
 ADB_SERIAL=<serial> scripts/android/lifecycle.sh  # 3 pause/resume cycles
+ADB_SERIAL=<serial> scripts/android/qa-startup.sh # 10 cold boots, fails on any startup crash
 ```
 
 `deploy.sh` chains install, launch, and verification: it fails loudly unless
@@ -64,6 +65,16 @@ auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
 
 `run.sh` fails with `device_locked` when the keyguard is up. The screenshot
 path is gitignored; do not commit game frames.
+
+`qa-startup.sh` repeats the cold boot (`RUNS`, default 10) and fails on the
+first launch that does not reach its first frame or that leaves a
+`Fatal signal` in the crash buffer, keeping one logcat dump per run under
+`build/qa/startup-<stamp>/`. It exists because the runtime shares the SDL
+thread's stack (about 1 MiB, chosen by SDLActivity's Java thread), so an
+oversized local frame crashes only on the device and only sometimes. Every
+runtime target is compiled with `-Werror=frame-larger-than=16384`
+(`cmake/BoundedStack.cmake`) to keep that class of bug out of the tree, and
+`stack_space thread=main` in the boot log reports the margin actually left.
 
 ## CI build mode
 
@@ -298,6 +309,7 @@ closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
 | `session_error: <reason>` | the guest run failed after starting |
 | `surface_recreate_failed` | swapchain surface could not be rebuilt; retried |
 | `driver_fallback: <reason>` | a selected custom driver failed; the system driver is used |
+| `stack_space thread=<name> unavailable` | the thread stack cannot be queried; the margin is unknown, boot continues |
 | `driver_selection_invalid` | the persisted selection file is malformed; system is used |
 | `driver_import_failed: <reason>` | a driver zip was rejected; no selection change |
 | `driver_remove_failed: <reason>` | a driver directory could not be removed |
