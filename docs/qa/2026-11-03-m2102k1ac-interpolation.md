@@ -126,10 +126,12 @@ Images stay under gitignored `build/qa/`. Logs for both arms are
   measurement that the renderer is idle. Not investigated further in this
   cell; the counters name it.
 - **Named gap: 4:3 versus 16:9.** The cell asks for produced and presented fps
-  at both aspects. Presentation layout is T16 (`yrx1d5i2`, T16a `e30hfjxj`,
-  T16b `rpp5tjx3`), which is not in the tree, so this build only has the
-  fitted display aspect. The comparison is **not** recorded here and the cell
-  is signed for the aspect the app actually presents.
+  at both aspects. Presentation layout belongs to the T16 widescreen work
+  (fill-screen presentation, then projection widening), which is not in the
+  tree, so this build only has the fitted display aspect and the game is
+  letterboxed. The comparison is **not** recorded here and the cell is signed
+  for the aspect the app actually presents; the T16 work delivers the aspect
+  modes and their frame-rate rows.
 - **Audio is unchanged by the option.** Both arms report identical
   `audio_mixer` counters except for the amount pulled; `overruns` and `xruns`
   stay at zero, so the extra presents do not starve the mixer.
