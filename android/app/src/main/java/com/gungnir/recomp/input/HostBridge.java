@@ -13,4 +13,10 @@ public final class HostBridge {
 
     /** The pacing multiple applied while fast-forward is active. */
     public static native float fastForwardSpeed();
+
+    /** Renderer interpolation: host presentation policy, never guest state. */
+    public static native void nativeSetFrameInterpolation(boolean enabled);
+
+    /** True while in-between frames are being presented. */
+    public static native boolean frameInterpolation();
 }

@@ -45,6 +45,7 @@ public final class GungnirActivity extends SDLActivity {
     private boolean customDriversSupported;
     private boolean uiPolling;
     private boolean fastForwardShown;
+    private boolean frameInterpolation;
 
     private static native boolean nativeGameDataImported(String path);
 
@@ -135,6 +136,18 @@ public final class GungnirActivity extends SDLActivity {
             }
 
             @Override
+            public void onToggleFrameInterpolation() {
+                frameInterpolation = !frameInterpolation;
+                getSharedPreferences("gungnir", MODE_PRIVATE).edit()
+                        .putBoolean("frame_interpolation", frameInterpolation).apply();
+                HostBridge.nativeSetFrameInterpolation(frameInterpolation);
+                settingsOverlay.setFrameInterpolation(frameInterpolation);
+                Toast.makeText(GungnirActivity.this, frameInterpolation
+                        ? "Frame interpolation on" : "Frame interpolation off",
+                        Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
             public void onSaveState() {
                 closeSettings();
                 runSnapshotOp(true);
@@ -190,6 +203,8 @@ public final class GungnirActivity extends SDLActivity {
                 preferences.edit().remove(key).apply();
             }
         }, getApplicationInfo().nativeLibraryDir, getCacheDir());
+        frameInterpolation = preferences.getBoolean("frame_interpolation", false);
+        HostBridge.nativeSetFrameInterpolation(frameInterpolation);
         customDriversSupported = Build.SUPPORTED_ABIS.length > 0
                 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0]);
 
@@ -234,6 +249,7 @@ public final class GungnirActivity extends SDLActivity {
         }
         settingsButton.setSuppressed(true);
         settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
+        settingsOverlay.setFrameInterpolation(frameInterpolation);
         settingsOverlay.setSelection(0);
         nativeMenuBegin(settingsOverlay.rowCount());
     }

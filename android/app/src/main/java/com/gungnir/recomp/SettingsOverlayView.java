@@ -18,6 +18,7 @@ public final class SettingsOverlayView extends FrameLayout {
         void onGamepad();
         void onDrivers();
         void onGameData();
+        void onToggleFrameInterpolation();
         void onSaveState();
         void onLoadState();
         void onResetToTitle();
@@ -27,6 +28,7 @@ public final class SettingsOverlayView extends FrameLayout {
     private final Listener listener;
     private final LinearLayout panel;
     private final TextView layoutRow;
+    private final TextView interpolationRow;
     private final TextView statusRow;
     private final java.util.List<TextView> navigationRows = new java.util.ArrayList<>();
     private final java.util.List<Runnable> navigationActions = new java.util.ArrayList<>();
@@ -81,10 +83,16 @@ public final class SettingsOverlayView extends FrameLayout {
         row("Gamepad", listener::onGamepad);
         row("Vulkan driver", listener::onDrivers);
         row("Game data", listener::onGameData);
+        interpolationRow = row("Frame interpolation: Off", listener::onToggleFrameInterpolation);
         row("Save state", listener::onSaveState);
         row("Load state", listener::onLoadState);
         row("Reset to title", listener::onResetToTitle);
         row("Close", listener::onClose);
+    }
+
+    /** Reflects the persisted setting on the row label. */
+    public void setFrameInterpolation(boolean enabled) {
+        interpolationRow.setText(enabled ? "Frame interpolation: On" : "Frame interpolation: Off");
     }
 
     private int dp(float value) {

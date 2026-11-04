@@ -1,3 +1,4 @@
+#include "ge/frame_interpolation.hpp"
 #include "ge/frame_queue.hpp"
 #include "ge/state_machine.hpp"
 #include "ge/targets.hpp"
@@ -91,6 +92,10 @@ gungnir::ge::FrameQueue::Clock::time_point frame_due_at() {
     return at.value_or(gungnir::ge::FrameQueue::Clock::now());
 }
 
+// Renderer interpolation is host presentation policy: it never enters guest
+// RAM, a snapshot or a save, so save states stay comparable with it on or off.
+std::atomic<bool> g_interpolation_enabled{false};
+
 std::atomic<std::int64_t> g_due_delta_min_us{0};
 std::atomic<std::int64_t> g_due_delta_max_us{0};
 
@@ -109,8 +114,15 @@ void publish_guest_frame(gungnir::ge::FrameQueue &queue,
 // Wait for the next frame, but never longer than 8 ms, so touch and the
 // overlay stay responsive while the guest runs at 20 Hz. Publishing wakes the
 // wait, so a frame is presented within a millisecond of its deadline.
-void sleep_for_next_frame(gungnir::ge::FrameQueue &queue) {
-    queue.wait_for_next(std::chrono::milliseconds(8));
+void sleep_for_next_frame(gungnir::ge::FrameQueue &queue,
+    const gungnir::ge::FrameQueue::Clock::time_point *tick = nullptr) {
+    auto slice = std::chrono::milliseconds(8);
+    if (tick != nullptr) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            *tick - gungnir::ge::FrameQueue::Clock::now());
+        slice = std::clamp(remaining, std::chrono::milliseconds(1), slice);
+    }
+    queue.wait_for_next(slice);
 }
 
 void run_session_worker(gungnir::session::GameSession &session, std::atomic<bool> &finished) {
@@ -510,6 +522,17 @@ Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobj
         GUNGNIR_LOGE("game_data_invalid: %s\n", result.error.c_str());
     }
     return result.ok ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_gungnir_recomp_input_HostBridge_nativeSetFrameInterpolation(JNIEnv *, jclass, jboolean enabled) {
+    g_interpolation_enabled.store(enabled == JNI_TRUE);
+    GUNGNIR_LOGI("frame_interpolation active=%d\n", enabled == JNI_TRUE ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_gungnir_recomp_input_HostBridge_frameInterpolation(JNIEnv *, jclass) {
+    return g_interpolation_enabled.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1077,6 +1100,37 @@ int main(int, char **) {
     bool first_frame = true;
     bool fast_forward_active = false;
     bool mixer_muted = false;
+    if (intent_long("frame_interpolation", 0) != 0) {
+        g_interpolation_enabled.store(true);
+        GUNGNIR_LOGI("frame_interpolation intent=on\n");
+    }
+    // The display's own cadence decides how many in-betweens fit between two
+    // guest frames.
+    double refresh_hz = 60.0;
+    if (const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+        mode != nullptr && mode->refresh_rate > 1.0f) {
+        refresh_hz = mode->refresh_rate;
+    }
+    const auto refresh_interval = std::chrono::duration_cast<gungnir::ge::FrameQueue::Clock::duration>(
+        std::chrono::duration<double>(1.0 / refresh_hz));
+    GUNGNIR_LOGI("display_refresh_hz=%.1f\n", refresh_hz);
+    struct InterpolationState {
+        gungnir::ge::FrameHistory history;
+        std::vector<gungnir::ge::Draw> current;
+        std::vector<gungnir::ge::Draw> scratch;
+        gungnir::ge::FrameQueue::Clock::time_point last_arrival{};
+        gungnir::ge::FrameQueue::Clock::time_point window_start{};
+        gungnir::ge::FrameQueue::Clock::duration window{};
+        gungnir::ge::FrameQueue::Clock::time_point next_tick{};
+        bool has_arrival{};
+        bool active{};
+        std::uint64_t interpolated{};
+        std::uint64_t held{};
+        std::uint64_t late_ticks{};
+    };
+    // Static storage: this state is large enough that keeping it off the SDL
+    // main thread's stack matters, and there is one session per process.
+    static InterpolationState interpolation;
     std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;
@@ -1170,8 +1224,9 @@ int main(int, char **) {
 
         std::vector<gungnir::ge::Draw> guest_draws;
         bool present_late = false;
+        const auto frame_now = gungnir::ge::FrameQueue::Clock::now();
         const bool have_guest_frame = !debug_quad &&
-            frame_queue.take_due(gungnir::ge::FrameQueue::Clock::now(), guest_draws, present_late);
+            frame_queue.take_due(frame_now, guest_draws, present_late);
         if (present_late) {
             // The frame is still shown, one deadline late: name it rather than
             // hiding the miss under a longer sleep.
@@ -1199,18 +1254,75 @@ int main(int, char **) {
             state.scissor_y1 = 272;
             const std::array<gungnir::ge::VulkanDrawCall, 1> calls{{{vertices, indices, state}}};
             rendered = backend.render_swapchain_draws(calls, error, 0u);
-        } else if (have_guest_frame) {
+        } else {
+            // Interpolation presents in-between frames, so it owns the decision
+            // of what goes on screen; without it a guest frame is presented as
+            // it arrives.
+            std::vector<gungnir::ge::Draw> *to_present = nullptr;
+            const bool interpolation_on =
+                g_interpolation_enabled.load(std::memory_order_relaxed);
+            if (have_guest_frame && interpolation_on) {
+                if (interpolation.current.empty()) {
+                    // Nothing to interpolate from yet: show this frame at once.
+                    to_present = &guest_draws;
+                } else {
+                    // One guest interval of display latency by construction:
+                    // this window shows the previous frame moving into this
+                    // one, and the real frame lands at the end of it.
+                    interpolation.history.push(std::move(interpolation.current));
+                    interpolation.window = interpolation.has_arrival
+                        ? frame_now - interpolation.last_arrival
+                        : refresh_interval;
+                    if (interpolation.window < std::chrono::milliseconds(1))
+                        interpolation.window = std::chrono::milliseconds(1);
+                    interpolation.window_start = frame_now;
+                    interpolation.next_tick = frame_now + refresh_interval;
+                    interpolation.active = true;
+                }
+                interpolation.last_arrival = frame_now;
+                interpolation.has_arrival = true;
+                interpolation.current = std::move(guest_draws);
+            } else if (have_guest_frame) {
+                to_present = &guest_draws;
+            } else if (interpolation_on && interpolation.active && frame_now >= interpolation.next_tick) {
+                const double elapsed = std::chrono::duration<double>(
+                    frame_now - interpolation.window_start).count();
+                const double span = std::chrono::duration<double>(interpolation.window).count();
+                const double t = std::clamp(elapsed / span, 0.0, 1.0);
+                if (t >= 1.0) {
+                    // The next guest frame is late: hold the real one and stop
+                    // the window so nothing extrapolates past what the guest
+                    // produced.
+                    interpolation.scratch = interpolation.current;
+                    ++interpolation.held;
+                    interpolation.active = false;
+                } else {
+                    interpolation.scratch = interpolation.current;
+                    gungnir::ge::InterpolationStats stats;
+                    gungnir::ge::interpolate_frame(interpolation.scratch,
+                        interpolation.history, static_cast<float>(t), &stats);
+                    ++interpolation.interpolated;
+                    interpolation.next_tick += refresh_interval;
+                    if (interpolation.next_tick <= frame_now) {
+                        interpolation.next_tick = frame_now + refresh_interval;
+                        ++interpolation.late_ticks;
+                    }
+                }
+                to_present = &interpolation.scratch;
+            }
+            if (to_present == nullptr) {
+                // Nothing is due yet: wake for the next deadline, or soon
+                // enough to keep input and the overlay responsive.
+                sleep_for_next_frame(frame_queue,
+                    interpolation.active ? &interpolation.next_tick : nullptr);
+                continue;
+            }
             const auto present_started = gungnir::ge::FrameQueue::Clock::now();
-            rendered = present_guest_frame(backend, guest_draws, error);
+            rendered = present_guest_frame(backend, *to_present, error);
             present_time = std::chrono::duration_cast<std::chrono::microseconds>(
                 gungnir::ge::FrameQueue::Clock::now() - present_started);
             present_total += present_time;
             ++present_count;
-        } else {
-            // Nothing is due yet: wake for the next deadline, or soon enough to
-            // keep input and the overlay responsive.
-            sleep_for_next_frame(frame_queue);
-            continue;
         }
         if (!rendered) {
             GUNGNIR_LOGE("render_failed: %s\n", error.c_str());
@@ -1275,6 +1387,11 @@ int main(int, char **) {
                          static_cast<long long>(g_due_delta_min_us.load()),
                          static_cast<long long>(g_due_delta_max_us.load()),
                          static_cast<long long>(frame_queue.last_late_us()));
+            GUNGNIR_LOGI("interpolation active=%d interpolated=%llu held=%llu late_ticks=%llu\n",
+                         g_interpolation_enabled.load() ? 1 : 0,
+                         static_cast<unsigned long long>(interpolation.interpolated),
+                         static_cast<unsigned long long>(interpolation.held),
+                         static_cast<unsigned long long>(interpolation.late_ticks));
             GUNGNIR_LOGI("presents published=%llu presented=%llu dropped=%llu late=%llu\n",
                          static_cast<unsigned long long>(frame_queue.published()),
                          static_cast<unsigned long long>(frame_queue.presented()),
