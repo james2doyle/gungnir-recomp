@@ -249,6 +249,18 @@ is no automatic snapshot on background; use the menu's Save state first.
 A failed render is retried up to three times, and a failed surface recreation
 is logged as `surface_recreate_failed` and retried after 500 ms.
 
+## Frame interpolation
+
+The Settings overlay offers `Frame interpolation: On/Off` (off by default,
+persisted in the `gungnir` preferences and pushed to native through
+`HostBridge.setFrameInterpolation`). A `frame_interpolation=1` intent extra
+selects it for a bounded QA run without touching the UI.
+
+It is presentation only: the guest still runs at its own rate, and the option
+is host state, never part of a snapshot. The periodic log reports
+`interpolation active=<0|1> interpolated=<n> held=<n> skipped_ticks=<n>` next to
+the present counters, so a QA log proves which mode produced the frames.
+
 ## Emulator notes
 
 Use `scripts/android/emulator.sh` for a reproducible headless run. It starts

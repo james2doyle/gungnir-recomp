@@ -94,6 +94,44 @@ FMV/PSMF is not implemented (every `sceMpeg` entry point is a named gap), so
 pillarboxing is unit-tested with a full-screen 2D quad only and device
 acceptance stays blocked on movie playback.
 
+## Frame interpolation (T17)
+
+The guest title is a locked 20 Hz producer: it flips, sleeps two ~8 ms guest
+delays, then waits two vblanks (`1 + 2 = 3` vblanks, 16.683 ms each). That was
+measured, not assumed; see `docs/qa/2026-11-03-m2102k1ac-interpolation.md`.
+Frame interpolation runs on top of that rate and never changes what the guest
+computes.
+
+- **Identity.** `draw_key` covers primitive, vertex count, texture key, target
+  format and the GE through flag, plus the occurrence index within the frame.
+  The target buffer address is deliberately excluded: the game alternates two
+  display buffers, so an address-based key matches nothing between frames.
+- **Candidates.** Transform draws only. Through-mode draws carry screen-space
+  positions the game authors per frame (menus, text, cursors, HUD), so they are
+  never interpolated. A draw without a partner is left as produced.
+- **Motion.** Matched draws move to `t` of the way from the previous frame:
+  positions only (x, y, z, inv_w); colour, texture coordinates and state stay
+  the frame's own. This is the Chinatown Wars vertex-midpoint method; The 3rd
+  Birthday's matrix reprojection needs per-draw matrices we do not keep and
+  stays the fallback if midpoint looks wrong on skinned content.
+- **Cuts.** An average screen-space motion above `kCutScreenFraction` (0.2 of
+  the 480-wide frame) is treated as a camera cut: the pair is left untouched so
+  the old scene never drags across the new one.
+- **Schedule.** `PresentSchedule` starts a display window per guest frame,
+  presents one in-between per display refresh (`t = elapsed / window`, where the
+  window is the previous guest interval), and shows the real frame at the end
+  of the window rather than extrapolating. That costs one guest interval of
+  display latency by construction; it never accumulates.
+- **Never in a snapshot.** The history is derived and lives only in the host;
+  snapshot load, reset to title and background resume clear it, so no in-between
+  bridges a discontinuity. The option is host state, not part of the snapshot
+  identity.
+
+Limits, named rather than silent: the presented rate is bounded by the cost of
+one present. At the battle scene (2834 draws) a present costs about 10 ms, so
+the ceiling is near 100 presents/s regardless of a 120 Hz panel; `skipped_ticks`
+in the periodic log reports the shortfall.
+
 ## Fixtures and tolerance
 
 | Gate | Fixtures | Tolerance |

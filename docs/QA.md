@@ -33,7 +33,12 @@ recorded. PPSSPP is an oracle only.
    growth (mixer `underrun` and `muted` grow, which is the expected mute
    shape), and a latched state survives background/foreground. A held R2 must
    not survive the pause.
-10. Soak: 30 minutes of attended play on at least one physical device;
+10. Frame interpolation: settings row off then on at a battle scene. Off
+    presents at the guest rate with `interpolated=0`; on shows in-betweens
+    (`interpolated` climbing), the real frames still look correct with no
+    smearing, `overruns` and `xruns` stay flat, and the presented rate rises.
+    `skipped_ticks` records the refreshes the presenter could not hold.
+11. Soak: 30 minutes of attended play on at least one physical device;
    record crash/thermal/audio counters, not frames.
 11. Findings: fix red-first where host-testable (reproducing test before
     the fix); file device-only defects as tracked dex tasks and link them
@@ -60,6 +65,7 @@ supply a field says `unknown`.
 | physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno suspend/resume | 2026-11-03-m2102k1ac-background-resume.md | SIGNED |
 | physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
+| physical Adreno frame interpolation | TBD | PENDING |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
 | physical Adreno audio smoke | TBD | PENDING |

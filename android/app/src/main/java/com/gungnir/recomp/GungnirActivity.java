@@ -204,7 +204,11 @@ public final class GungnirActivity extends SDLActivity {
             }
         }, getApplicationInfo().nativeLibraryDir, getCacheDir());
         frameInterpolation = preferences.getBoolean("frame_interpolation", false);
-        HostBridge.nativeSetFrameInterpolation(frameInterpolation);
+        // The QA intent must win over the persisted setting, and SDL may read
+        // it on a thread that starts before this one: never overwrite it here.
+        if (!getIntent().hasExtra("frame_interpolation")) {
+            HostBridge.nativeSetFrameInterpolation(frameInterpolation);
+        }
         customDriversSupported = Build.SUPPORTED_ABIS.length > 0
                 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0]);
 

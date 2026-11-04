@@ -191,6 +191,24 @@ Mutation evidence and the remaining named gaps (full GE state machine -> draw
 path wiring, DXT textures, Vulkan post passes, validation-layer availability)
 are recorded in `docs/RENDERER.md`.
 
+## Frame-rate gates (T17)
+
+- `frame_pacing_tests` — present deadlines: one present per produced frame, in
+  order, never twice, counted drops when the host falls behind, and the wait
+  returning as soon as a frame is due.
+- `draw_identity_tests` — draw keys survive the alternating display buffer,
+  change with texture/count/through, keep occurrence order, and classify
+  through draws as non-candidates.
+- `interpolation_tests` — midpoint pan, `t = 0/1` reproducing the real frames,
+  unmatched and 2D pass-through, cut rejection, occurrence order. Mutation:
+  matching by key without the occurrence kills it.
+- `present_schedule_tests` — injected-time schedule: one window per guest
+  frame, one present per refresh, the real frame at the end, a skipped refresh
+  counted and never a burst.
+- `tests/test_interpolation_surfaces.py` — option default off, persistence and
+  JNI, the QA intent, the log line, no interpolation in the snapshot sources,
+  and a history reset in every continuity-breaking path.
+
 ## Texture container gates (T8)
 
 `tests/test_tpl.py` builds and runs `tex_tpl_tests`: synthetic TPL containers
