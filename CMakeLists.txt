@@ -94,6 +94,7 @@ add_library(gungnir_hle STATIC
     runtime/savedata/save_store.cpp
     runtime/session/game_session.cpp
     runtime/session/diagnostics.cpp
+    runtime/session/session_lifecycle.cpp
     runtime/session/session_report.cpp
     runtime/session/snapshot.cpp
     runtime/session/corpus_present.cpp)
@@ -128,6 +129,11 @@ set_target_properties(savedata_tests PROPERTIES
 add_executable(session_report_tests tests/session/session_report_tests.cpp)
 target_link_libraries(session_report_tests PRIVATE gungnir_hle)
 set_target_properties(session_report_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
+add_executable(session_lifecycle_tests tests/session/session_lifecycle_tests.cpp)
+target_link_libraries(session_lifecycle_tests PRIVATE gungnir_hle)
+set_target_properties(session_lifecycle_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
 
 add_executable(snapshot_tests tests/session/snapshot_tests.cpp)

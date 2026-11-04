@@ -224,13 +224,30 @@ gamepad profiles/remap and touch haptics are documented in
 ## Lifecycle and orientation
 
 The Activity is fixed to landscape (`LandscapeLeft`), so user rotation locks
-do not rotate the app. Entering the background releases held input, requests a
-session stop, pauses AAudio and logs `lifecycle_paused`; returning to the
-foreground resumes the audio stream and recreates the `VkSurfaceKHR`/
-swapchain (`lifecycle_resumed`). The guest session itself is not restarted
-after a background stop — a named lifecycle gap for the manual QA matrix. A
-failed render is retried up to three times, and a failed surface recreation is
-logged as `surface_recreate_failed` and retried after 500 ms.
+do not rotate the app. Entering the background releases held input, asks
+`SessionLifecycle` for a stop, pauses AAudio, mutes the mixer for the whole
+background window and logs `lifecycle_paused`; returning to the foreground
+resumes the audio stream, recreates the `VkSurfaceKHR`/swapchain
+(`lifecycle_resumed`) and then relaunches the worker from the pc it stopped at
+(`session_resumed reason=foreground`).
+
+The guest is stopped between dispatches, never mid-dispatch, and the decision
+lives in `runtime/session/session_lifecycle.*` (host unit tests:
+`tests/session/session_lifecycle_tests.cpp`). A live session is stopped once; a
+run that ended for its own reason (dispatch or wall-clock bound, failure, the
+stall watchdog) is **not** revived — that is logged as
+`session_resume_skipped reason=own_stop cause=...`. The resume waits for the
+new surface and shares the snapshot mutex with the menu save/load/reset paths.
+`GameSession::request_resume` rebases the pacing hold, so a resumed run
+continues at normal speed instead of racing to make up the pause.
+
+One `session_start` line per launch is the invariant: a background/foreground
+round trip keeps the process, the guest memory and the fast-forward latch. If
+Android kills the process while backgrounded, unsaved progress is lost — there
+is no automatic snapshot on background; use the menu's Save state first.
+
+A failed render is retried up to three times, and a failed surface recreation
+is logged as `surface_recreate_failed` and retried after 500 ms.
 
 ## Emulator notes
 

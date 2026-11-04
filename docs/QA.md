@@ -18,8 +18,10 @@ recorded. PPSSPP is an oracle only.
    aspect; text legible at 1x.
 4. Menu input: drive every entry by touch, then by gamepad (paired pad and
    built-in handheld where available). Overlay hides on pad input.
-5. Suspend/resume: background the app (home), foreground it; rendering must
-   recover without a restart. Repeat twice.
+5. Suspend/resume: background the app (home) for at least 5 s, foreground it.
+   `session_resumed reason=foreground` must follow `lifecycle_resumed`, guest
+   frames must continue and progress must be intact, with no second
+   `session_start` and no new `overruns`/`xruns`. Repeat twice.
 6. Rotation: rotate the device; the app ignores it (no relayout, no crash).
 7. Save/load: memstick save then load through the game's own path; confirm
    the round trip.
@@ -56,7 +58,7 @@ supply a field says `unknown`.
 | physical Adreno cold boot x3 | 2026-11-03-m2102k1ac-coldboot.md | SIGNED |
 | physical Adreno touch menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
 | physical Adreno gamepad menu | 2026-11-03-m2102k1ac-menu.md | SIGNED |
-| physical Adreno suspend/resume | 2026-11-03-m2102k1ac-resume.md | SIGNED |
+| physical Adreno suspend/resume | 2026-11-03-m2102k1ac-resume.md | SUPERSEDED (re-run pending) |
 | physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
 | physical Adreno 30-minute soak | TBD | PENDING |
 | physical Adreno save/load | TBD | PENDING |
@@ -65,9 +67,16 @@ supply a field says `unknown`.
 
 Note 2026-11-03 (fast-forward cell): signed for touch, pacing, audio,
 save/load and pad control (R3 latches, R2 holds). The same session found that
-backgrounding ends the guest session (`eqomlp5a`), so the "rendering" row of
-the suspend/resume report above needs re-running before that cell is trusted
-again.
+backgrounding ended the guest session, which put the suspend/resume cell under
+re-check.
+
+Note 2026-11-03 (suspend/resume re-run): the earlier report's rendering row is
+withdrawn — it counted `guest_frame` lines over the whole buffer, including
+pre-pause ones, while the session was in fact stopped. The session is now
+stopped between dispatches on background and resumed in place on foreground;
+the cell stays pending until a clean-build re-run records the battle-scene
+round trip (same PID, one `session_start`, progress intact, `overruns=0`,
+`xruns=0`).
 
 ## Evidence and sign-off template
 

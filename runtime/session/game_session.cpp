@@ -379,6 +379,10 @@ void GameSession::request_stop() {
 
 void GameSession::request_resume() {
     if (impl_->runtime != nullptr) impl_->resume_pc = impl_->runtime->cpu().pc;
+    // The wall clock kept running while the guest was stopped. Forget the old
+    // hold so the resumed run continues at normal speed instead of racing to
+    // make up the pause.
+    gungnir::hle::kernel().resync_real_time();
 }
 
 bool GameSession::restart_to_title(std::string &error) {

@@ -121,13 +121,15 @@ Images stay under gitignored `build/qa/2026-11-03-m2102k1ac-ff/`.
   so the 41 s latch above is the R3 evidence and the R2 hold is
   owner-verified plus `tests.test_sdl_gamepad` for the merge and for an R3
   that a profile has bound staying a guest button.
-- **Backgrounding ends the session (pre-existing, tracked).** Pressing HOME
-  logs `lifecycle_paused`, the worker prints its `session_unbound` summary,
-  and returning logs `lifecycle_resumed` with no `session_start` and no
-  further `guest_frame`: the app shows the last frame for good. Filed as
-  `eqomlp5a`. This also puts the rendering row of
+- **Backgrounding ends the session (pre-existing, FIXED later that day).**
+  Pressing HOME logged `lifecycle_paused`, the worker printed its
+  `session_unbound` summary, and returning logged `lifecycle_resumed` with no
+  `session_start` and no further `guest_frame`: the app showed the last frame
+  for good. That also put the rendering row of
   `docs/qa/2026-11-03-m2102k1ac-resume.md` under re-check, because a
-  `grep -c guest_frame` over the log buffer counts pre-pause lines. The
+  `grep -c guest_frame` over the log buffer counts pre-pause lines. The stop now
+  resumes in place on foreground; see
+  `docs/qa/2026-11-03-m2102k1ac-background-resume.md`. The
   fast-forward latch itself did survive the round trip (a single tap after
   resume cleared it), which is what this cell needed.
 - **R3 semantics (late change, then re-checked).** R3 started as a hold in

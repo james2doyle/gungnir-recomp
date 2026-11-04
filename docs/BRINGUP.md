@@ -1365,7 +1365,7 @@ Device proof: menu save plus menu load plus reset-and-load-from-title all on
 the clean build; `ULUS10592GUN9THSTORY00/` (PARAM.SFO, STORY, icons) verified
 on the memstick via `run-as`.
 
-## 2026-11-03 — Backgrounding ends the guest session (device, open)
+## 2026-11-03 — Backgrounding ends the guest session (device, FIXED)
 
 **Symptom.** Press HOME while a session runs, then bring the activity back:
 `lifecycle_paused`, the worker prints its `session_unbound` summary, then
@@ -1381,15 +1381,35 @@ fast-forward interaction: the stop is logged 227 ms after
 `lifecycle_paused` and 3 s before the foreground event, and the host control
 never touches the session thread.
 
-**Root cause.** `LifecycleState::lifecycle_watch` calls
+**Root cause.** `LifecycleState::lifecycle_watch` called
 `session->request_stop()` on `SDL_EVENT_WILL_ENTER_BACKGROUND`
-(`android/app/src/main/cpp/main.cpp`). `run_session_worker` runs
-`session.run()` exactly once and the foreground branch only resumes audio and
-rebuilds the surface, so nothing relaunches or resumes the guest.
+(`android/app/src/main/cpp/main.cpp`) and **nothing ever resumed the guest**.
+`run_session_worker` runs `session.run()` exactly once; the foreground branch
+only resumed audio and rebuilt the surface. A stop without a resume is never
+acceptable, and this one was invisible in the logs because the worker's
+summary still printed.
 
-**Regression / gap.** Filed as `eqomlp5a`; no host test yet because the fix is
-a policy choice (keep running while backgrounded vs. resume from a host
-snapshot on foreground) and either path needs its own seam. The rendering row
-of `docs/qa/2026-11-03-m2102k1ac-resume.md` is under re-check: a
-`grep -c guest_frame` over the log buffer also counts pre-pause lines, and
-this observation contradicts its "guest frames kept flowing" claim.
+**Fix (2026-11-03).** The session is stopped between dispatches on background
+and resumed in place on foreground from the pc it stopped at, reusing the
+`request_stop`/`request_resume`/`launch_session_thread` path the snapshot menu
+already proved on device. `runtime/session/session_lifecycle.*` owns the
+decision (stop a live session once; resume only a `HostStop`; never revive a
+run that hit its dispatch or wall-clock bound; stay pending until the worker
+has actually returned), and is unit-tested on the host. The relaunch runs
+under the snapshot mutex, waits for the recreated surface, and
+`GameSession::request_resume` calls `Kernel::resync_real_time()` so the resumed
+run does not race the wall time it spent paused. The mixer is muted for the
+whole background window: the paused AAudio stream drains nothing, so the few
+hundred milliseconds the guest needs to stop would otherwise fill the ring and
+count `overruns` on every round trip.
+
+**Evidence.** `docs/qa/2026-11-03-m2102k1ac-background-resume.md`: battle scene
+(2834 draws), same PID, one `session_start`, `guest_frame` lines 0.5 s after
+`session_resumed reason=foreground`, unchanged HP/turn, `overruns=0` and
+`xruns=0` across the round trip, three scripted cycles green.
+
+**Retraction.** The "rendering" row of
+`docs/qa/2026-11-03-m2102k1ac-resume.md` is **withdrawn**. Its evidence was a
+`grep -c guest_frame` over the whole log buffer, which counts pre-pause lines;
+the session had in fact ended. That report is marked superseded and the cell is
+re-signed from the new record.

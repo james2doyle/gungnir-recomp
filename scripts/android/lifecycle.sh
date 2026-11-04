@@ -50,12 +50,24 @@ wait_for "first frame"
 
 for _ in 1 2 3; do
     paused=$(count "lifecycle_paused")
+    frames=$(count "guest_frame")
     "$ADB" "${ADB_ARGS[@]}" shell input keyevent KEYCODE_HOME
     wait_for_more "lifecycle_paused" "$paused"
     resumed=$(count "lifecycle_resumed")
+    resumes=$(count "session_resumed reason=foreground")
     "$ADB" "${ADB_ARGS[@]}" shell am start -n "$ACTIVITY" >/dev/null
     wait_for_more "lifecycle_resumed" "$resumed"
+    # A frozen frame after a round trip is the defect this guards: the guest
+    # must come back in place, keep rendering, and never restart the app.
+    wait_for_more "session_resumed reason=foreground" "$resumes"
+    wait_for_more "guest_frame" "$frames"
 done
+
+restarts=$(count "session_start elf=")
+if [ "$restarts" -ne 1 ]; then
+    echo "session_restarted: $restarts session_start lines (expected 1)" >&2
+    exit 1
+fi
 
 last=$("$ADB" "${ADB_ARGS[@]}" logcat -d -s gungnir:I | grep -E "first frame|lifecycle_resumed" | tail -1)
 dims=$(printf '%s\n' "$last" | grep -oE '[0-9]+x[0-9]+' | tail -1)

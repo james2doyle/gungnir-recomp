@@ -25,6 +25,7 @@
 #include "platform/android/game_data.hpp"
 #include "platform/sdl_gamepad.hpp"
 #include "session/game_session.hpp"
+#include "session/session_lifecycle.hpp"
 
 #include <algorithm>
 #include <array>
@@ -67,6 +68,10 @@ std::mutex g_snapshot_mutex;
 gungnir::session::GameSession *g_snapshot_session = nullptr;
 std::thread *g_snapshot_thread = nullptr;
 std::atomic<bool> *g_snapshot_finished = nullptr;
+// A menu save/load/reset relaunches a live worker under the snapshot mutex.
+// The activity's pending background pause is then moot; the main loop clears
+// it on its next tick instead of resuming on top of the new worker.
+std::atomic<bool> g_lifecycle_reset_requested{false};
 
 // Host sinks installed once at startup (GE frame sink) but cleared by
 // GameSession::start()'s HLE reset. Restart paths must re-arm them after a
@@ -90,6 +95,34 @@ void launch_session_thread(gungnir::session::GameSession &session, std::atomic<b
     std::thread &slot) {
     finished.store(false);
     slot = std::thread([&session, &finished] { run_session_worker(session, finished); });
+}
+
+// The foreground half of the lifecycle policy. The guest only comes back once
+// the new surface exists, so its first frame has somewhere to land, and the
+// relaunch shares the snapshot mutex with the menu ops that join the same
+// worker.
+void resume_after_background(gungnir::session::GameSession &session,
+    std::atomic<bool> &finished, std::thread &slot,
+    gungnir::session::SessionLifecycle &lifecycle) {
+    if (!lifecycle.paused()) return;
+    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+    // The worker reports its result as it exits; reading it while the worker
+    // still runs would be a race, so the pause stays pending until it returns.
+    if (!finished.load()) return;
+    const bool stopped_by_host =
+        session.result().stop_cause == gungnir::session::StopCause::HostStop;
+    if (lifecycle.on_foreground(true, stopped_by_host) !=
+        gungnir::session::SessionLifecycle::Action::Resume) {
+        // A run that ended for its own reason (dispatch or wall-clock bound,
+        // a failure) is not revived, but never silently.
+        GUNGNIR_LOGI("session_resume_skipped reason=own_stop cause=%s\n",
+                     session.result().stop_reason.c_str());
+        return;
+    }
+    if (slot.joinable()) slot.join();
+    session.request_resume();
+    launch_session_thread(session, finished, slot);
+    GUNGNIR_LOGI("session_resumed reason=foreground\n");
 }
 
 gungnir::input::TouchHaptics &touch_haptics() {
@@ -346,6 +379,10 @@ struct LifecycleState {
     gungnir::input::SdlInput *sdl_input{};
     gungnir::platform::SdlGamepad *gamepad{};
     gungnir::session::GameSession *session{};
+    gungnir::session::SessionLifecycle *lifecycle{};
+    // Null when no worker was launched (debug quad), so a background event in
+    // that mode never reports a live session or requests a stop.
+    std::atomic<bool> *session_finished{};
     gungnir::audio::AAudioOut *audio_out{};
 };
 
@@ -359,7 +396,17 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
         // the user's choice and does.
         gungnir::input::host_controls().release_holds();
         state->background.store(true);
-        if (state->session != nullptr) {
+        // The guest is stopped between dispatches while the OS owns the
+        // surface: there is nothing to present to, and a game left running
+        // behind another app only burns battery. Foreground relaunches it from
+        // the pc it stopped at, so a round trip keeps progress without a
+        // restart. A finished run (bounded QA, dispatch limit, failure) is not
+        // a live session and is never revived.
+        const bool session_live =
+            state->session_finished != nullptr && !state->session_finished->load();
+        if (state->lifecycle != nullptr && state->session != nullptr &&
+            state->lifecycle->on_background(session_live) ==
+                gungnir::session::SessionLifecycle::Action::Stop) {
             state->session->request_stop();
             GUNGNIR_LOGI("session_stop_requested reason=background\n");
         }
@@ -436,11 +483,13 @@ Java_com_gungnir_recomp_GungnirActivity_nativeSaveSnapshot(JNIEnv *env, jobject,
         GUNGNIR_LOGE("snapshot_save_failed: %s\n", error.c_str());
         g_snapshot_session->request_resume();
         launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        g_lifecycle_reset_requested.store(true);
         return env->NewStringUTF(error.c_str());
     }
     GUNGNIR_LOGI("snapshot_saved path=%s\n", file.c_str());
     g_snapshot_session->request_resume();
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    g_lifecycle_reset_requested.store(true);
     return nullptr;
 }
 
@@ -468,10 +517,12 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
         // recorded load error loudly instead of freezing on a dead frame.
         GUNGNIR_LOGE("snapshot_load_failed: %s\n", error.c_str());
         launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        g_lifecycle_reset_requested.store(true);
         return env->NewStringUTF(error.c_str());
     }
     GUNGNIR_LOGI("snapshot_loaded path=%s\n", file.c_str());
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    g_lifecycle_reset_requested.store(true);
     return nullptr;
 }
 
@@ -491,11 +542,13 @@ Java_com_gungnir_recomp_GungnirActivity_nativeResetToTitle(JNIEnv *env, jobject)
     if (!g_snapshot_session->restart_to_title(error)) {
         GUNGNIR_LOGE("reset_to_title_failed: %s\n", error.c_str());
         launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+        g_lifecycle_reset_requested.store(true);
         return env->NewStringUTF(error.c_str());
     }
     if (g_session_rearm) g_session_rearm();
     GUNGNIR_LOGI("session_reset_to_title\n");
     launch_session_thread(*g_snapshot_session, *g_snapshot_finished, *g_snapshot_thread);
+    g_lifecycle_reset_requested.store(true);
     return nullptr;
 }
 
@@ -892,6 +945,7 @@ int main(int, char **) {
     gungnir::session::GameSession session;
     std::thread session_thread;
     std::atomic<bool> session_finished{false};
+    bool session_launched = false;
     if (debug_quad) {
         GUNGNIR_LOGI("debug_quad enabled\n");
     } else if (game_data.ok && internal != nullptr) {
@@ -951,6 +1005,7 @@ int main(int, char **) {
                     }
                 }
                 launch_session_thread(session, session_finished, session_thread);
+                session_launched = true;
             }
         }
     } else if (!game_data.ok) {
@@ -958,16 +1013,20 @@ int main(int, char **) {
     }
 
     LifecycleState lifecycle;
+    gungnir::session::SessionLifecycle lifecycle_policy;
     gungnir::input::SdlInput sdl_input;
     lifecycle.sdl_input = &sdl_input;
     lifecycle.gamepad = &gamepad;
     lifecycle.session = &session;
+    lifecycle.lifecycle = &lifecycle_policy;
+    lifecycle.session_finished = session_launched ? &session_finished : nullptr;
     lifecycle.audio_out = audio_out.get();
     SDL_AddEventWatch(lifecycle_watch, &lifecycle);
 
     bool running = true;
     bool first_frame = true;
     bool fast_forward_active = false;
+    bool mixer_muted = false;
     std::uint64_t guest_frames = 0u;
     bool needs_surface = false;
     int render_failures = 0;
@@ -1004,15 +1063,26 @@ int main(int, char **) {
         }
         if (!running) break;
 
+        // A menu save/load/reset relaunched the worker while the activity was
+        // foreground: a pending background pause can never become a resume.
+        if (g_lifecycle_reset_requested.exchange(false)) lifecycle_policy.reset();
+
         // Fast-forward is host pacing policy. Mute the mixer while it is on so
-        // the guest's faster audio never overruns the device ring.
+        // the guest's faster audio never overruns the device ring. The same
+        // mute covers the background window: the stream is paused there, and
+        // the few hundred milliseconds the guest needs to stop would otherwise
+        // fill the ring and count overruns on every round trip.
         const bool fast_forward = gungnir::input::host_controls().active(
             gungnir::input::HostControl::FastForward);
         if (fast_forward != fast_forward_active) {
             fast_forward_active = fast_forward;
-            mixer.set_muted(fast_forward);
             GUNGNIR_LOGI("fast_forward active=%d speed=%.2f\n", fast_forward ? 1 : 0,
                          gungnir::input::host_controls().speed());
+        }
+        const bool mixer_mute = fast_forward || lifecycle.background.load();
+        if (mixer_mute != mixer_muted) {
+            mixer_muted = mixer_mute;
+            mixer.set_muted(mixer_mute);
         }
 
         if (lifecycle.background.load()) {
@@ -1042,6 +1112,11 @@ int main(int, char **) {
             SDL_Delay(16);
             continue;
         }
+        // The worker can still be inside an HLE call when the surface comes
+        // back, so the resume is retried every frame the pause is pending
+        // rather than only at the moment the surface was recreated.
+        resume_after_background(session, session_finished, session_thread,
+                                lifecycle_policy);
 
         std::vector<gungnir::ge::Draw> guest_draws;
         const bool have_guest_frame = !debug_quad && frame_queue.take_latest(guest_draws);
