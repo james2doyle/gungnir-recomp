@@ -606,6 +606,7 @@ Java_com_gungnir_recomp_GungnirActivity_nativeLoadSnapshot(JNIEnv *env, jobject,
         g_snapshot_thread->join();
     }
     std::string error;
+    reset_interpolation_history();
     if (!g_snapshot_session->load_snapshot(file, error)) {
         // Never strand a stopped session: the relaunched worker reports the
         // recorded load error loudly instead of freezing on a dead frame.
