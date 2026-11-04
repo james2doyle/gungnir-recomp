@@ -601,3 +601,26 @@ is modelled because the title only reads GPI.
   without adopting its resampler. Gamepad R2/R3 and a dedicated touch ring
   drive it; the ring's latch and the trigger's hold merge, and the pad never
   takes a binding a profile assigns. No third-party code copied (AGENTS #0).
+
+### Widescreen / camera-hook reference review (2026-11-04)
+
+Surveyed for the adaptive-widescreen and per-title camera-hook work (docs/
+RENDERER.md, plan §7D.9). Behavioral reference only; no code copied.
+
+- `BasedYuki/the-3rd-birthday-recomp` (GPL-3.0 toolkit): the only surveyed PSP
+  recompilation that widens, and it does so by hooking the *game's* camera
+  functions (`cam_projection 0x08BBB194`, `cam_setup 0x08B435B8`) so the guest
+  renders and culls wider itself. Companion classification rules from their
+  scene passes: flat 2D/ortho HUD squeezed into a centred 16:9 area,
+  full-screen draws stretched, off-screen parked HUD clipped by scissor
+  (`GeState.ws_clip`), and any small (<=16 vertex) draw still on an old
+  480:272 camera treated as a screen effect. Adopted as the design: widen the
+  guest's camera input, never host-side culling; our full-frame 2D coverage
+  rule is our own answer to the same problem.
+- `Tzeentchnet/psp-recomp` (GPL-3.0): resizable swapchain that keeps the exact
+  480:272 aspect and clears letterbox/pillarbox — no widening. Rejected: the
+  letterboxing behaviour we are replacing.
+- `highcmd/chinatown-wars-psp-recomp`, `highcmd/ssx-on-tour-psp-recomp`,
+  `DanielPerezL/CarsPSPRecomp`, `snuri00/psp-web-recomp`: no widescreen, FOV or
+  camera work in the tree (Cars and the web port change resolution/textures
+  only). Confirms that widening is a per-title problem, not a runtime switch.
