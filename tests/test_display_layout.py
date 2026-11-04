@@ -40,15 +40,17 @@ class TestDisplayLayoutSurfaces(unittest.TestCase):
         self.assertIn("nativeSetDisplayLayout", bridge)
         self.assertIn("String displayLayout()", bridge)
 
-    def test_settings_row_cycles_and_persists(self):
+    def test_layout_is_not_a_dead_settings_row(self):
+        # While adaptive widescreen fills the display the three policies
+        # coincide, so offering the row would be a control that does nothing.
         overlay = OVERLAY.read_text()
-        self.assertIn("Screen fill: ", overlay, "the row names the active policy")
-        self.assertIn("onCycleDisplayLayout", overlay)
+        self.assertNotIn("Screen fill: ", overlay, "no dead presentation row")
+        self.assertNotIn("onCycleDisplayLayout", overlay)
         activity = ACTIVITY.read_text()
-        self.assertIn('putString("display_layout"', activity, "the policy persists")
-        self.assertIn('getString("display_layout", "fit")', activity, "fit is the default")
-        self.assertIn('getIntent().hasExtra("display_layout")', activity,
-                      "the QA intent wins over the persisted setting")
+        self.assertIn('hasExtra("display_layout")', activity,
+                      "the QA intent still reaches the renderer")
+        self.assertIn('getString("display_layout", "fit")', activity,
+                      "the persisted policy is still applied")
 
     def test_presentation_never_enters_a_snapshot(self):
         for relative in SNAPSHOT_SOURCES:

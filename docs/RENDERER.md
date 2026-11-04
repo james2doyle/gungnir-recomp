@@ -109,6 +109,11 @@ instead of a fixed 480x272.
   **stretches with the scene**, so the margins are never empty; anything else
   is HUD and keeps its pixel size, only recentred by the margin. Scissors follow
   the same split (scene and full-frame scissors scale, HUD scissors recentre).
+- There is deliberately no presentation-layout settings row while `adaptive`
+  fills the display: `fit`, `stretch` and `crop` all produce the same rectangle
+  on a frame that already matches the display aspect, so offering the row would
+  be a control that does nothing. The policies remain available through
+  `--es display_layout` for QA and for builds with widescreen off.
 - Verified on the phone: `widescreen mode=adaptive scale=1.3001 virtual=624x272`
   with `present_rect ... rect=0,0 3063x1335` — the whole target, HUD centred and
   undistorted, the battle backdrop continuous to both edges.

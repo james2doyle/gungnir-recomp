@@ -46,7 +46,6 @@ public final class GungnirActivity extends SDLActivity {
     private boolean uiPolling;
     private boolean fastForwardShown;
     private boolean frameInterpolation;
-    private String displayLayout = "fit";
 
     private static native boolean nativeGameDataImported(String path);
 
@@ -149,25 +148,6 @@ public final class GungnirActivity extends SDLActivity {
             }
 
             @Override
-            public void onCycleDisplayLayout() {
-                // Fit keeps the guest aspect; stretch fills without bars but
-                // distorts; crop fills uniformly and clips the edges.
-                if ("fit".equals(displayLayout)) {
-                    displayLayout = "stretch";
-                } else if ("stretch".equals(displayLayout)) {
-                    displayLayout = "crop";
-                } else {
-                    displayLayout = "fit";
-                }
-                getSharedPreferences("gungnir", MODE_PRIVATE).edit()
-                        .putString("display_layout", displayLayout).apply();
-                HostBridge.nativeSetDisplayLayout(displayLayout);
-                settingsOverlay.setDisplayLayout(displayLayout);
-                Toast.makeText(GungnirActivity.this,
-                        "Screen fill: " + displayLayout, Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
             public void onSaveState() {
                 closeSettings();
                 runSnapshotOp(true);
@@ -229,9 +209,11 @@ public final class GungnirActivity extends SDLActivity {
         if (!getIntent().hasExtra("frame_interpolation")) {
             HostBridge.nativeSetFrameInterpolation(frameInterpolation);
         }
-        displayLayout = preferences.getString("display_layout", "fit");
+        // Presentation layout has no settings row while adaptive widescreen
+        // fills the display (the policies coincide there); the QA intent and
+        // the persisted value still reach the renderer.
         if (!getIntent().hasExtra("display_layout")) {
-            HostBridge.nativeSetDisplayLayout(displayLayout);
+            HostBridge.nativeSetDisplayLayout(preferences.getString("display_layout", "fit"));
         }
         customDriversSupported = Build.SUPPORTED_ABIS.length > 0
                 && "arm64-v8a".equals(Build.SUPPORTED_ABIS[0]);
@@ -278,7 +260,6 @@ public final class GungnirActivity extends SDLActivity {
         settingsButton.setSuppressed(true);
         settingsOverlay.show(touchOverlay != null && touchOverlay.isEditing(), "Gungnir");
         settingsOverlay.setFrameInterpolation(frameInterpolation);
-        settingsOverlay.setDisplayLayout(displayLayout);
         settingsOverlay.setSelection(0);
         nativeMenuBegin(settingsOverlay.rowCount());
     }
