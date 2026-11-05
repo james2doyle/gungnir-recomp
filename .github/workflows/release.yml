@@ -1,0 +1,62 @@
+# Empty-corpus release APK, built on version tags only.
+#
+# Policy: the APK contains no game code or data (the build runs with no
+# corpus properties, exactly like the CI Android job). Uploads are the APK,
+# THIRD_PARTY_NOTICES.txt and SHA256SUMS. No secrets are consumed; auth uses
+# the automatic github.token only. Tag pushes also trigger ci.yml.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GUNGNIR_REQUIRE_PRIVATE_INPUT: "1"
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358
+          accept-android-sdk-licenses: true
+      - name: Dependency ledger
+        run: python3 tools/deps.py verify
+      - name: Repository check
+        run: python3 tools/repository_check.py
+      - name: APK (empty corpus, no game data)
+        run: scripts/android/build.sh
+      - name: Release files
+        run: |
+          python3 tools/package_notices.py generate
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          OUT=release-files
+          mkdir -p "$OUT"
+          cp "$APK" "$OUT/gungnir-recomp-empty-${{ github.ref_name }}.apk"
+          cp THIRD_PARTY_NOTICES.txt "$OUT/"
+          (cd "$OUT" && sha256sum gungnir-recomp-empty-*.apk THIRD_PARTY_NOTICES.txt > SHA256SUMS)
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes "Empty-corpus APK (no game code or data). See docs/RELEASE.md." release-files/*
