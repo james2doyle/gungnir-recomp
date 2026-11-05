@@ -153,13 +153,29 @@
     },
     "M4": {
       "name": "Title screen on adb device + menu input",
-      "state": "planned",
+      "state": "open",
       "criteria": [
         "documented from-scratch pipeline (docs/BUILDING.md) reaches the title screen plus menu input on the adb device (TC-13.1)",
         "touch and gamepad both navigate the title menu; audio/saves may be stubbed with logged gaps",
         "bounded-run logs itemize all unknown-NID gaps (no silent defaults)",
         "manual QA report accepted for every device in the matrix (docs/QA.md section 8.3), including one Adreno device; three consecutive cold boots per device"
-      ]
+      ],
+      "recorded": "2026-11-05",
+      "evidence": {
+        "qa": "9 reports in docs/qa/ (Nov-3 emulator/coldboot/menu/resume/ff/interpolation on pre-battery-fix builds; Nov-5 tc14.1/saveload-audio/soak on APK 74c41bd1); sign-off docs/qa/2026-11-05-t14c-signoff.md (scoped)",
+        "device": "M2102K1AC Android 14 SM8350; 32-min session 9.1M dispatches 31323 flips, missing_import=0 silent_nids=0; peak=32120/32768, overruns/rejected/xruns=0",
+        "gaps": "intake re-run blocked (no chdman/ISO on host, G1); non-Adreno cell unavailable; audio underruns known-bad (M5); suite ZLIB env failure blocks closure",
+        "tasks": [
+          "T13a",
+          "T13b",
+          "T13c",
+          "T13d",
+          "T13e",
+          "T14a",
+          "T14b",
+          "T14c"
+        ]
+      }
     },
     "M5": {
       "name": "Hardening (audio, saves, texture upscaling, drivers, perf)",

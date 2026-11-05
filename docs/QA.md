@@ -79,9 +79,10 @@ supply a field says `unknown`.
 | physical Adreno suspend/resume | 2026-11-03-m2102k1ac-background-resume.md | SIGNED |
 | physical Adreno fast-forward | 2026-11-03-m2102k1ac-fastforward.md | SIGNED |
 | physical Adreno frame interpolation | 2026-11-03-m2102k1ac-interpolation.md | SIGNED |
-| physical Adreno 30-minute soak | TBD | PENDING |
-| physical Adreno save/load | TBD | PENDING |
-| physical Adreno audio smoke | TBD | PENDING |
+| physical Adreno 30-minute soak | 2026-11-05-m2102k1ac-soak.md | SIGNED |
+| physical Adreno save/load | 2026-11-05-m2102k1ac-saveload-audio.md | SIGNED |
+| physical Adreno audio smoke | 2026-11-05-m2102k1ac-saveload-audio.md | SIGNED |
+| from-scratch pipeline + title/menu (TC-14.1) | 2026-11-05-m2102k1ac-tc14.1.md | SIGNED (scoped: intake re-run excluded, gap G1 in report) |
 | non-Adreno/handheld (optional, if available) | TBD | PENDING |
 
 Note 2026-11-03 (fast-forward cell): signed for touch, pacing, audio,

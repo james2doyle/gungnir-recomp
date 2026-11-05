@@ -2242,3 +2242,10 @@ PROGRESS/RELEASE docs, `tools/milestones.py`, two new test files); T13h's own
 Not pursued inside T13h: host toolchain setup belongs to the build
 environment, not the release ledger. T13 closure still needs a green suite
 plus T14c sign-off.
+
+## 2026-11-05 — T14b rumble audit: no rumble API surface (M5 decision: nothing to build)
+
+- Census (`build/profile/analysis/analysis.json`): 215 imports, 0 unmapped, across 23 libraries. Game imports 4 sceCtrl functions (sampling/latch/read family); no `sceRumble`/`*Actuator*` symbol in imports, `configs/nids.csv`, or HLE.
+- HLE binds 7 sceCtrl entries (`hle_media.cpp`: SetSamplingCycle/Mode, SetIdleCancelThreshold, Read/PeekBufferPositive, Read/PeekLatch) — reads and latch only, no actuator path exists to wire.
+- Device evidence: 32-min session (battle + story) shows `missing_import=0`, `silent_nids=0` — the game never reaches for a rumble entry point.
+- M5 decision: no game/battle rumble to implement. Touch-control haptics already landed (T11c); gamepad rumble fires only if a title calls an actuator API, and this title has none. If a future title in this engine family shows otherwise, reopen with a red-first HLE contract.
