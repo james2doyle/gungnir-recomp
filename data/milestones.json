@@ -153,11 +153,25 @@
     },
     "M4": {
       "name": "Title screen on adb device + menu input",
-      "state": "planned"
+      "state": "planned",
+      "criteria": [
+        "documented from-scratch pipeline (docs/BUILDING.md) reaches the title screen plus menu input on the adb device (TC-13.1)",
+        "touch and gamepad both navigate the title menu; audio/saves may be stubbed with logged gaps",
+        "bounded-run logs itemize all unknown-NID gaps (no silent defaults)",
+        "manual QA report accepted for every device in the matrix (docs/QA.md section 8.3), including one Adreno device; three consecutive cold boots per device"
+      ]
     },
     "M5": {
       "name": "Hardening (audio, saves, texture upscaling, drivers, perf)",
-      "state": "planned"
+      "state": "planned",
+      "criteria": [
+        "audio complete on device (ATRAC/SAS decode, AAudio output, no underruns in the 60 s soak)",
+        "savedata round-trip byte-stable and PPSSPP-compatible (virtual memstick layout)",
+        "texture replacement polished at Nx with crisp text (T8/T18 tracks)",
+        "driver picker with user-supplied zips, fail-closed on malformed archives",
+        "full speed on the target handheld; shader presets shipped",
+        "QA accepted including a custom-driver session, rumble, suspend/resume and the 30-minute soak"
+      ]
     }
   }
 }

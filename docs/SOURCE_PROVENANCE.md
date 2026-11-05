@@ -931,3 +931,19 @@ Conclusion: PPSSPP's default behaviour already matches the direction we moved
 in — skip static/duplicate frames, don't chase high host refresh rates — and
 treats frame duplication as an opt-in, not a baseline. Behavioural reference
 only; no PPSSPP code copied into the product.
+
+### T13h implementation — ledger checker and release docs (2026-11-05)
+
+- `Jstar269/hst-decomp` (GPL-3.0), `data/milestones.json`: schema
+  (`schema`/`description`/`milestones[]` with `id`/`title`/`criterion`/
+  `measure`, first-date-kept) confirmed the criterion/measure/evidence/state
+  shape the T13d/T13e review already recorded; `tools/milestones.py`
+  implements the never-lower-a-figure rule as `check_ratchet()` over
+  evidence figures. No file copied.
+- `gh search code "docs/PROGRESS.md"` returned no usable in-repo precedent;
+  `gh search issues "milestone ratchet"` returned only unrelated issue
+  tracker noise. Recorded as a bounded gap; `docs/PROGRESS.md` follows the
+  repo's own counts-only charter instead.
+- PPSSPP pacing references from the battery task (`FramerateTarget`,
+  `WaitUntil`, `__DisplayFlip` framebuffer-dirty skip) informed the M5
+  hardening gap wording only; behavioral, no code copied.

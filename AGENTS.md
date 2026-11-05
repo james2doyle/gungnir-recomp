@@ -96,7 +96,7 @@ emulator command and the sprint-end physical-device gate: `android/AGENTS.md`.
 
 ## Work tracking
 
-- Plan: `.dex/plan.md` (tasks T1–T14, milestones M0–M5, gotchas register).
+- Plan: `.dex/plan.md` (tasks T1–T18, milestones M0–M5, gotchas register).
 - Tasks: dex (`dex list`, `dex start <id>`, `dex complete <id> --result …`).
   Keep the list current as work proceeds.
 - `docs/BRINGUP.md` is the living findings journal (symptom → falsification →

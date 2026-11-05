@@ -2229,3 +2229,16 @@ fix 61 %), `present_time avg_us` ~7027 (original ~10920), zero idle in-betweens,
 Python suites green, APK BUILD SUCCESSFUL. Nothing committed; manual QA (three
 cold boots, device matrix, sign-off) pending the user gate. Net charge recovery
 still not claimed (weak 191 mA charger, coarse battery level).
+
+## 2026-11-05 — T13h: full Python suite blocked on host cmake/ZLIB (environmental, pre-existing)
+
+`tools/run_python_suite.sh` (log `build/test-logs/python-suite-20261105T212251Z.log`):
+205 tests, 23 setUpModule errors, all `cmake configure failed` at
+`FindZLIB.cmake` (`ZLIB_INCLUDE_DIR`) — the host build tree cannot configure,
+so every test needing built host tools (test_ge, test_hle, test_intake, …)
+errors before running. Unrelated to the T13h changeset (ledger criteria,
+PROGRESS/RELEASE docs, `tools/milestones.py`, two new test files); T13h's own
+10 tests pass standalone and `tools/repository_check.py` passes (511 files).
+Not pursued inside T13h: host toolchain setup belongs to the build
+environment, not the release ledger. T13 closure still needs a green suite
+plus T14c sign-off.
