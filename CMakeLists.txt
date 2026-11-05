@@ -156,9 +156,20 @@ target_compile_definitions(snapshot_hle_tests PRIVATE
 set_target_properties(snapshot_hle_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
 
+# --- Per-title host patches (75yfmuis) -------------------------------------
+add_library(gungnir_host STATIC
+    runtime/host/profile.cpp)
+target_include_directories(gungnir_host PUBLIC runtime)
+
+add_executable(host_profile_tests tests/host/profile_tests.cpp)
+target_link_libraries(host_profile_tests PRIVATE gungnir_host)
+set_target_properties(host_profile_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/host)
+
 # --- GE command stream (T7a) ----------------------------------------------
 add_library(gungnir_ge STATIC
     runtime/ge/display_list.cpp
+    runtime/ge/widescreen_coverage.cpp
     runtime/ge/frame_interpolation.cpp
     runtime/ge/frame_queue.cpp
     runtime/ge/present_schedule.cpp
@@ -168,6 +179,11 @@ add_library(gungnir_ge STATIC
     runtime/ge/texture.cpp
     runtime/ge/vertex.cpp)
 target_include_directories(gungnir_ge PUBLIC runtime)
+
+add_executable(widescreen_coverage_tests tests/ge/widescreen_coverage_tests.cpp)
+target_link_libraries(widescreen_coverage_tests PRIVATE gungnir_ge)
+set_target_properties(widescreen_coverage_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
 add_executable(ge_display_list_tests tests/ge/display_list_tests.cpp)
 target_link_libraries(ge_display_list_tests PRIVATE gungnir_ge)
@@ -182,6 +198,11 @@ set_target_properties(present_schedule_tests PROPERTIES
 add_executable(interpolation_tests tests/ge/interpolation_tests.cpp)
 target_link_libraries(interpolation_tests PRIVATE gungnir_ge)
 set_target_properties(interpolation_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
+
+add_executable(scene_motion_tests tests/ge/scene_motion_tests.cpp)
+target_link_libraries(scene_motion_tests PRIVATE gungnir_ge)
+set_target_properties(scene_motion_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/ge)
 
 add_executable(draw_identity_tests tests/ge/draw_identity_tests.cpp)

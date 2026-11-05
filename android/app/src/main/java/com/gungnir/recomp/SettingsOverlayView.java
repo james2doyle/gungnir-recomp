@@ -83,7 +83,8 @@ public final class SettingsOverlayView extends FrameLayout {
         row("Gamepad", listener::onGamepad);
         row("Vulkan driver", listener::onDrivers);
         row("Game data", listener::onGameData);
-        interpolationRow = row("Frame interpolation: Off", listener::onToggleFrameInterpolation);
+        interpolationRow = row("Experimental frame interpolation: Off",
+                listener::onToggleFrameInterpolation);
         row("Save state", listener::onSaveState);
         row("Load state", listener::onLoadState);
         row("Reset to title", listener::onResetToTitle);
@@ -92,7 +93,8 @@ public final class SettingsOverlayView extends FrameLayout {
 
     /** Reflects the persisted setting on the row label. */
     public void setFrameInterpolation(boolean enabled) {
-        interpolationRow.setText(enabled ? "Frame interpolation: On" : "Frame interpolation: Off");
+        interpolationRow.setText(enabled ? "Experimental frame interpolation: On"
+                : "Experimental frame interpolation: Off");
     }
 
     private int dp(float value) {

@@ -22,13 +22,13 @@ SNAPSHOT_SOURCES = ("runtime/session/snapshot.cpp", "runtime/session/game_sessio
 class TestInterpolationOption(unittest.TestCase):
     def test_settings_row_toggles_and_persists(self):
         overlay = OVERLAY.read_text()
-        self.assertIn("Frame interpolation: Off", overlay,
-                      "the settings overlay must offer the toggle")
+        self.assertIn("Experimental frame interpolation: Off", overlay,
+                      "the settings overlay must offer the toggle, labelled as experimental")
         self.assertIn("setFrameInterpolation", overlay,
                       "the row label must reflect the current state")
         activity = ACTIVITY.read_text()
         for needle in ("onToggleFrameInterpolation", "frame_interpolation",
-                       "nativeSetFrameInterpolation", "Frame interpolation on"):
+                       "nativeSetFrameInterpolation", "Experimental frame interpolation on"):
             self.assertIn(needle, activity, f"activity is missing {needle}")
 
     def test_native_bridge_exposes_the_toggle(self):
@@ -52,6 +52,36 @@ class TestInterpolationOption(unittest.TestCase):
                       "the periodic log must say whether in-betweens are presented")
         self.assertIn("skipped_ticks=", main,
                       "missing refreshes must be visible, not silent")
+
+    def test_guest_frame_log_reads_the_stored_frame(self):
+        # The guest draw list is moved into the interpolation state, so logging
+        # or counting `guest_draws` afterwards reads a moved-from vector: the
+        # whole block was dead and the counters never advanced. Named here so it
+        # cannot come back as a silent gap.
+        main = MAIN_CPP.read_text()
+        self.assertIn("const std::vector<gungnir::ge::Draw> &frame_draws = g_interpolation.current;",
+                      main)
+        self.assertNotIn("guest_draws.size()", main,
+                         "guest_draws is moved from before the log block; use frame_draws")
+
+    def test_pair_diagnostics_report_what_the_pass_did(self):
+        main = MAIN_CPP.read_text()
+        for needle in ("interpolation_pairs", "reassigned=", "displaced=", "motion=",
+                       "oversize_draws=", "translated=", "largest_bucket="):
+            self.assertIn(needle, main, f"pair diagnostics are missing {needle}")
+        for needle in ("timeline presents=", "regressions=", "per_frame="):
+            self.assertIn(needle, main, f"timeline diagnostics are missing {needle}")
+
+    def test_draw_dump_is_bounded_and_named(self):
+        main = MAIN_CPP.read_text()
+        self.assertIn('intent_string("dump_draws")', main,
+                      "presentation work needs a dump of real guest frames")
+        self.assertIn('intent_long("dump_after_ms"', main,
+                      "the dump must be able to start after the scene has settled")
+        self.assertIn("std::uint32_t limit{8u};", main,
+                      "the dump must be bounded, never an unbounded session recording")
+        self.assertIn('"draw_dump frames=%u', main,
+                      "a dump that ends must say so, with its path")
 
     def test_schedule_uses_the_display_rate(self):
         main = MAIN_CPP.read_text()

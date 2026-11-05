@@ -38,6 +38,16 @@ std::optional<FrameQueue::Clock::time_point> FrameQueue::pending_deadline() cons
     return present_at_;
 }
 
+FrameQueue::Clock::duration idle_wait_slice(FrameQueue::Clock::time_point now,
+    std::optional<FrameQueue::Clock::time_point> deadline,
+    FrameQueue::Clock::duration ceiling) noexcept {
+    if (!deadline.has_value()) return ceiling;
+    const auto remaining = *deadline - now;
+    if (remaining <= FrameQueue::Clock::duration::zero())
+        return FrameQueue::Clock::duration::zero();
+    return remaining < ceiling ? remaining : ceiling;
+}
+
 void FrameQueue::wait_for_next(Clock::duration max_wait) {
     std::unique_lock<std::mutex> lock(mutex_);
     const Clock::time_point limit = Clock::now() + max_wait;

@@ -624,3 +624,310 @@ RENDERER.md, plan §7D.9). Behavioral reference only; no code copied.
   `DanielPerezL/CarsPSPRecomp`, `snuri00/psp-web-recomp`: no widescreen, FOV or
   camera work in the tree (Cars and the web port change resolution/textures
   only). Confirms that widening is a per-title problem, not a runtime switch.
+
+## Frame interpolation — matching and candidate rules
+
+Surveyed for the sprite-flicker investigation (docs/RENDERER.md §Frame
+interpolation, docs/BRINGUP.md 2026-11-04). Behavioral reference only; no code
+copied.
+
+- `BasedYuki/the-3rd-birthday-recomp` (`runtime/src/rt/gpu_sdl3vk/ge_gpu.c`,
+  `fi_replay`/`hook_draw_begin`, `runtime/src/rt/ge_shared.h`): interpolates by
+  replaying each draw with blended matrices, keyed by `(draw key, occurrence)`,
+  and **skips through-mode draws** (`s_fi_draw = -1`). Its per-draw previous
+  state comes from the recompiled game's own skinning code (`has_prev`), which a
+  host-side interpolator cannot assume. Adopted: identity-keyed matching and
+  per-draw rejection on implausible motion. Rejected: the through-mode exclusion
+  (correct for a title whose 2D layer is HUD; wrong for Gungnir, whose battle
+  units are CPU-projected screen-space sprites — see BRINGUP) and the matrix
+  replay (needs per-title transform knowledge).
+- `benji-paname/regta-chinatown-wars-psp-recompilation`,
+  `highcmd/chinatown-wars-psp-recomp`: no interpolation code in the tree; their
+  contribution to this work remains the vertex-midpoint method and the note that
+  an address-keyed draw identity matches nothing because the game alternates
+  display buffers.
+
+## Interpolation of projected geometry — extern survey (2026-11-04)
+
+Surveyed after device QA still showed level-mesh artifacts. Behavioural
+reference only; no code copied.
+
+- `Zelda64Recomp/RT64` (docs: transform tagging and interpolation; the Snowboard
+  Kids 2 write-up; the Dino recomp frame-interpolation issue tracker): the mature
+  answer is to interpolate **transform matrices per tagged draw**, decomposed into
+  translation, rotation (quaternion slerp) and scale, and to interpolate raw
+  vertices only for screen-aligned/UI quads. Tagging exists precisely so the
+  renderer never applies one object's motion to another, with explicit skip modes
+  for teleports and instant animation changes. Adopted as the design direction:
+  matrix/reprojection interpolation needs per-draw guest transforms, which is the
+  per-title camera-hook track, not something a host-side blend can invent.
+- Dino recomp's tracker documents the same failure classes seen here: camera
+  jitter, teleports, instant animation changes, texture-coordinate animation, and
+  one frame-wide requirement — interpolation is only correct with a single frame
+  boundary per frame; multiple graphics tasks per frame produced flicker "bad
+  enough to make parts of the game unplayable".
+- Linear-blend skinning literature (candy-wrapper artifact): a linear combination
+  of two rigid transforms is not rigid; at 180 degrees the geometry collapses to a
+  point. Our screen-space collapse is the same algebra applied to projected
+  positions, which is why the fix is "translate rigidly instead of collapsing",
+  not "blend harder".
+- Perspective-correct interpolation references (Low, Blinn "W Pleasure W Fun",
+  Yeung's rasterizer notes): attributes of a projected point must be blended as
+  (value * w) and w, then divided, because perspective division is not affine.
+  This is the concrete gap in our own blend: screen x/y were blended linearly
+  while `inv_w` was blended too, so the blended pair no longer corresponded to any
+  3D point. Implemented as perspective-correct position interpolation.
+
+## Per-title host patches and hook-site shape — reference (2026-11-04)
+
+Behavioural reference only; no code copied. Recorded for the profile-surface and
+camera-trace tasks.
+
+- `BasedYuki/the-3rd-birthday-recomp`: `versions/ULUS10567.toml` stores named
+  per-title hook addresses (`cam_projection = 0x08BBB194`, `cam_setup = ...`),
+  and `runtime/src/rt/twinstick.c` applies them by matching guest addresses
+  (`if (addr == HOOK_CAM_PROJECTION || addr == HOOK_CAM_SETUP)`). The shape —
+  named typed entries in a per-title file, applied at an explicit hook site —
+  is the model for our `runtime/host/profile.*`: explicit, named, opt-in,
+  with values living in gitignored per-title local storage, never in tracked
+  TOML. Our parser refuses unknown keys, malformed values, type mismatches and
+  duplicates with named errors rather than silently ignoring or defaulting
+  them; the reference's `mod.toml` code-mod format is a different (code)
+  mechanism and is not reused.
+- `ps2homebrew/Open-PS2-Loader` (`include/config.h`, per-game config files):
+  prior art for per-game config as a distinct, scoped mechanism. Surveyed for
+  the "per-game config" concept only; no code or format copied.
+- `bryantmh/rush2recompiled` (`include/rush2_hooks.h`, `src/interpolation.cpp`):
+  "Frame interpolation matrix group tagging" — a concrete example of tagging
+  per-draw matrix groups for interpolation, consistent with the RT64 direction
+  recorded above. Behavioural reference for the per-draw transform identity in
+  the matrix-interpolation task; no code copied.
+
+## Direction chosen after device QA (2026-11-04)
+
+Manual QA on the physical device still showed walls/meshes folding and
+doors/meshes snapping rigidly with experimental frame interpolation on. Both
+are the same limitation viewed from two sides: blending already-projected
+vertices cannot recover the underlying rigid transform, so the in-between
+either invents an intermediate shape (the LBS "candy-wrapper" artifact) or,
+when a collapse detector catches it, is replaced by a rigid translation of the
+whole draw (the snap). A bounded dump captured during a real pan measured that
+rigid path firing on 287-318 draws per frame pair.
+
+Of the two unblocked tracks, per-draw matrix interpolation is the one related
+to these artifacts; the camera/widescreen hook addresses a different symptom
+(native-frustum culling). The RT64/Zelda64Recomp approach recorded above —
+interpolate tagged per-draw transforms decomposed into translation, slerp
+rotation and scale, with vertex interpolation reserved for screen-aligned UI —
+is therefore the chosen direction, not another rejection or translation rule.
+The two previous such rules were shipped and withdrawn after they broke doors
+and level meshes; that history is the reason the direction changes rather than
+the rule being tuned again. PPSSPP remains a diff oracle, never a link target.
+
+## Reference discovery for the matrix-interpolation track (2026-11-04)
+
+AGENTS.md discovery was run: `gh search code` for "interpolate transform matrix
+rotation slerp recomp", "RT64 transform tagging interpolation", "per draw matrix
+interpolation frame", "matrix_interpolation", "slerp", "transform_tag",
+"interpolation_transform", and repo-scoped searches against RT64 and
+Zelda64Recomp; `gh search issues` for "frame interpolation matrix transform" and
+"interpolation transform". Outcome: GitHub's code-search API returned HTTP 403
+(rate limit exceeded, request IDs recorded in the task log) for most queries,
+and the repo-scoped searches returned no rows. One general result (`d3/d3`
+transform-interpolation docs) is unrelated to N64 recompilation and is not used.
+Bounded gap: the RT64 transform-tagging implementation could not be re-read
+line-by-line this session; the direction relies on the earlier recorded extern
+survey (behavioural summary only, no code copied) and on our own measured
+artifacts. Re-run the repo-scoped searches when the rate limit clears.
+
+## Transform trace refines the direction (2026-11-04)
+
+A bounded host run with world/view/bone matrix commands traced showed Gungnir
+uploads only a handful of CONSTANT GE matrices: world is identity or
+`32768*I`, view is one fixed isometric rotation (plus identity at boot), and
+bone matrices appear only in the static boot list. Over 2,478 full view-matrix
+blocks, 2,372 are the same constant matrix. Scene and object motion are
+therefore computed on the CPU into already-projected vertices, not carried in
+GE transform matrices.
+
+Consequence for the RT64/Zelda64Recomp approach recorded above: decomposing
+per-draw transform matrices (translation / slerp rotation / scale) is the
+right answer for a title that uploads per-object matrices, but it **cannot be
+applied directly here** — there is nothing to decompose. The measured artifact
+(wrong partner in a changing oversize draw bucket) needs a stable per-draw
+identity instead. The behavioural lesson from RT64 still holds: tag draws so
+one object's motion is never applied to another; the tagging source must be
+found in the guest's CPU-side object data, not assumed from GE registers.
+Recorded as a measured correction, not a guess.
+
+## Per-draw identity hunt — bounded negative result (2026-11-04)
+
+A bounded host trace of GE vertex/index address commands (0x01/0x02) found only
+39 distinct vertex source addresses across 22,307 commands — 16 per frame list,
+reused thousands of times — written by CPU renderer routines around
+`0x08900000` / `0x088B636C` with packed screen-space vertex data. Combined
+with the earlier transform trace (constant world/view matrices) and the
+display-list command PC count (94–97 per list against a 508-draw wall bucket),
+no host-visible field carries a stable per-object identity. The guest emits a
+flat, cull-reordered stream of already-projected quads.
+
+Consequence: the RT64 "tag per-draw matrices" lesson still applies in spirit
+(never apply one object's motion to another), but the tag cannot be derived
+from host-side GE state in this title. It requires a guest-side hook into the
+CPU object loop before projection, exposed through the per-title profile —
+deeper reverse engineering, explicitly recorded as a named gap rather than
+guessed. Behavioural reference only; no code copied.
+
+## CPU object-loop trace (2026-11-04)
+
+Traced the vertex-emission routines named by the write watch: `0x08900000`
+(unit 0063) walks a +48/+64-stride structure emitting 16-byte vertex records,
+with its loop driven through `invoke_chained_direct` calls to `0x0881BC28` /
+`0x0881BC5C`; `0x088B636C` / `0x088B63AC` (unit 0044) emit another batch.
+PRIM commands occupy 94–97 stable (list, command_pc) slots per frame list, but
+each slot emits a batch whose membership culling reorders, so the slot is not
+a per-draw identity. The only varying words in the vertex record are screen
+coordinates (a pan), with no spare object index or pointer.
+
+Conclusion: no host-visible per-object identity exists; a tag would have to
+come from the caller holding the object index or from a guest-side hook before
+projection. Behavioural reference only; no code copied. Recorded as a bounded
+negative result with the next experiment named, not guessed.
+
+## GitHub survey: the wrong-partner artifact has a known solution (2026-11-04)
+
+Run after the user pointed out `gh search -- "query"` syntax. Rate limits were
+available (30 search calls). Repo-scoped searches with `--repo` were the
+productive form; broad queries returned unrelated noise.
+
+### Issues found
+
+- `Zelda64Recomp/Zelda64Recomp#61` "Interpolation of motions that shouldn't be
+  interpolated" (closed): scene cuts and instant pose changes cause a warping
+  effect; closed because the same artifacts exist in the original game and are
+  merely exaggerated at high frame rate. Relevant: it confirms the artifact
+  class but offers no mechanism.
+- `Zelda64Recomp/Zelda64Recomp#562` "No 2D Interpolation" (closed): clarified
+  that the only 2D interpolation there is texture scrolling.
+- `rt64/rt64#93` "Add gEXPreviousMatrix command to override the previous
+  frame's transform for a given draw" (open): **explicitly for "when a game
+  teleports meshes in order to implement infinite scrolling"** — a bucket whose
+  membership changes/reorders between frames, our exact case. The maintainers'
+  answer is a *per-draw previous-transform override* running in parallel with
+  the real transform stack, i.e. a stable per-draw tag supplied by the game
+  side, not a host heuristic.
+- `rt64/rt64#192` texture-coordinate interpolation for manually scrolled
+  coordinates (open).
+- `BasedYuki/the-3rd-birthday-recomp#4` audio slowdown with
+  `frame_interpolation=1` (closed) — unrelated to geometry.
+
+### Code found (behavioural reference only; no code copied)
+
+- `bryantmh/rush2recompiled:src/interpolation.cpp` opens with the exact
+  problem: "Without tags RT64 pairs matrices between frames by guessing
+  (`G_EX_ID_AUTO`), which **mismatches identical objects such as cars lined up
+  at the start of a race**." Their solution is a per-title hook
+  (`us.toml` -> `rush2_interp_*` in `include/rush2_hooks.h`) that tags every
+  draw with a stable ID derived from the GAME'S OWN object-pool slot index:
+  scene graph node index in the node pool (0x38-byte records), world-space
+  polygon slot (slots stable between frames), per-view camera index. IDs also
+  carry a generation that changes on teleport/camera cut so the interpolator
+  snaps instead of sweeping. ID layout is documented in the file. Vertex
+  interpolation is used for the world-space polygon list, keyed by slot.
+- `Zelda64Recomp/Zelda64Recomp:patches/transform_ids.h` defines explicit ID
+  ranges per object class (particle index `PARTICLE_TRANSFORM_ID_START +
+  index`, actor limb IDs, skybox, effects), and
+  `patches/*_transform_tagging.c` assigns them at draw time via
+  `gEXMatrixGroupDecomposedSkipAll(..., PARTICLE_TRANSFORM_ID_START + index,
+  ...)`. `actor_transform_id(Actor*)` / `actor_get_slot` give a stable ID from
+  the actor's own slot. `patches/patches.h` also defines
+  `gEXMatrixGroupNoInterpolation` and `gEXMatrixGroupInterpolateOnlyTiles` —
+  explicit per-draw skip modes.
+- `bryantmh/rush2recompiled:docs/game_fixes.md` "Wheel spin under frame
+  interpolation" documents a *different* class (decomposed rotation taking the
+  short way across a >180 degree step) fixed by a per-title hook clamping the
+  step. Useful as a warning that matrix interpolation introduces its own
+  artifacts.
+
+### Conclusion for this project
+
+The wrong-partner artifact is NOT unique to us and has a known, concrete
+solution shape: **a guest-side per-title hook that assigns a stable ID from the
+game's own object-pool slot index (plus a generation for cuts/teleports)**,
+exposed to the interpolator. This is exactly the "per-title hook" direction
+already recorded, but now with two independent implementations showing how the
+tag is sourced: from the object pool, not from GE state or host-side bounds.
+Our earlier negative result (no host-visible ID) is therefore consistent with
+the literature rather than a dead end — the tag must be injected by the guest
+side. PPSSPP remains a diff oracle, never a link target.
+
+### RT64 pairing logic (confirmation)
+
+`rt64/rt64:src/hle/rt64_game_frame.cpp` pairs transform groups between frames
+with `curGroup.matrixId == prevGroup.matrixId` (line 544), and
+`buildTransformIdMap` (line 809) skips `G_EX_ID_AUTO`, collects
+`G_EX_ID_IGNORE` into an ignored list, and maps explicit IDs linearly.
+`include/rt64_extended_gbi.h` defines `G_EX_ID_IGNORE 0x0`.
+So the pairing key is a **game-supplied ID**, with an explicit per-draw
+"do not interpolate" value — not a distance/position heuristic. Multiple
+recomp projects (`Rainchus/Donkey-Kong-64-Recompiled`,
+`kholdfuzion/GoldenRecomp`, `Rainchus/Quest64-Recomp`,
+`MegaMan64Recomp/MegaMan64Recompiled`) use `gEXMatrixGroupSkipAll(...,
+G_EX_ID_IGNORE, ...)` to opt individual draws out.
+
+This confirms the shape of the fix for our wrong-partner bucket: a per-draw
+tag (or an explicit "skip" for draws that cannot be tagged) supplied by a
+guest-side per-title hook, matching the profile-surface mechanism already
+built. Behavioural reference only; no code copied.
+
+## Object-pool trace and heuristic falsification (2026-11-04)
+
+Traced the callers of the CPU vertex emitter and the per-frame display-list
+builder in the generated corpus. `0x0881BC28` / `0x0881BC5C` are generic
+16-byte-stride container iterators; `0x08900000` is tail-called from a quad
+emitter; the display-list builder `0x088A3CAC` is called once per frame from
+`0x08805288` with a scene-context pointer, and its loop is a retry/state loop
+over a global flag. Watching display-list writes attributes everything to the
+dispatch boundary `0x0880528C`, so individual draws cannot be distinguished.
+The per-object pool / slot index was NOT located.
+
+An obvious host-side heuristic ("skip a bucket whose size changed") was
+falsified against the real dumps: the wall bucket changes size on some frame
+pairs (508→314) but is constant on others (508→508, 445→445) that still show
+10–25 order breaks and 6–28 rigid pairs. Membership reorders without a size
+change, so the guard is insufficient. Behavioural references only; no code
+copied. Recorded as a named gap, not guessed.
+
+## PPSSPP frame pacing / static-frame handling (2026-11-04)
+
+Reference survey for the battery-drain fix (static-scene skip). PPSSPP is a
+diff oracle only; the code below was read for behaviour, never copied or linked.
+Inspected at `hrydgard/ppsspp` master:
+
+- `Core/HLE/sceDisplay.cpp` `__DisplayFlip()`: by default it flips only when
+  `gpu->FramebufferDirty()` (or a 10-vblank fallback / an animated shader needs
+  it). When there is no new frame, the comment reads *"there's no new frame to
+  draw, game might be sitting in a static loading screen"*, and the function
+  calls `DoFrameIdleTiming()` and returns **without presenting**. This is the
+  same shape as our static-scene skip. `DoFrameIdleTiming()` sleeps through
+  spare vblanks specifically so a static screen doesn't fast-forward.
+- `bRenderDuplicateFrames` (`Core/Config.cpp`, default **false**) is the opt-in
+  that re-enables presenting duplicate frames (for 30→60 fps smoothing and
+  shaders needing 60 fps) — the analogue of our interpolation, and it is off by
+  default. `Core/FrameTiming.cpp`'s header comment lists *"the game not actually
+  asking for flips, like in static loading screens"* as a first-class timing
+  case.
+- `Core/HW/Display.cpp` `FramerateTarget()`: on 90/120/144 Hz displays PPSSPP
+  returns 60 Hz as the pacing target ("We only target other framerates if
+  they're close to 60") — it deliberately does **not** chase the host refresh
+  rate, unlike our interpolation schedule before the fix.
+- `ForceMax60FPS` in `sceDisplaySetFramebuf()` delays games that flip too
+  frequently (God of War, Fat Princess), another guard against overspeed.
+- Issue #15081 "Sync to host refresh rate to prevent micro-stuttering" (open)
+  and the "Render Duplicate Frames to 60hz" commit `d385096`: the long-running
+  discussion of duplicate-frame presentation vs exact host-refresh sync.
+
+Conclusion: PPSSPP's default behaviour already matches the direction we moved
+in — skip static/duplicate frames, don't chase high host refresh rates — and
+treats frame duplication as an opt-in, not a baseline. Behavioural reference
+only; no PPSSPP code copied into the product.

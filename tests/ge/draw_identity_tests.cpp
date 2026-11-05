@@ -59,11 +59,14 @@ void a_changed_texture_or_vertex_count_changes_the_key() {
         "a through draw is not the same draw as a transform draw");
 }
 
-void through_draws_are_never_interpolated() {
+void vertex_count_decides_membership() {
     Draw sprite = make_draw(0x04000000u, 0u, 4u);
     check(interpolatable(sprite), "a transform draw with vertices is a candidate");
+    // Screen-space draws are candidates too: the battle units are submitted
+    // that way, and excluding the class left them stepping at the guest rate
+    // while the world behind them was smoothed.
     sprite.state.through = true;
-    check(!interpolatable(sprite), "a through (2D/HUD) draw is never a candidate");
+    check(interpolatable(sprite), "a through (screen-space) draw is a candidate");
     Draw degenerate = make_draw(0x04000000u, 0u, 2u);
     check(!interpolatable(degenerate), "a draw without a triangle is never a candidate");
 }
@@ -104,7 +107,7 @@ int main() {
         the_same_draw_keeps_its_key();
         the_alternating_display_buffer_does_not_change_the_key();
         a_changed_texture_or_vertex_count_changes_the_key();
-        through_draws_are_never_interpolated();
+        vertex_count_decides_membership();
         history_matches_in_occurrence_order();
         std::cout << "draw_identity_tests: OK\n";
         return 0;

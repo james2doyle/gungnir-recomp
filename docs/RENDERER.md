@@ -124,6 +124,30 @@ show the (stretched) backdrop where the scene has nothing (a per-title camera
 hook would be the only recovery). Scenes that render into a 480-wide VRAM
 target keep the 480 mapping and are a counted gap.
 
+### Measuring the gap
+
+The limitation above is a **measured gap**, not a description. At present time
+we compute, from the draw bounds already available, what fraction of the
+widened frame's columns carry submitted guest geometry and how many columns
+show only the stretched full-frame 2D backdrop (or nothing). The measure is
+bounds-only: one pass over the draws and one pass over at most `virtual_width`
+column flags, no extra render pass and no per-pixel work. A draw is geometry
+unless it is a through (screen-space) draw covering the guest frame — those
+are the stretched backdrop / full-screen effects; a small HUD panel is
+geometry. The policy is pinned by `tests/ge/widescreen_coverage_tests.cpp`.
+
+Every log tick reports
+`widescreen coverage=NN% backdrop_only_columns=N hook=<on|off|absent>
+samples=N scale=... columns=N`, averaged over the presents in that tick. A
+10-point step in the percentage (a scene change) also produces a one-shot line
+so a scene regression is visible in a bounded run without waiting for the
+tick. `hook=absent` is the honest current state: no per-title camera hook is
+applied yet. Record the number before and after a hook lands (see
+`docs/QA.md`) — a hook that widens the guest's culling should raise coverage
+and reduce backdrop-only columns. The number is a bounds approximation: it
+counts columns touched by any geometry draw, not pixels, so it is an upper
+bound on visible geometry.
+
 ## Frame interpolation (T17)
 
 The guest title is a locked 20 Hz producer: it flips, sleeps two ~8 ms guest
@@ -133,20 +157,74 @@ Frame interpolation runs on top of that rate and never changes what the guest
 computes.
 
 - **Identity.** `draw_key` covers primitive, vertex count, texture key, target
-  format and the GE through flag, plus the occurrence index within the frame.
-  The target buffer address is deliberately excluded: the game alternates two
-  display buffers, so an address-based key matches nothing between frames.
-- **Candidates.** Transform draws only. Through-mode draws carry screen-space
-  positions the game authors per frame (menus, text, cursors, HUD), so they are
-  never interpolated. A draw without a partner is left as produced.
-- **Motion.** Matched draws move to `t` of the way from the previous frame:
-  positions only (x, y, z, inv_w); colour, texture coordinates and state stay
-  the frame's own. This is the Chinatown Wars vertex-midpoint method; The 3rd
+  format and the GE through flag. The target buffer address is deliberately
+  excluded: the game alternates two display buffers, so an address-based key
+  matches nothing between frames.
+- **Partners.** Draws of one identity form a bucket, and a partner is the
+  previous draw of that bucket *nearest the current one*, not the draw at the
+  same arrival index. Arrival order inside a bucket is not stable: a cursor
+  highlight, an animation frame or a culled sprite adds or drops a draw and
+  shifts every later one, so index matching blends each quad of a character
+  toward a neighbouring quad and the sprite shakes apart. One exception, counted
+  as `oversize`: buckets past `kMaxBucketScan` (64 draws) keep arrival order,
+  because repetitive scenery -- the battle map's 546 tile draws of one texture --
+  is equidistant from its own previous position and its neighbour's, so position
+  matching slides the whole ground by one tile whenever the pan moves further
+  than the tile spacing.
+- **Candidates.** Every draw with a triangle. Screen-space (through-mode) draws
+  are *not* excluded: Gungnir projects its battle unit sprites on the CPU and
+  submits them that way, at fixed 30x47 sizes, moving with the camera. Excluding
+  the class left the units stepping at the guest rate while the map behind them
+  was smoothed, which is the sprite shake that was reported. A draw whose
+  identity changed between frames has no partner and is shown as produced, so
+  HUD text and glyphs do not smear; static HUD is identical in both frames, so
+  blending it changes nothing.
+- **Reference check.** `BasedYuki/the-3rd-birthday-recomp` skips through draws
+  (`ge_gpu.c`: `if (d->through || ...) s_fi_draw = -1`) and matches by
+  key + occurrence, with a flat 0.3-of-a-screen cut. Both rules are right for a
+  title whose 2D layer is HUD and whose motion is matrix-driven; here the units
+  are CPU-projected sprites and the camera pans, so the class exclusion and the
+  flat distance both produced artefacts. Its per-draw previous matrices come from
+  the recompiled game itself, which we do not have without a per-title hook.
+- **Motion.** Matched draws move to `t` of the way from the previous frame, by
+  **perspective-correct interpolation**: because perspective division is not
+  affine, a projected point is blended as `(position * w)` and `w`, then divided
+  (`inv_w` becomes the blended depth's reciprocal). Affine blending of screen x/y
+  while blending `inv_w` separately leaves a position that corresponds to no 3D
+  point, which is what makes an inclined or receding mesh swim between frames.
+  Colour, texture coordinates, **depth** and state stay the frame's own, and so
+  does the shape of a draw that rotated or scaled between frames: interpolating
+  its vertices independently collapses it (blending a quad with its rotated self
+  shrinks it, and near 180 degrees it becomes a line) — measured 11-29 collapsing
+  triangles per frame pair, all effect geometry, which is why particles and
+  banners tore while everything else moved cleanly. Such a pair is translated
+  rigidly instead, so motion stays smooth and the shape is the frame's own. The
+  test is the collapse itself, not only a distance: a one-pixel-tall sliver
+  inverts when each corner moves about a pixel, so a pair whose vertex-wise blend
+  would halve or invert any triangle takes the same path. Depth is an ordering key rather than a position, and
+  coplanar geometry (a wall and its trim, a tile and its decal) relies on exact
+  equality under the GE's GEQUAL test: on the battle snapshot 432 overlapping
+  pairs changed depth-equality class in the blend while agreeing frame to frame,
+  which is how thin walls shimmer. This is the Chinatown Wars vertex-midpoint method; The 3rd
   Birthday's matrix reprojection needs per-draw matrices we do not keep and
   stays the fallback if midpoint looks wrong on skinned content.
-- **Cuts.** An average screen-space motion above `kCutScreenFraction` (0.2 of
-  the 480-wide frame) is treated as a camera cut: the pair is left untouched so
-  the old scene never drags across the new one.
+- **Cuts.** Rejection is judged against the frame's own motion, because screen
+  motion scales with depth: in a pan the foreground legitimately moves several
+  times faster than the map behind it (measured: a 14 px median with foreground
+  elements at 169 px). A pair is unrelated when it moves more than
+  `kMotionSlack` times the frame's median motion plus `kCutScreenFraction` (0.2 of
+  the screen, unchanged from the original design), and a frame is a camera cut
+  when its median motion exceeds `kFrameCutFraction` (half a screen in one guest
+  interval) and nothing in it is blended. Two stricter rules were tried and
+  withdrawn because they snapped things that used to blend: judging a draw
+  against its own identity bucket (a door opening in an otherwise static bucket is
+  a fast member, not a mistake) and lowering the still-scene floor to 0.1 (a door
+  60 px into its swing became a "teleport"). Rejection may only be *relaxed* from
+  the original behaviour, never tightened. A flat per-draw limit was the earlier design and it made every fast
+  level element jump once per present while its neighbours glided -- first
+  reported as sprites shaking, then as level elements flickering. In a still
+  frame the median is zero, so the 0.2-of-a-screen margin still snaps a cursor or
+  a selection highlight that teleports.
 - **Schedule.** `PresentSchedule` starts a display window per guest frame,
   presents one in-between per display refresh (`t = elapsed / window`, where the
   window is the previous guest interval), and shows the real frame at the end
@@ -160,7 +238,15 @@ computes.
 Limits, named rather than silent: the presented rate is bounded by the cost of
 one present. At the battle scene (2834 draws) a present costs about 10 ms, so
 the ceiling is near 100 presents/s regardless of a 120 Hz panel; `skipped_ticks`
-in the periodic log reports the shortfall.
+in the periodic log reports the shortfall. `tools/interpolation_report.py <dump>` reads a frame dump from the device
+(`--es dump_draws <path> --el dump_after_ms <ms> --el dump_frames N`) and says what
+a pass would do with the frames the game really produced: bucket sizes, frames
+whose arrival order broke, collapsing triangles, and what the shape-change answer
+prevented (`--vertex-only`). The `interpolation_pairs` line reports
+what one pass did: `reassigned` draws whose partner came from position rather
+than arrival order, `displaced` of those that arrival order would have dragged
+visibly, `oversize`/`oversize_draws` buckets on the arrival-order fallback and
+how many draws they hold, and `largest_bucket`.
 
 ## Fixtures and tolerance
 
@@ -224,3 +310,23 @@ Unimplemented or unexercised GE paths, counted as named gaps:
   fixtures, 75-test repository suite green, `repository_check` PASS (211 files).
 - T7 closure: `data/milestones.json` M3 entry. Android presentation landed in
   T9b; device QA and the title-screen milestone remain M4/T13 work.
+
+## Bounded GE trace diagnostics (host-side, opt-in)
+
+These are research diagnostics for a bounded host boot (`boot_runner`), all
+off unless the named env var is set and all capped by a `*_LIMIT` env var
+(default 4096 lines). None changes what is presented, and no log is committed.
+
+| Env var | Logs | Reader |
+|---|---|---|
+| `GUNGNIR_TRACE_MEDIA` | GE list enqueues and display flips | — |
+| `GUNGNIR_TRACE_CAMERA` | GE projection (0x3E/0x3F) and world/view/bone (0x3A–0x3D, 0x2A/0x2B) matrix commands as `[camera_projection]` / `[camera_transform]` | `tools/camera_trace_report.py`, `tools/camera_transform_report.py` |
+| `GUNGNIR_TRACE_VERTEX_SOURCE` | GE vertex/index address commands (0x01/0x02) as `[vertex_source]` with the resolved address | — |
+| `PSPRECOMP_WATCH_WRITE` (+ `_SIZE`) | every guest store to an address range, with the guest dispatch PC | — |
+| `--es dump_draws` / `--es dump_presents` | bounded guest-frame / presented-frame dumps | `tools/interpolation_report.py` |
+
+`GUNGNIR_TRACE_VERTEX_SOURCE` was used to establish that the guest writes
+already-projected vertices into a small set of shared scratch buffers (16
+distinct addresses per frame list), so neither the vertex address nor the
+display-list command PC is a per-object identity. See `docs/BRINGUP.md` for
+the measured conclusion and the named gap.

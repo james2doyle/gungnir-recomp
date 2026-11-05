@@ -1467,3 +1467,765 @@ roots and the cold-boot gate exists and fails on crashes). Gotcha §7E.9.
 **Retraction.** The T17a investigation's own suspicion that the frame-rate work
 had introduced the crash is withdrawn: the tree crashed with that work reverted,
 and the cause sits in `runtime/platform/android/game_data.cpp`, untouched by it.
+
+## 2026-11-04 — Interpolation made the battle scene shake
+
+**Symptom.** With frame interpolation on, every character sprite shimmied while
+the battle cursor moved and the map panned. Reported against the build that had
+just gained adaptive widescreen, so the widening was the first suspect.
+
+**Falsification.** The flicker is absent with interpolation off and present with
+interpolation on and widescreen off (`--es widescreen off`), on the same
+snapshot, so it is not the coverage classification or the widening. A ten-second
+display recording of the pan shows no per-frame geometry oscillation at the
+presentation rate, which is what a scheduling or blend error would look like; the
+artifact is per draw and only during motion. A one-shot `interpolation_pairs`
+counter confirmed the mechanism on the device: while idle every counter is zero,
+and while panning 36-66 draws per present were rejected by the cut test and 40-53
+received a different partner than arrival order would have given them.
+
+**Root cause (three defects, all in the interpolator).**
+1. Partners were chosen by arrival index inside an identity bucket. The battle
+   draws one character's sprite as several quads of one sheet, and the order
+   inside that bucket is not stable: a cursor highlight, an animation frame or a
+   culled sprite adds or drops a draw and shifts every later one. Each quad was
+   then blended toward its neighbour's previous position, tearing the sprite
+   apart. That is the reported shake.
+2. The cut test was per draw at 0.2 of the frame, and a panning battle map
+   reaches that on its fastest content. A rejected draw is shown un-lagged while
+   its neighbours stay half an interval behind, and which side of the limit a
+   draw sits on flapped between presents: a per-draw velocity shake at the
+   threshold.
+3. The obvious fix for (1), matching every bucket by nearest position, is wrong
+   for repetitive scenery: the nearest previous tile is the *neighbour* as soon
+   as the pan moves further than the tile spacing, so the whole ground drags
+   backwards by one tile per present. Measured on the device: one bucket holds
+   546 draws (the map's tiles of one texture), and matching it by position
+   flickered the scenery while it fixed the sprites.
+
+**Fix.** Buckets of up to `kMaxBucketScan` (64) draws pair by nearest previous
+position, closest pairs first, so a surplus draw stays unmatched instead of
+stealing a partner. Buckets past that keep arrival order and are counted
+(`oversize`, `oversize_draws`) rather than silently mismatched: scenery of one
+texture is a regular lattice, and arrival order is the only correct and
+affordable choice there. `kCutScreenFraction` moves from 0.2 to 0.5 of the frame
+(ten screens a second), above anything a pan reaches; partner choice is what
+protects a cut from being smeared now, and the distance test is only the
+absurd-partner backstop.
+
+**Regression tests.** `tests/ge/interpolation_tests.cpp`: a bucket that gained a
+draw, a bucket that lost one, a fast pan that must be interpolated rather than
+cut, a panning tile bucket that must keep arrival order, and the oversize
+fallback being counted. Three mutations: matching every bucket by position kills
+the tile contract, matching every bucket by arrival order kills the gained-draw
+contract, and restoring the 0.2 cut fraction kills the fast-pan contract.
+
+**Evidence.** Device, battle snapshot, M2102K1AC, one log tick = one second of
+passes: idle `candidates=2585 matched=2585 cut=0 reassigned=0 displaced=0
+oversize=10 oversize_draws=2148 largest_bucket=546`; during an adb stick pan
+`reassigned=24..58 displaced=24..57 cut=6..22` over slow and fast pans, against
+`reassigned=41..53 cut=36..66` with the old 0.2 cut fraction while panning the
+same way. What remains of `cut` after the fix is the absurd-partner backstop: a
+small bucket whose real partner left the frame hands the draw a distant one, and
+that pair is rejected instead of dragged. The pan figures are averages per pass, so
+`reassigned` there is the number of draws per present that arrival order would
+have blended toward the wrong object. 2148 of the 2585 candidates live in the
+ten buckets past the scan limit, which is why the scenery fallback matters.
+
+**Retraction (2026-11-04, later the same day).** Three shipped builds later, the
+device said the shake was still there: position matching for every bucket fixed
+the sprites and made the scenery flicker; keeping arrival order unless the count
+changed restored the shake; raising the cut fraction changed the cursor's
+animation instead. That falsifies the root cause above: cross-pairing is real and
+worth the contracts that now pin it, but it was never the shake.
+
+**Actual root cause.** A bounded dump of eight real battle frames
+(`--es dump_draws <path>`) settled it: the whole draw stream is orderly. No
+bucket's arrival order is broken while panning (largest arrival delta 42 px
+against a 17 px median), the guest's own frame trajectory is smooth and
+monotone, every blend is geometrically sound (no collapsed or inverted quads),
+and the presentation timeline never regresses (`timeline presents=394
+regressions=0 per_frame=2..3`). What the dump *did* show is that Gungnir submits
+its **battle unit sprites in through mode**: eleven screen-space draws of
+30x47 at indices 2214-2224, world-anchored, moving with the camera like the map
+tiles. `interpolatable()` skipped the whole through class, so the units moved in
+20 Hz steps while the map behind them was smoothed at 40-60 presents per second.
+Every unit therefore visibly stepped against a smoothly panning background, and
+that is the "shimmy and shake". It is widescreen-independent, invisible with
+interpolation off, and immune to any matching change, which is exactly what the
+three failed attempts looked like from the device.
+
+**Fix.** Screen-space draws are candidates like any other; identity decides what
+is the same draw. A draw whose identity changed has no partner and is shown as
+produced (so HUD text and glyphs do not smear), and static HUD is identical in
+both frames, so blending it is a no-op. Counters confirm the class now
+participates: `candidates=2793 matched=2792` (was 2585/2584) with the same 208
+screen-space draws per frame.
+
+**References.** `BasedYuki/the-3rd-birthday-recomp` skips through draws too;
+that is a property of its title's 2D layer, not of the GE. Recorded in
+`docs/SOURCE_PROVENANCE.md`.
+
+## 2026-11-04 — Two interpolation rules withdrawn (doors and meshes)
+
+**Symptom.** After the sprite and collapse fixes, doors and level meshes started
+misbehaving in ways the reporting player did not remember from before the work.
+
+**Falsification.** Both suspect rules were mine, added during that work, and the
+device dump measured them: (a) judging a draw against its own identity bucket's
+median motion rejected 8-46 draws per frame pair that were merely fast members of
+an otherwise static bucket — a door opening is exactly that; (b) treating a large
+per-vertex deviation as a shape change translated **468-975 meshes per frame
+pair** rigidly. Those meshes (keys 0x29a8cba2, 0xbe777b42, 0x9f137210,
+0x71f24337 — walls, edges, structures) are only perspective-foreshortened: their
+corners move by different amounts while the shape is unchanged, so vertex-wise
+blending was correct and the rigid path removed it.
+
+**Root cause.** Both rules were fitted to a real but narrow artifact (a scrolling
+list wrapping its last item, and particles collapsing mid-spin) and made the
+interpolator stricter than the design it replaced. A stricter rule can only be
+justified if the original was visibly wrong in that case; here the original was
+fine and the fix caused a different defect.
+
+**Fix.** The bucket-relative rejection and the deviation test are removed. What
+remains cannot be stricter than the original: the still-scene tolerance is back at
+0.2 of the frame, and the frame-relative allowance (`kMotionSlack`) only *widens*
+it while the scene is moving. The shape answer is now the collapse itself — a pair
+whose vertex-wise blend would halve or invert any triangle is translated rigidly
+(12-18 pairs per frame pair on the same dump, all genuine collapses). The
+scrolling-list wrap is recorded as a **named, counted gap**: at rest it can still
+be dragged by up to half its jump for one present; fixing it needs a rule that
+distinguishes a wrap from a moving element, and neither the bucket median nor the
+floor did so without breaking doors.
+
+**Regression tests.** `a_foreshortening_mesh_is_blended_vertex_wise` (mutation:
+re-introduce the deviation rule, the near edge is no longer bent halfway),
+`a_slowly_moving_element_in_a_still_scene_is_blended` (mutation: floor back to 0.1,
+a 60 px door becomes a cut), plus the retained collapse contracts.
+
+## 2026-11-04 — Camera path trace: where the guest builds its projection
+
+**Question (camera-hook track).** Before any hook can widen the guest's culling,
+we need the function(s) that build the GE projection matrix, whether the cull
+uses the same values or independent screen bounds, and whether one hook covers
+both battle and menu scenes. No guessing: the deliverable is guest addresses and
+instance counts from at least two bounded runs.
+
+**Instrumentation (red-first).** `tests/test_camera_trace.py` (3 source contracts)
+and `tests/test_camera_trace_report.py` (5 decode/grouping contracts) were written
+before the code. `runtime/hle/hle_media.cpp` gained an opt-in, bounded
+`GUNGNIR_TRACE_CAMERA` diagnostic that logs GE commands 0x3E (projection matrix
+index) and 0x3F (projection matrix upload) with the enqueued list PC, the
+command's own PC and the raw word; absent env var changes nothing, default cap
+4096 lines (`GUNGNIR_TRACE_CAMERA_LIMIT` raises it). `tools/camera_trace_report.py`
+groups the stream into 16-lane matrices and decodes the GE f24 argument (top 3
+bytes of an IEEE float — pinned by contract).
+
+**Evidence: two bounded host boots** (`boot_runner`, `--no-stop-at-flip`,
+`--max-dispatches 5000000/2000000`, `--wall-seconds 20/12`; both exit 3 =
+bounded out after the first flip, ~3948 / ~1470 GE frames). Both reproduce the
+same sites:
+
+| Run | projection commands | complete 16-lane matrices | distinct matrices |
+|---|---|---|---|
+| 1 | 117540 | 6914 | 4 |
+| 2 | 51784 | 3046 | 4 |
+
+The GE lists are two double-buffered frame lists (`0x09C51010`, `0x09C51850`)
+plus one static boot list (`0x089DDC48`). Each frame list carries **two** 3D
+projection blocks (e.g. `0x9C52238` / `0x9C5242C` and `0x9C72278` /
+`0x9C7246C`) per frame — 1703 / 1702 instances in run 1 — and one 2D/HUD ortho
+block (`0x9C52904` / `0x9C72944`) — 52 instances in both runs. So the same
+projection builder runs for the whole scene; the 52 ortho instances are a
+different mode of the same block, not a separate menu-only camera. A third
+distinct matrix appears once in each run (a scene-transition frame), and the boot
+list writes its own block once.
+
+**Measured matrices (f24 decoded).** Main 3D projection: diagonal
+`m00=0.082495`, `m11=0.145580`, `m22=-0.010000`, `m33=1.0`. The ratio
+`m11/m00 = 1.7647 = 480/272` — exactly the PSP aspect — so the aspect is baked
+into the matrix. HUD ortho: `m00=1/240`, `m11=-1/136`, `m22=-1`, translation
+`(-1, 1)` — the standard 480x272 2D projection. Transition frame: `m00=1.215`,
+`m11=2.144` (~14.7x scale), one instance per run.
+
+**Where it is built.** `PSPRECOMP_WATCH_WRITE=0x09C52238` (68 bytes) on a third
+bounded run logged all 17 command words of the block being written by guest PC
+`0x0880528C` on thread `user_main`, every frame. In the generated corpus that PC
+is the return epilogue of a call from `0x08805288` into the display-list builder
+at **`0x088A3CAC`** (`generated_unit_0039.cpp`), which materializes six
+`gpr[4] + 0x30000` pointers, reads a global at `0x08B19A10` and emits the GE
+command words through helper calls at `0x088040D0` / `0x088040E4` /
+`0x088040F8`. The first write of each frame sets the ortho matrix and the second
+overwrites it with the 3D matrix at the *same* site, so one hook site serves both
+modes.
+
+**Cull evidence.** The captured frame JSON at GE frame 2110 reports scissor
+`[0, 0, 480, 272]` on all 11 draws — fixed guest screen bounds, not derived
+from the projection matrix. The host widescreen stretch (`StateMachine::
+set_widescreen`) is presentation-only; the guest clips and culls to 480x272
+regardless. **Conclusion: the cull is independent**, so patching only the
+projection input is not enough — the hook must also account for the fixed
+screen-space bounds (or patch the value that feeds both). This is a measured
+statement about the observed frame, not a claim that every scene uses the same
+bounds; a scene sweep is the blocked follow-up.
+
+**Named gaps (not guessed).** The FOV/aspect *input* constant and the
+fov->matrix conversion were not located: the matrix values are computed at
+runtime (no literal float constants for 0.082495 / 0.145580 exist in the
+generated corpus), and the exact instruction that produces `m00`/`m11` inside
+`0x088A3CAC`'s callees has not been traced. `gh search code` hit a 403 rate
+limit during the survey; the BasedYuki `versions/ULUS10567.toml` hook-site
+reference (cam_projection / cam_setup) was already recorded. Next experiment:
+watch the writes to the float source values that feed `0x088A3CAC`, and compare
+PPSSPP as an oracle only.
+
+**References.** Recorded in `docs/SOURCE_PROVENANCE.md`. PPSSPP remains a diff
+oracle, never a link target.
+
+## 2026-11-04 — Retraction: interpolation artifacts still present on device
+
+**Reported (user QA, 30c1f958, deployed APK SHA 9999f508…).** "seems to be
+working. all the same issues with the frame interpolation still exist though".
+Confirmed present: **walls/meshes folding or collapsing** and **doors/meshes
+snapping rigidly**.
+
+**Retraction.** The earlier entries in this journal claimed the collapse was
+fixed ("VERIFIED ON DEVICE (24-frame real pan): with the answer, 0 collapsing
+triangles in every frame") and that the door/mesh regressions were withdrawn.
+Those claims measured the **draw dump with the offline tool**, not what the
+player sees on the device. They are **not validated by manual QA** and must not
+be treated as closed. A zero count from `interpolation_report.py` is a property
+of the dump and the rule, not proof that the displayed frame has no fold. The
+dump may have been captured while idle, or the shape-change rule may not be the
+mechanism of the visible artifact.
+
+**Falsification plan (red-first, before any code change).** Capture a bounded
+guest-frame dump and a screen recording **while the artifact is visible**, with
+interpolation on and a real stick pan. Analyse the dump for: collapsing
+triangles in the guest's own frames, pairs translated rigidly, and pairs whose
+vertex-wise blend is applied to geometry that should not move that way. Compare
+against interpolation-off frames from the same input. Only then write a
+reproducing contract and fix.
+
+**State.** The parent flicker defect task remains open; the user QA gate is
+open; nothing committed. The per-draw matrix interpolation track is now
+unblocked but not started —
+the visible artifacts are the reason that direction exists, but a host-side
+vertex blend may be the fundamental limit rather than a fixable rule.
+
+## 2026-11-04 — Fresh pan dump: why the "0 collapses" claim was wrong
+
+**Evidence.** Two bounded dumps with interpolation on at the battle snapshot on
+`30c1f958`:
+
+| Dump | Pan | Frames | Motion | Rigid pairs | Collapses |
+|---|---|---|---|---|---|
+| `pan.bin` (sha 371a8a32…) | missed the window | 24 | median 0.0, max 3.4 px | 0 | 0 |
+| `pan2.bin` (sha 85447031…) | real stick pan | 24 | median 16–39 px, p90 ≤332, max 651 | 0–318 (6 frames >100) | 0 |
+
+The first dump was **idle**: the swipe loop finished before the 6 s
+`dump_after_ms` elapsed, so the earlier "VERIFIED ON DEVICE: 0 collapsing
+triangles in every frame" measured an idle dump, not the artifact. That is the
+concrete reason the retraction above stands.
+
+The second dump, captured with `dump_after_ms=2000` and the pan overlapping the
+window, shows real motion and a new, reproducible signal: the **collapse-only
+rigid-translation rule fires on 287–318 draw pairs on every frame pair with
+p90 > 200 px** (6 of 23 frames exceed 100 rigid pairs total). The runtime's own
+1 Hz log agrees (`translated=72` averaged during the pan vs 0 at rest). A rule
+meant for a handful of spinning quads is translating hundreds of draws rigidly
+during fast pans — a plausible mechanism for the reported "doors/meshes
+snapping rigidly".
+
+**Hypothesis falsified, then root cause confirmed (same day, before any code
+change).** A pure translation is translation-invariant: triangle area is
+identical before, after and in the blend, so `would_collapse` can never fire on
+one. Direct inspection of the 318 "collapsing" pairs in frame pair 2->3 of
+`pan2.bin` showed they come from 9 keys, all but two of them OVERSIZE buckets
+(508->314, 308->247, 237->185, 106->96, 77->58 draws) that therefore pair by
+ARRIVAL ORDER. Both bucket size and member order change during a pan, so
+arrival index N in the current frame is a different object than index N in the
+previous frame's larger, reordered bucket. The exact offending pair (arrival
+index 12, key `0xac4536df81a6dc17`) has before=-12.1, after=-2.0, but the
+vertex-wise blend flips winding (middle=+132.9) because the two quads have
+folded corners and different shapes. The collapse rule is CORRECT about that
+pair; the PARTNER is wrong. Runtime counters agree: `reassigned=134
+displaced=133` during the pan, `order_breaks` up to 43.
+RED-FIRST REPRODUCTION LANDED (failing): `a_pan_of_repetitive_wall_quads_
+keeps_each_quad_with_its_partner` in tests/ge/interpolation_tests.cpp uses the
+REAL device vertices of that pair and asserts no rigid translation; it fails
+with "two different objects must not be rigidly translated as one". Three
+synthetic approximations were tried first and all passed - the real data was
+needed to reproduce it.
+Root cause: partner identity within a changing oversize bucket. Neither a
+rejection rule nor a translation rule can supply the missing identity; this is
+why per-draw transform identity is the relevant direction.
+
+**Still unexplained.** The reported **walls/meshes folding** appears in neither
+endpoint frame of `pan2.bin` (`--vertex-only` also reports 0 collapses). Either
+the fold exists only in the *interpolated present* between two frames, or it is
+a winding/area artifact the offline tool does not count. Next experiment: dump
+the interpolated presents (not just guest frames) or record the screen during a
+pan and compare. No code change until both artifacts have a reproduction.
+
+## 2026-11-04 — Direction chosen: per-draw matrix interpolation
+
+**Decision (user).** Of the two unblocked tracks, per-draw matrix
+interpolation is the one related to the persisting frame-interpolation
+artifacts; the camera/widescreen hook addresses a different symptom (guest
+culling to a native 480-wide frustum) and is not the interpolation track.
+Work starts on per-draw matrix interpolation.
+
+**Rationale.** The two reported artifacts are one limitation seen from two
+sides. The host only receives already-projected vertices, so an in-between
+built by blending them cannot know the underlying rigid transform:
+- it *invents* intermediate shapes (linear blend of rigid transforms is not
+  rigid — the candy-wrapper / folding artifact), or
+- when the collapse rule detects that, it translates the whole draw rigidly
+  instead (the "doors/meshes snapping rigidly" artifact). Fresh pan dump
+  `pan2.bin` measured the collapse-only rigid rule firing on 287–318 draws on
+  every fast-pan frame pair, so the workaround for the first artifact is
+  manufacturing the second.
+
+The mature answer, recorded in the extern survey, is RT64/Zelda64Recomp's:
+interpolate **per-draw transform matrices**, decomposed into translation,
+rotation (quaternion slerp) and scale, with explicit skip modes; use vertex
+interpolation only for screen-aligned/UI quads. That removes the algebra that
+produces both artifacts rather than patching each symptom.
+
+**Prerequisites cleared.** Camera trace (the camera trace) and profile surface
+(the profile surface) are complete; the profile is device-verified. Still missing, and
+now the first real work: the per-draw transform input itself — the camera trace
+found the projection builder at `0x088A3CAC` and the GE display-list sites but
+explicitly left the FOV/aspect input and per-object transforms as a named gap.
+
+**First deliverables (red-first, no speculative rules).** (1) Reproduce the
+large-pure-translation collapse-test misfire as a host contract. (2) Dump the
+**interpolated presents**, not just guest endpoint frames, to locate the fold
+that appears in neither endpoint of `pan2.bin`. (3) Extend the trace to find
+per-draw transform writes into `0x088A3CAC`. Only then add a per-draw transform
+identity, slerp, keep the existing skip/cut rules, and validate on the battle
+snapshot with the dump tool plus manual device QA. the parent flicker defect task stays open as the
+parent defect record.
+
+## 2026-11-04 — The folding artifact located in the interpolated presents
+
+**Experiment.** Added a second bounded, opt-in dump (`--es dump_presents <path>`)
+sharing the guest-frame dump format, written from `to_present` (the frame the
+presenter actually shows, including interpolated in-betweens). Captured during
+a real stick pan with interpolation on: `present_pan.bin` (sha
+aba9b6f1…) and `guest_pan.bin` (sha 3c43c1ee…), 24 frames each.
+
+**Result.** The guest endpoint frames show 0 collapsing triangles; the
+**presented frames show 11–641 per frame pair**, with peaks of 599–641 on
+frame pairs 7->8 and 11->12. `--vertex-only` reports `rigid_pairs=0` on those
+presents, meaning the runtime's collapse rule did NOT fire on them, so the
+folded geometry went straight to the screen. This is the reported
+walls/meshes folding, reproduced with real device data.
+
+**Mechanism.** The collapsing keys are the SAME oversize, changing wall-quad
+buckets identified for the rigid snapping (`0xac4536df81a6dc17`,
+`0x97280303e06e2915`, …). Direct inspection of a collapsed presented pair:
+`before=-15.2, after=-10.7, blend=+107.2` — a winding flip. Blending the
+folded corners of two DIFFERENT objects (paired by arrival order in a bucket
+whose size and member order changed) inverts a triangle.
+
+**Both artifacts are one root cause.** Wrong partner in a changing oversize
+bucket: when the collapse rule catches the bad blend it translates the draw
+rigidly (doors/meshes snapping); when it does not, the inverted triangle is
+presented (walls/meshes folding). Neither a rejection rule nor a translation
+rule can supply the missing per-draw identity. This is the measured
+justification for the per-draw transform/interpolation direction.
+
+**State.** The presented-frame dump is bounded, opt-in and off by default; it
+never changes what is presented. Both dumps are app-private and gitignored.
+No interpolation code has been changed in this investigation.
+
+## 2026-11-04 — Transform trace: Gungnir has no per-draw matrices to interpolate
+
+**Experiment.** Extended the bounded `GUNGNIR_TRACE_CAMERA` diagnostic to log
+world (0x3A/0x3B), view (0x3C/0x3D) and bone (0x2A/0x2B) matrix commands as
+well as projection, under a distinct `[camera_transform]` tag. Ran a bounded
+host boot (1.5M dispatches, 12 s, `--no-stop-at-flip`) and wrote
+`tools/camera_transform_report.py` (5 contracts) to group the stream into
+12-lane blocks, decode f24 and count distinct matrices.
+
+**Measured result (run6.log, 64,434 transform commands, 4,959 blocks):**
+
+| Kind | Blocks | Distinct matrices | Content |
+|---|---|---|---|
+| world | 2479 | 3 (+1 partial) | identity `I`, `32768*I`, and `diag(32768,32768,1)` — all constant |
+| view | 2479 | 3 (+1 partial) | one fixed isometric rotation (`0.7071, -0.3535, 0.6124, 0.866, 0.5, ...`, translation `-1.1547`), identity, and one boot frame with `-10` |
+| bone | 1 | 1 | boot list only; no skinning matrices in the game scene |
+
+Across 2,478 full 12-lane view blocks, **2,372 are the exact same constant
+rotation matrix**; world matrices are likewise constant. Pan and object motion
+are therefore **not** carried in GE transform matrices at all — the guest
+computes already-projected vertices on the CPU each frame (consistent with the
+earlier finding that its battle unit sprites arrive as through-mode
+screen-space quads).
+
+**Conclusion (changes the direction).** RT64/Zelda64Recomp-style interpolation
+of decomposed per-draw transform matrices **cannot be applied directly to this
+title**: there is no per-draw transform to interpolate. What the artifacts
+actually need is a **stable per-draw identity** so the interpolator pairs the
+right object across frames, not a transform decomposition. The measured root
+cause (wrong partner in a changing oversize bucket) stands; the fix is an
+identity/tagging mechanism, and the transform trace shows that mechanism must
+come from the guest's CPU-side object data or display-list construction, not
+from GE matrix registers.
+
+**Named gap / next experiment.** Where the CPU-side object identity lives is
+not yet known. Candidates: the display-list builder at `0x088A3CAC` and its
+callees (`0x088040D0`/`E4`/`F8`), the global it reads at `0x08B19A10`, or a
+per-object vertex source buffer that the write-watch can name. Watch writes to
+those and to the vertex-list source, then look for a stable index/ID that
+survives a cull-driven bucket reorder. PPSSPP remains a diff oracle only.
+
+**State.** No interpolation code changed. The presented-frame dump, the two
+red-first reproductions, and this transform trace are all evidence; the failing
+contract stays red until an identity mechanism lands.
+
+## 2026-11-04 — Per-draw identity hunt: bounded negative result
+
+**Experiment.** Added an opt-in, bounded `GUNGNIR_TRACE_VERTEX_SOURCE`
+diagnostic logging GE vertex/index address commands (0x01/0x02) with the
+resolved address; `tests/test_vertex_source_trace.py` (3 contracts). Ran a
+bounded host boot (800k dispatches): 22,307 vertex-source commands across
+212 distinct (list, command_pc) sites, of which 202 map to exactly one address
+(the other 10 are the 2D/HUD scene). Also watched CPU writes to a shared vertex
+buffer with `PSPRECOMP_WATCH_WRITE=0x097F7F50`: written by guest PCs
+`0x08900000` and `0x088B636C` with packed screen-space vertex data
+(color `0xff005050`, packed x/y like `0x820168`).
+
+**Negative result.** Only **39 distinct vertex addresses** exist in the whole
+run, and just **16 per frame list**, reused thousands of times (11,134
+vertex-address commands in one list, 16 distinct addresses). These are shared
+scratch buffers, not per-object IDs. Likewise there are only 94–97 distinct
+vertex-address command PCs per frame list, while the offending wall-quad bucket
+alone holds 508 draws. Neither the vertex source address nor the command PC
+distinguishes the individual draws that mispair.
+
+**Conclusion.** The guest builds a FLAT, CPU-projected stream of quads into
+shared scratch buffers; culling reorders and resizes that stream each frame.
+No host-visible field (GE transform matrices - constant; vertex addresses -
+shared; command PCs - shared; draw-identity hash - content-based) carries a
+stable per-object ID. The wrong-partner artifact therefore cannot be fixed by
+tagging from existing host state.
+
+**Named gap / next experiment (requires deeper reverse engineering, not
+guessing).** A stable identity must come from a GUEST-SIDE hook that tags
+objects BEFORE projection - i.e. the object-loop in the CPU renderer around
+`0x08900000` / `0x088B636C`, or the display-list builder `0x088A3CAC`. Trace
+that loop to find a per-object index or pointer that survives culling and
+expose it through the per-title profile surface. Until then, a host-side
+heuristic is the only alternative, and any such rule must be justified by a
+red-first reproduction of exactly the wrong-partner case (the failing contract
+already exists). Do not claim a fix without that.
+
+**State.** No interpolation code changed. All trace diagnostics are opt-in and
+bounded; logs and dumps are app-private/gitignored. PPSSPP diff oracle only.
+
+## 2026-11-04 — CPU object-loop trace: no per-object ID (bounded result)
+
+**Experiment.** Traced the CPU vertex-emission routines named by the write
+watch. `0x08900000` (generated unit 0063) walks a structure with a +48/+64
+stride and emits 16-byte vertex records; `0x088B636C`/`0x088B63AC` (unit 0044)
+emit the same records for another batch. Extended the vertex-source diagnostic
+to log PRIM commands (0x04) with their command PC and vertex count
+(`tests/test_vertex_source_trace.py` extended). Ran two bounded host boots.
+
+**Measured.**
+- `0x08900000` is a large vertex-emission routine, not a clean per-object
+  loop: it builds 16-byte vertex records into shared scratch buffers. The
+  loop back-edge is driven through `invoke_chained_direct` calls
+  (`0x0881BC28`/`0x0881BC5C`), so the object index lives in a caller, not here.
+- PRIM commands per frame list: **94–97 distinct (list, command_pc) slots**,
+  each repeated ~380 times (once per frame), with `count` values of 2, 32 and
+  102. The 508-draw wall bucket is emitted from a few such slots; the same slot
+  emits different objects in different enqueues because culling reorders the
+  stream. So (list, command_pc) is a stable SLOT, not a per-draw identity.
+- Watching writes into the shared vertex buffer showed 248 (guest PC, address)
+  sites; only 20 vary, and all 20 vary in **screen coordinates** (x stepping
+  130, 124, 117, 111, 105 … during a pan). There is no spare per-object index
+  or pointer word in the vertex record.
+
+**Conclusion.** The trace did NOT find a stable per-object identity. It did
+establish where the identity would have to come from: the caller of
+`0x08900000` (via `0x0881BC28`/`0x0881BC5C`) that holds the object index, or a
+guest-side hook into the display-list builder `0x088A3CAC` before projection.
+That is deeper reverse engineering of the object array, not a host-visible
+field. No interpolation code changed.
+
+**Named gap, final form.** A per-title hook must expose a per-object tag from
+the CPU object loop before projection. Until that exists, the wrong-partner
+artifact has no exact host-side fix; a heuristic would need its own red-first
+reproduction (the failing contract exists) and must not be claimed as a fix
+without it. PPSSPP remains a diff oracle only. All diagnostics are opt-in and
+bounded; logs and dumps are app-private/gitignored.
+
+## 2026-11-04 — GitHub survey: the wrong-partner artifact is known and has a solution shape
+
+**Trigger.** The user pointed out `gh search -- "query"` syntax. Re-ran
+reference discovery with repo-scoped `--repo` searches (30 search calls
+available; broad queries returned unrelated noise).
+
+**Issues found.** `Zelda64Recomp/Zelda64Recomp#61` (scene cuts / instant pose
+changes warp under interpolation; closed as an original-game artifact
+exaggerated by high frame rate) and `#562` (only texture scrolling is
+interpolated in 2D). `rt64/rt64#93` is the direct one: "Add
+gEXPreviousMatrix command to override the previous frame's transform for a
+given draw", explicitly for **"when a game teleports meshes in order to
+implement infinite scrolling"** — a bucket whose membership changes between
+frames, our exact case. The maintainers' answer is a per-draw
+previous-transform override, i.e. a stable per-draw tag supplied by the game
+side, not a host heuristic.
+
+**Implementations found (behavioural reference, no code copied).**
+- `bryantmh/rush2recompiled:src/interpolation.cpp` opens with the exact
+  problem: "Without tags RT64 pairs matrices between frames by guessing
+  (`G_EX_ID_AUTO`), which **mismatches identical objects such as cars lined up
+  at the start of a race**." Their solution: per-title hooks (`us.toml` ->
+  `rush2_interp_*`) tag every draw with a stable ID derived from the GAME'S
+  OWN object-pool slot index (scene graph node index in a 0x38-byte-record
+  pool, world-space polygon slot "stable between frames", per-view camera
+  index). IDs carry a generation that changes on teleport/camera cut so the
+  interpolator snaps instead of sweeping.
+- `Zelda64Recomp/Zelda64Recomp:patches/transform_ids.h` +
+  `patches/*_transform_tagging.c` assign explicit ID ranges per object class
+  (particle index, actor slot/limb, effects) at draw time via
+  `gEXMatrixGroupDecomposedSkipAll(...)`. `patches/patches.h` also defines
+  `gEXMatrixGroupNoInterpolation`.
+- `rt64/rt64:src/hle/rt64_game_frame.cpp` pairs groups between frames with
+  `curGroup.matrixId == prevGroup.matrixId`; `G_EX_ID_IGNORE` (0x0) is an
+  explicit per-draw "do not interpolate" used by several recomp projects.
+
+**Conclusion.** Our bounded negative result (no host-visible per-object ID) is
+consistent with the literature: the tag must be **injected by a guest-side
+per-title hook from the game's object pool**, exactly as rush2recompiled and
+Zelda64Recomp do. The failing contract and the presented-frame dump give us a
+red-first reproduction to validate such a hook when it lands. This is a
+solution shape, not an implemented fix: finding Gungnir's object pool and
+injecting IDs is still per-title reverse engineering. The alternative of an
+explicit per-draw SKIP for untaggable buckets is also supported by the
+literature (`G_EX_ID_IGNORE`), but would have to be counted and named, never
+silently disabled.
+
+**State.** No interpolation code changed. Full details and URLs in
+`docs/SOURCE_PROVENANCE.md`. PPSSPP remains a diff oracle only.
+
+## 2026-11-04 — Object-pool trace: not found; simple heuristic falsified
+
+**Experiment.** Traced the callers of the vertex emitter and the display-list
+builder in the generated corpus:
+- `0x0881BC28` / `0x0881BC5C` (unit 0005) are generic container iterator
+  helpers (`gpr[6] << 4` = 16-byte stride, base/end pointers at struct +24/+28/+32/+36), not the object loop.
+- `0x08900000` is tail-called from `0x088FFFFC` (unit 0062); the surrounding
+  loops (`0x088FF544`, `0x088FE7C0`, …) are calls to a quad-emitter subroutine,
+  not an object-array iteration with a visible index.
+- The display-list builder `0x088A3CAC` is called ONCE PER FRAME from
+  `0x08805288` with a scene-context pointer `gpr[4] = 0x08B2C6E0`; its own loop
+  (`0x088A390C` ← `0x088A3DEC`) is a retry/state loop over a global flag at
+  `0x08B19A10`, not a per-object loop.
+- Watching writes to the display-list PRIM slot `0x09C52230` attributes every
+  store to `pc=0x0880528C` (the dispatch boundary after the builder returns),
+  so the write-watch cannot distinguish individual draws inside the builder.
+
+**Result.** Gungnir's per-object pool / slot index was NOT located. The guest
+reorders the draw stream inside a per-frame builder, and no host-visible loop
+counter or object pointer is exposed at the traced call sites.
+
+**Heuristic falsified too.** An obvious host-side rule — "skip interpolation for
+a bucket whose size changed between frames" — was checked against both dumps:
+the wall bucket changes size on some frame pairs (508→314) but is CONSTANT on
+others (508→508, 445→445) that still show `order_breaks=10-25` and
+`rigid_pairs=6-28`. So membership reorders without a size change and the guard
+would not fix all cases. Another rejection/translation rule is therefore not
+justified.
+
+**Conclusion.** The GitHub survey's solution shape stands as the only
+well-founded path: a guest-side per-title hook that tags draws from the game's
+own object pool (like `bryantmh/rush2recompiled:src/interpolation.cpp` and
+`Zelda64Recomp:patches/*_transform_tagging.c`). Finding that pool is a larger
+reverse-engineering effort into the per-frame builder's object loop, explicitly
+recorded as a named gap — not guessed. The explicit per-draw SKIP
+(`G_EX_ID_IGNORE`) remains a documented alternative but must be counted and
+named; a size-change guard has now been falsified as a substitute.
+
+**State.** No interpolation code changed. All diagnostics opt-in/bounded.
+Nothing committed.
+
+## 2026-11-04 — Battery net-discharges while plugged in (device, ROOT-CAUSED, no fix yet)
+
+**Symptom.** User device QA: "significant battery drain on the device even
+though it is plugged in." User clarified the screen is at ~60% brightness, not
+full brightness.
+
+**Falsification.** Several obvious explanations were checked and rejected with
+measurements on `30c1f958` (M2102K1AC, 3200x1440, 120 Hz display, v0.1.0):
+- *Broken guest pacing / free-running game* — FALSE. Guest is correctly paced
+  at 20 Hz (`flips` +100 per 5 s tick; cadence `delay_us` +5,000,000 per 5 s =
+  real-time-locked). `Kernel::pace_to_real_time()` is working.
+- *Runaway log/dump I/O* — FALSE. No dump files active; ~9 logcat lines/5 s.
+- *Full-brightness screen* — FALSE (user-corrected; `screen_brightness=32/255`,
+  manual `mode=0`). The screen is a minor contributor.
+- *Busy-spin in the present wait* — mostly FALSE. `FrameQueue::wait_for_next`
+  is a proper condition-variable wait, but `sleep_for_next_frame` caps the wait
+  at 8 ms, so the main loop wakes ≥125×/s even when nothing is due.
+
+**Root cause (proven).** The app's sustained compute/render load exceeds the
+weak USB charger, so the battery NET-DISCHARGES while Android still reports
+`status=2` (charging):
+- `AC powered: false`, `USB powered: true`, `Max charging current`
+  580000–675000 µA (~650 mA weak USB).
+- Battery **level 24 → 23 over ~6 s** with `status=2` = confirmed net
+  discharge. SoC thermal zones 51/50/46 °C.
+- Sustained **85–86 % of one CPU core**, rock-steady over 3/7/8/10 s windows
+  (`top`: 85.1 %, 74:28 accumulated CPU time); dominant `SDLThread`,
+  `PR 10 NI -10`. No idle.
+- `present_guest_frame` costs ~10.9 ms wall each — full vertex copy +
+  `to_vulkan_vertex` + widescreen per-vertex transform + Vulkan submit of
+  hundreds of draws.
+
+**Controlled A/B (live JNI toggle, same idle static scene, no restart).**
+
+| | interpolation ON (user setting) | interpolation OFF |
+|---|---|---|
+| CPU (one core) | 86 % | 63 % |
+| presents | ~39 Hz (2× guest) | ~20 Hz (1× guest) |
+
+Interpolation ON adds +23 percentage points of a core (~37 % more CPU) by
+doubling the present rate on a 120 Hz display — and it does so on a **static**
+scene (`interpolation_pairs motion=0.0`, ~2793 candidate pairs/pass,
+`largest_bucket=546`): pure recompute of identical frames. But OFF still burns
+63 % of a core, so interpolation is an **amplifier, not the sole cause**.
+Setting was restored to ON after the test.
+
+**Contributors, largest first.** (1) Continuous ~85 % single-core CPU from
+guest execution + per-present full vertex work. (2) Interpolation targeting the
+120 Hz display refresh (`PresentSchedule` sets `next_tick_ = now + 1/120 s`),
+so a 20 Hz game is presented at up to 120 / achieved 39 Hz. (3)
+`measure_widescreen_coverage` runs **every present, always-on, with no
+diagnostic gate** — QA instrumentation sitting in the production render loop
+(added this session). (4) The 8 ms main-loop wake cap. (5)
+`SCREEN_BRIGHT_WAKE_LOCK` + `PARTIAL_WAKE_LOCK 'AudioMix'` (WorkSource 10557)
+keep display/SoC awake continuously. (6) Moderate screen brightness = minor.
+
+**Open gaps (explicit, counted).** Whether this is a NEW regression vs a prior
+build is unconfirmed (the coverage instrumentation and the 120 Hz-aware
+interpolation schedule are recent). Absolute per-app mA draw is not exposed by
+this device. No fix has been applied: candidate directions (skip interpolation
+on static scenes, gate coverage to opt-in, cap the interpolation present rate,
+lengthen the idle wait, honor 60 Hz) each require a red-first test, a mutation
+check, and the manual device QA gate before any commit.
+
+**Evidence.** `build/qa/battery/measurements.txt` (gitignored, sha256
+`f3b61102f40677a8833f1707c8d7588b282472963ea2e22b66432620dcbbf714`). No game
+content committed. Nothing committed; no code changed for this finding.
+
+### Fix implemented (same day): static-scene skip + opt-in coverage
+
+The user chose two of the candidate directions. Both were implemented
+red-first with mutation checks; device QA record in
+`docs/qa/2026-11-04-m2102k1ac-battery-fix.md`, raw numbers in
+`build/qa/battery/fix-verification.txt` (gitignored).
+
+**What changed.** (1) `scene_motion(current, previous)` measures mean
+per-vertex screen motion between consecutive guest frames by arrival order
+(draws whose vertex count changed are skipped, so a culling stream does not
+look like a pan); `scene_is_static` compares it to `kStaticScenePixels = 1.0`
+guest px. (2) `PresentSchedule::on_guest_frame` takes a `static_scene` flag:
+when set it presents the real frame once and opens **no** interpolation window,
+so `due()` yields nothing and no `interpolate_frame` pass runs for a still
+picture. (3) `measure_widescreen_coverage` is now gated behind
+`g_coverage_enabled`, an opt-in `--el coverage 1` intent extra, default off.
+`static_frames` is counted and logged so the optimisation is visible, not
+silent.
+
+**Measured on device** (same battle snapshot, interpolation ON, 120 Hz):
+
+| | old | new |
+|---|---|---|
+| sustained CPU (one core) | 85-86 % | **58-61 %** |
+| presents per guest frame | ~2 (39 Hz) | **1 (20 Hz)** |
+| interpolated presents, idle | ~196/5 s | **0** |
+| `static_frames` (idle) | n/a | 292/294 (~99 %) |
+| `present_time avg_us` | ~10920 | ~7645-8041 |
+
+A pan still interpolates (`interpolated=35`, `motion=20.3`, `per_frame=0..3`),
+so the skip does not disable the feature on moving scenes. Coverage is off by
+default (no log lines, `present_time` drops) and on with `--el coverage 1`;
+note `--es coverage 1` (string) does not work because `intent_long` reads a
+long extra.
+
+**Falsified by the fix.** "Interpolation is the whole drain" — turning it off
+had given 63 %, but the static skip alone reaches 61 % with the feature still
+ON, so the waste was specifically *interpolating a static scene*, not
+interpolation in general.
+
+**Named gaps.** A 12 s window held battery level 17 -> 17 at 58 % CPU, but
+that is too short and the level is a coarse integer percent: **net charge
+recovery is not claimed**; a longer charge-rate test on a high-current charger
+is needed. A lone small moving element in a still scene is now held at the
+guest rate (intentional trade at the 1 px threshold); watch it in the scene
+sweep. Whether the drain was a regression is still unconfirmed.
+
+**State.** Host `ctest` 2/2, `repository_check` PASS, APK builds. Nothing
+committed; manual QA (three cold boots, device matrix, sign-off) pending the
+user gate.
+
+### Phase 2 — PPSSPP-derived pacing improvements (same day)
+
+A reference survey of PPSSPP's frame pacing (`docs/SOURCE_PROVENANCE.md`,
+2026-11-04) suggested three further changes; all were implemented red-first
+with mutation checks. Child tasks `eacou9zl` (cap), `x0d44mv7` (wait),
+`7rb8oi1d` (hold) under the battery task. Raw device numbers:
+`build/qa/battery/phase2-verification.txt` (gitignored).
+
+**(1) Cap the interpolation present rate.** PPSSPP's `FramerateTarget()`
+clamps to 60 Hz on 90/120/144 Hz displays; ours had chased the host refresh.
+Added pure `cap_refresh_hz()` + `kMaxPresentHz = 60.0` in `present_schedule`,
+wired into `main.cpp` (`display_refresh_hz=120.0 capped_hz=60.0` on device).
+A pan still interpolates but `per_frame` drops from `0..3` to `0..2`. Red test
++ mutation check ("a 120 Hz display is capped to 60 Hz") green.
+
+**(2) Precise deadline wait.** PPSSPP's `WaitUntil()` sleeps to the real
+deadline; ours clamped every idle wait to 8 ms. Added pure
+`idle_wait_slice(now, deadline, ceiling)` in `frame_queue` and rewrote
+`sleep_for_next_frame` to wait to `schedule.next_tick()` or
+`frame_queue.pending_deadline()`, bounded by a named 16 ms responsiveness
+ceiling. **Tradeoff, documented:** input is pumped only by the main loop's
+`SDL_PollEvent` (no separate pump thread), so a longer sleep adds touch
+latency; the ceiling is one display frame. Device check: tap → toggle logged
+within 101 ms (adb polling overhead included), no perceptible regression. Red
+test + mutation check green.
+
+**(3) Hold the last image for identical frames.** PPSSPP's `__DisplayFlip()`
+skips the flip entirely when `FramebufferDirty()` is false. A temporary
+instrumented build proved that on this device (`VK_PRESENT_MODE_FIFO_KHR`)
+SurfaceFlinger **retains the last presented buffer for ~53 s with zero
+presents** (screenshots in `build/qa/battery/`, guest ran to frame 1140, no
+surface errors). So the mechanism is feasible. Added exact
+`frames_identical()` + `HeldImageState` with a `kHoldRePresentFrames = 10`
+safety re-present (PPSSPP's 10-vblank fallback idea) and a counted
+`presents_skipped` log; reset on continuity breaks and surface recreation.
+
+**Falsification (important).** A dump of 8 consecutive guest frames on the
+*same* static battle scene showed they are **not byte-identical**: 0–4 draws
+differ per pair and mean xy motion is 0.003–0.027 px (sub-pixel jitter from a
+blinking cursor/particle or culling). Therefore the exact hold triggers on
+**0 of 7** pairs here (`presents_skipped=0` on device) — it only helps
+genuinely frozen screens (menus, pause), not this scene. A threshold-based hold
+using the 1 px `scene_is_static` signal *would* capture the remaining ~20
+presents/s of CPU, but risks freezing subtly animated HUD/cursor elements for
+up to the safety interval — a visual regression automated tests cannot catch.
+**Not implemented**; recorded as a named gap, not papered over.
+
+**Combined device result:** CPU **58 %** of one core (original 86 %, phase-1
+fix 61 %), `present_time avg_us` ~7027 (original ~10920), zero idle in-betweens,
+`static_frames` ~99 %, pan still interpolates at ~59 % CPU.
+
+**State.** `ctest` 2/2 (158 s), `repository_check` PASS (506 files), all ge and
+Python suites green, APK BUILD SUCCESSFUL. Nothing committed; manual QA (three
+cold boots, device matrix, sign-off) pending the user gate. Net charge recovery
+still not claimed (weak 191 mA charger, coarse battery level).

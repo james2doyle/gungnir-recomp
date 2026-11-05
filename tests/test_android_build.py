@@ -122,6 +122,7 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
             shutil.copytree(REPO / "cmake", root / "cmake")
             shutil.copytree(REPO / "runtime" / "audio", root / "runtime" / "audio")
             shutil.copytree(REPO / "runtime" / "ge", root / "runtime" / "ge")
+            shutil.copytree(REPO / "runtime" / "host", root / "runtime" / "host")
             shutil.copytree(REPO / "runtime" / "hle", root / "runtime" / "hle")
             shutil.copytree(REPO / "runtime" / "input", root / "runtime" / "input")
             shutil.copytree(REPO / "runtime" / "platform", root / "runtime" / "platform")

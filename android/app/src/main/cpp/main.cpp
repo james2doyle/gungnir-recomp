@@ -4,9 +4,11 @@
 #include "ge/state_machine.hpp"
 #include "ge/targets.hpp"
 #include "ge/vulkan_backend.hpp"
+#include "ge/widescreen_coverage.hpp"
 #include "hle/cadence.hpp"
 #include "hle/hle_media.hpp"
 #include "hle/kernel.hpp"
+#include "host/profile.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -38,13 +40,16 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -65,6 +70,12 @@ std::mutex g_driver_info_mutex;
 std::string g_driver_info;
 std::mutex g_touch_mutex;
 std::atomic<gungnir::platform::SdlGamepad *> g_gamepad{nullptr};
+
+// Per-title host patches (75yfmuis). Host state only: never snapshotted, never
+// part of the snapshot identity. Values live in the gitignored filesDir path
+// below and are opt-in; an unvalidated value is refused, never best-efforted.
+gungnir::host::HostProfile g_host_profile;
+const gungnir::host::HostProfile &host_profile() { return g_host_profile; }
 
 // Snapshot menu wiring (T15d). The session runs on a worker thread; menu
 // Save/Load stop it, join it, then save/load/restart under this mutex. The
@@ -122,8 +133,65 @@ struct InterpolationState {
     gungnir::ge::FrameHistory history;
     std::vector<gungnir::ge::Draw> current;
     std::vector<gungnir::ge::Draw> scratch;
+    // Per-pass counts, accumulated over a log tick: how many draws found a
+    // partner, how many were paired by position instead of arrival order, and
+    // how many buckets were too large to scan.
+    gungnir::ge::InterpolationStats stats;
+    std::uint64_t stat_passes{};
+    gungnir::ge::InterpolationStats stat_total{};
+    // Presentation timeline: which point in the guest's motion each present
+    // shows, as guest frame index + blend factor. It must never go backwards;
+    // a regression is the scene being shown earlier than it already was.
+    std::uint64_t frames_shown{};
+    double last_content{};
+    bool has_content{};
+    std::uint64_t timeline_presents{};
+    std::uint64_t timeline_regressions{};
+    std::uint64_t presents_since_frame{};
+    std::uint64_t presents_min{};
+    std::uint64_t presents_max{};
+    // Guest frames whose scene did not move, so no in-between window was opened.
+    // Counted so the power optimisation is visible rather than silent.
+    std::uint64_t static_frames{};
 };
 InterpolationState g_interpolation;
+
+// "Hold the last image" power optimisation. A guest frame that is EXACTLY
+// identical to the one we last presented needs no new swapchain submit: on this
+// device (30c1f958, VK_PRESENT_MODE_FIFO_KHR) SurfaceFlinger retains the last
+// presented buffer for at least ~53 s without a new present (device experiment,
+// build/qa/battery/hold_*.png). Exact identity means holding it can never
+// change the picture. A periodic re-present (PPSSPP's 10-vblank fallback idea)
+// keeps the layer alive and bounds any state we did not compare.
+struct HeldImageState {
+    std::vector<gungnir::ge::Draw> last_presented;
+    bool has_last{};
+    std::uint64_t consecutive_holds{};
+    std::uint64_t presents_skipped{};
+};
+HeldImageState g_held_image;
+inline constexpr std::uint64_t kHoldRePresentFrames = 10u;
+
+// Widescreen coverage (9826wejc): the measured gap between what the widened
+// frame shows and what the guest actually submitted. Cheap, bounds-only, done
+// once per present; accumulated over a log tick. A meaningful step in the
+// percentage (a scene change) gets a one-shot line so regressions are visible
+// in a bounded run without waiting for the next tick.
+struct WidescreenCoverageState {
+    gungnir::ge::CoverageResult last;
+    std::uint64_t samples{};
+    std::uint64_t percent_sum{};
+    std::uint64_t backdrop_sum{};
+    int last_logged_percent{-1000};
+    bool has_value{};
+};
+WidescreenCoverageState g_coverage;
+
+// Widescreen coverage is QA instrumentation, not a render requirement: it scans
+// every draw and fills a column bitmap on every present. Running it by default
+// in the production render loop is a continuous, avoidable load. Opt in with the
+// `coverage` intent extra (`--es coverage 1`); off by default.
+bool g_coverage_enabled = false;
 
 // A snapshot load, a reset to title or a background round trip makes the
 // recorded frames a different continuity; never interpolate across it.
@@ -132,6 +200,87 @@ void reset_interpolation_history() {
     g_interpolation.history.clear();
     g_interpolation.current.clear();
     g_interpolation.scratch.clear();
+    g_interpolation.stats = {};
+    g_interpolation.stat_passes = 0u;
+    g_interpolation.stat_total = {};
+    // A new continuity must never hold an image from the old one: the next
+    // frame is always presented, then a fresh last_presented is recorded.
+    g_held_image.has_last = false;
+    g_held_image.consecutive_holds = 0u;
+}
+
+// Bounded draw-list dump for offline presentation work. Host-side only, off
+// unless `--es dump_draws <path>` names a file; it writes the first frames
+// verbatim (key, through flag, and each vertex's x, y, z and texture
+// coordinates) so an in-between can be reconstructed on the host instead of
+// inferred from a video. Nothing here affects what is presented.
+struct DrawDump {
+    std::FILE *file{};
+    std::uint32_t frames_written{};
+    std::uint32_t limit{8u};
+    std::int64_t delay_ms{};
+    gungnir::ge::FrameQueue::Clock::time_point opened{};
+};
+DrawDump g_draw_dump;
+std::string g_draw_dump_path;
+// The folding artifact is visible in the presented in-between but appears in
+// neither guest endpoint frame, so a second bounded dump captures to_present.
+DrawDump g_present_dump;
+std::string g_present_dump_path;
+
+void write_dump_frame(DrawDump &dump, const std::string &path,
+                      const std::vector<gungnir::ge::Draw> &draws, const char *tag) {
+    if (dump.file == nullptr || dump.frames_written >= dump.limit)
+        return;
+    if (dump.delay_ms > 0) {
+        const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+            gungnir::ge::FrameQueue::Clock::now() - dump.opened);
+        if (waited.count() < dump.delay_ms) return;
+    }
+    const auto write_u32 = [](std::uint32_t value, std::FILE *file) {
+        std::fwrite(&value, sizeof value, 1u, file);
+    };
+    const auto write_f32 = [](float value, std::FILE *file) {
+        std::fwrite(&value, sizeof value, 1u, file);
+    };
+    write_u32(static_cast<std::uint32_t>(draws.size()), dump.file);
+    for (const gungnir::ge::Draw &draw : draws) {
+        const std::uint64_t key = gungnir::ge::draw_key(draw);
+        const std::uint8_t through = draw.state.through ? 1u : 0u;
+        const std::uint32_t count = static_cast<std::uint32_t>(draw.vertices.size());
+        std::fwrite(&key, sizeof key, 1u, dump.file);
+        std::fwrite(&through, sizeof through, 1u, dump.file);
+        write_u32(count, dump.file);
+        for (const gungnir::ge::ScreenVertex &vertex : draw.vertices) {
+            write_f32(vertex.x, dump.file);
+            write_f32(vertex.y, dump.file);
+            write_f32(vertex.z, dump.file);
+            write_f32(vertex.texcoord[0], dump.file);
+            write_f32(vertex.texcoord[1], dump.file);
+        }
+    }
+    ++dump.frames_written;
+    if (dump.frames_written == dump.limit) {
+        std::fflush(dump.file);
+        if (tag == std::string_view{"present_dump"}) {
+            GUNGNIR_LOGI("present_dump frames=%u draws_last=%zu path=%s\n",
+                         dump.frames_written, draws.size(), path.c_str());
+        } else {
+            GUNGNIR_LOGI("draw_dump frames=%u draws_last=%zu path=%s\n",
+                         dump.frames_written, draws.size(), path.c_str());
+        }
+    }
+}
+
+void dump_guest_frame(const std::vector<gungnir::ge::Draw> &draws) {
+    write_dump_frame(g_draw_dump, g_draw_dump_path, draws, "draw_dump");
+}
+
+void dump_present_frame(const std::vector<gungnir::ge::Draw> &draws) {
+    if (g_present_dump.file == nullptr ||
+        g_present_dump.frames_written >= g_present_dump.limit)
+        return;
+    write_dump_frame(g_present_dump, g_present_dump_path, draws, "present_dump");
 }
 
 std::atomic<std::int64_t> g_due_delta_min_us{0};
@@ -149,17 +298,23 @@ void publish_guest_frame(gungnir::ge::FrameQueue &queue,
     queue.publish(draws, due);
 }
 
-// Wait for the next frame, but never longer than 8 ms, so touch and the
-// overlay stay responsive while the guest runs at 20 Hz. Publishing wakes the
-// wait, so a frame is presented within a millisecond of its deadline.
+// One display frame at the capped 60 Hz: the maximum time the main loop may
+// sleep without polling SDL, so touch and the overlay stay responsive. Input
+// is pumped ONLY by this loop's SDL_PollEvent (there is no separate pump
+// thread), so a longer sleep would add that much touch latency. This is a
+// measured tradeoff, not a free win: PPSSPP's WaitUntil() can wait to the real
+// deadline because its input rides the emulator's own vblank loop.
+inline constexpr auto kIdleResponsivenessCeiling = std::chrono::milliseconds(16);
+
+// Wait to the actual next deadline (an interpolation tick, or the next guest
+// frame), bounded by the responsiveness ceiling. Publishing wakes the wait
+// early via the queue's condition variable, so a guest frame is still
+// presented within a millisecond of its deadline; the old fixed 8 ms slice
+// woke the loop twice for a 16 ms tick. Behavioural reference only.
 void sleep_for_next_frame(gungnir::ge::FrameQueue &queue,
-    const gungnir::ge::FrameQueue::Clock::time_point *tick = nullptr) {
-    auto slice = std::chrono::milliseconds(8);
-    if (tick != nullptr) {
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-            *tick - gungnir::ge::FrameQueue::Clock::now());
-        slice = std::clamp(remaining, std::chrono::milliseconds(1), slice);
-    }
+    std::optional<gungnir::ge::FrameQueue::Clock::time_point> deadline = std::nullopt) {
+    const auto slice = gungnir::ge::idle_wait_slice(
+        gungnir::ge::FrameQueue::Clock::now(), deadline, kIdleResponsivenessCeiling);
     queue.wait_for_next(slice);
 }
 
@@ -280,6 +435,37 @@ void unpack_runtime_assets(const std::filesystem::path &internal) {
     }
 }
 
+// Load the optional per-title host profile from the app-private files dir.
+// A missing file is the normal case and changes nothing. A present-but-invalid
+// file is a named error (logged and refused): no entry is applied. Every
+// applied entry is logged as 'profile key=value' so a device boot shows
+// exactly which host patches are active.
+void load_host_profile(const std::filesystem::path &internal) {
+    if (internal.empty()) {
+        GUNGNIR_LOGI("profile absent\n");
+        return;
+    }
+    const std::filesystem::path path =
+        internal / "profiles" / "gungnir" / "local" / "host_patches.toml";
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        GUNGNIR_LOGI("profile absent\n");
+        return;
+    }
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    const gungnir::host::ProfileResult result =
+        gungnir::host::HostProfile::parse(text);
+    if (!result.ok()) {
+        GUNGNIR_LOGE("profile_invalid: %s\n", result.message.c_str());
+        return;
+    }
+    g_host_profile = result.profile;
+    for (const std::string &line : g_host_profile.applied_lines())
+        GUNGNIR_LOGI("%s\n", line.c_str());
+    GUNGNIR_LOGI("profile applied=%zu\n", g_host_profile.size());
+}
+
 std::filesystem::path find_runtime_elf(const std::vector<std::filesystem::path> &directories) {
     for (const auto &directory : directories) {
         const std::filesystem::path candidate = directory / "game" / "game.elf";
@@ -377,6 +563,23 @@ std::string intent_string(const char *key) {
 
 bool present_guest_frame(gungnir::ge::VulkanBackend &backend,
                          const std::vector<gungnir::ge::Draw> &draws, std::string &error) {
+    if (g_coverage_enabled) {
+        const gungnir::ge::CoverageResult coverage =
+            gungnir::ge::measure_widescreen_coverage(
+                draws, static_cast<float>(g_widescreen_scale));
+        g_coverage.last = coverage;
+        g_coverage.has_value = true;
+        ++g_coverage.samples;
+        g_coverage.percent_sum += static_cast<std::uint64_t>(coverage.coverage_percent);
+        g_coverage.backdrop_sum += static_cast<std::uint64_t>(coverage.backdrop_only_columns);
+        // A 10-point step is a scene change, not frame-to-frame noise. One shot
+        // per change, never once per present.
+        if (std::abs(coverage.coverage_percent - g_coverage.last_logged_percent) >= 10) {
+            GUNGNIR_LOGI("widescreen coverage=%d%% backdrop_only_columns=%d hook=absent\n",
+                         coverage.coverage_percent, coverage.backdrop_only_columns);
+            g_coverage.last_logged_percent = coverage.coverage_percent;
+        }
+    }
     // The display buffer selects the presented target; anything else is
     // offscreen (sampled via render-to-texture or ignored).
     const std::uint32_t framebuffer = gungnir::hle::display_state().framebuffer;
@@ -980,6 +1183,8 @@ int main(int, char **) {
     }
     const char *internal = SDL_GetAndroidInternalStoragePath();
     if (internal != nullptr) unpack_runtime_assets(internal);
+    load_host_profile(internal != nullptr ? std::filesystem::path(internal)
+                                          : std::filesystem::path{});
     const std::string gamepad_profiles = read_asset("input_profiles/profiles.json");
     const std::filesystem::path gamepad_directory = internal != nullptr
         ? std::filesystem::path(internal) / "input_profiles"
@@ -1048,6 +1253,36 @@ int main(int, char **) {
     // 480-wide mapping and are only recentred. "off" is the native 480x272
     // frame; "16:9" caps the widening at the guest's own 16:9-ish aspect.
     {
+        g_coverage_enabled = intent_long("coverage", 0) != 0;
+        if (g_coverage_enabled)
+            GUNGNIR_LOGI("coverage opt-in enabled\n");
+        g_draw_dump_path = intent_string("dump_draws");
+        if (!g_draw_dump_path.empty()) {
+            g_draw_dump.delay_ms = intent_long("dump_after_ms", 0);
+            const std::int64_t frames = intent_long("dump_frames", 8);
+            g_draw_dump.limit = frames > 0 && frames <= 32 ? static_cast<std::uint32_t>(frames) : 8u;
+            g_draw_dump.opened = gungnir::ge::FrameQueue::Clock::now();
+            g_draw_dump.file = std::fopen(g_draw_dump_path.c_str(), "wb");
+            if (g_draw_dump.file == nullptr)
+                GUNGNIR_LOGE("draw_dump_failed: %s\n", g_draw_dump_path.c_str());
+            else
+                GUNGNIR_LOGI("draw_dump path=%s frames=%u delay_ms=%lld\n",
+                             g_draw_dump_path.c_str(), g_draw_dump.limit,
+                             static_cast<long long>(g_draw_dump.delay_ms));
+        }
+        g_present_dump_path = intent_string("dump_presents");
+        if (!g_present_dump_path.empty()) {
+            g_present_dump.delay_ms = g_draw_dump.delay_ms;
+            g_present_dump.limit = g_draw_dump.limit;
+            g_present_dump.opened = g_draw_dump.opened;
+            g_present_dump.file = std::fopen(g_present_dump_path.c_str(), "wb");
+            if (g_present_dump.file == nullptr)
+                GUNGNIR_LOGE("present_dump_failed: %s\n", g_present_dump_path.c_str());
+            else
+                GUNGNIR_LOGI("present_dump path=%s frames=%u delay_ms=%lld\n",
+                             g_present_dump_path.c_str(), g_present_dump.limit,
+                             static_cast<long long>(g_present_dump.delay_ms));
+        }
         const std::string mode = intent_string("widescreen");
         // adaptive (default) follows the window; the aspect caps bound it.
         const std::string policy = mode.empty() ? "adaptive" : mode;
@@ -1244,16 +1479,19 @@ int main(int, char **) {
         g_interpolation_enabled.store(true);
         GUNGNIR_LOGI("frame_interpolation intent=on\n");
     }
-    // The display's own cadence decides how many in-betweens fit between two
-    // guest frames.
+    // The display's cadence bounds the in-betweens, but a high-refresh phone
+    // must not drive 120+ recomputed presents per second of a 20 Hz game: the
+    // host pacing policy caps the effective refresh at 60 Hz (PPSSPP's
+    // FramerateTarget() does the same). Behavioural reference only.
     double refresh_hz = 60.0;
     if (const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
         mode != nullptr && mode->refresh_rate > 1.0f) {
         refresh_hz = mode->refresh_rate;
     }
+    const double capped_hz = gungnir::ge::cap_refresh_hz(refresh_hz);
     const auto refresh_interval = std::chrono::duration_cast<gungnir::ge::FrameQueue::Clock::duration>(
-        std::chrono::duration<double>(1.0 / refresh_hz));
-    GUNGNIR_LOGI("display_refresh_hz=%.1f\n", refresh_hz);
+        std::chrono::duration<double>(1.0 / capped_hz));
+    GUNGNIR_LOGI("display_refresh_hz=%.1f capped_hz=%.1f\n", refresh_hz, capped_hz);
     gungnir::ge::PresentSchedule &schedule = g_interpolation.schedule;
     schedule.set_refresh_interval(refresh_interval);
     std::uint64_t guest_frames = 0u;
@@ -1333,6 +1571,9 @@ int main(int, char **) {
                 if (backend.recreate_surface(error)) {
                     needs_surface = false;
                     render_failures = 0;
+                    // A fresh surface has no retained image to hold.
+                    g_held_image.has_last = false;
+                    g_held_image.consecutive_holds = 0u;
                     GUNGNIR_LOGI("lifecycle_resumed %dx%d\n", width, height);
                 } else {
                     GUNGNIR_LOGE("surface_recreate_failed: %s\n", error.c_str());
@@ -1388,36 +1629,108 @@ int main(int, char **) {
             backend.set_display_layout(g_display_layout.load(std::memory_order_relaxed));
             if (have_guest_frame) {
                 const bool has_previous = !g_interpolation.current.empty();
-                const bool immediate = schedule.on_guest_frame(frame_now, has_previous);
+                if (g_interpolation.timeline_presents != 0u) {
+                    // Presents per guest frame: the display cadence the mode
+                    // actually achieves, not the one it hopes for.
+                    const std::uint64_t count = g_interpolation.presents_since_frame;
+                    if (g_interpolation.presents_min == 0u || count < g_interpolation.presents_min)
+                        g_interpolation.presents_min = count;
+                    g_interpolation.presents_max = std::max(g_interpolation.presents_max, count);
+                }
+                g_interpolation.presents_since_frame = 0u;
+                ++g_interpolation.frames_shown;
+                // A scene that did not move between two guest frames has no
+                // motion to blend. Skip the whole interpolation window so a
+                // still picture is shown once at the guest rate instead of
+                // driving the 120 Hz display with identical recomputed frames.
+                const bool static_scene = has_previous &&
+                    gungnir::ge::scene_is_static(guest_draws, g_interpolation.current);
+                if (static_scene) ++g_interpolation.static_frames;
+                const bool immediate = schedule.on_guest_frame(frame_now, has_previous,
+                    static_scene);
                 if (has_previous) g_interpolation.history.push(std::move(g_interpolation.current));
                 g_interpolation.current = std::move(guest_draws);
+                dump_guest_frame(g_interpolation.current);
                 if (immediate) to_present = &g_interpolation.current;
             } else {
                 const auto due = schedule.due(frame_now);
+                const auto note_content = [&](double content) {
+                    ++g_interpolation.timeline_presents;
+                    ++g_interpolation.presents_since_frame;
+                    if (g_interpolation.has_content && content + 1e-3 < g_interpolation.last_content) {
+                        if (g_interpolation.timeline_regressions == 0u)
+                            GUNGNIR_LOGE("timeline_regression content=%.3f last=%.3f\n",
+                                         content, g_interpolation.last_content);
+                        ++g_interpolation.timeline_regressions;
+                    }
+                    g_interpolation.last_content = content;
+                    g_interpolation.has_content = true;
+                };
                 if (due.kind == gungnir::ge::PresentSchedule::Kind::Interpolated) {
                     g_interpolation.scratch = g_interpolation.current;
                     gungnir::ge::InterpolationStats stats;
                     gungnir::ge::interpolate_frame(g_interpolation.scratch,
                         g_interpolation.history, due.t, &stats);
+                    g_interpolation.stats = stats;
+                    g_interpolation.stat_total.candidates += stats.candidates;
+                    g_interpolation.stat_total.matched += stats.matched;
+                    g_interpolation.stat_total.cut += stats.cut;
+                    g_interpolation.stat_total.unmatched += stats.unmatched;
+                    g_interpolation.stat_total.reassigned += stats.reassigned;
+                    g_interpolation.stat_total.displaced += stats.displaced;
+                    g_interpolation.stat_total.largest_bucket = std::max(
+                        g_interpolation.stat_total.largest_bucket, stats.largest_bucket);
+                    g_interpolation.stat_total.oversize += stats.oversize;
+                    g_interpolation.stat_total.oversize_draws += stats.oversize_draws;
+                    g_interpolation.stat_total.translated += stats.translated;
+                    g_interpolation.stat_total.frame_motion += stats.frame_motion;
+                    ++g_interpolation.stat_passes;
+                    note_content(static_cast<double>(g_interpolation.frames_shown - 1u) +
+                                 static_cast<double>(due.t));
                     to_present = &g_interpolation.scratch;
                 } else if (due.kind == gungnir::ge::PresentSchedule::Kind::Held) {
                     // The next guest frame is late: show the real one once.
+                    note_content(static_cast<double>(g_interpolation.frames_shown - 1u) + 1.0);
                     to_present = &g_interpolation.current;
                 }
             }
             if (to_present == nullptr) {
-                // Nothing is due yet: wake for the next deadline, or soon
-                // enough to keep input and the overlay responsive.
-                const auto tick = schedule.next_tick();
-                sleep_for_next_frame(frame_queue, schedule.active() ? &tick : nullptr);
+                // Nothing is due yet: wait precisely for the next interpolation
+                // tick, or the next guest frame when no window is active,
+                // bounded by the responsiveness ceiling.
+                std::optional<gungnir::ge::FrameQueue::Clock::time_point> deadline;
+                if (schedule.active())
+                    deadline = schedule.next_tick();
+                else
+                    deadline = frame_queue.pending_deadline();
+                sleep_for_next_frame(frame_queue, deadline);
                 continue;
             }
-            const auto present_started = gungnir::ge::FrameQueue::Clock::now();
-            rendered = present_guest_frame(backend, *to_present, error);
-            present_time = std::chrono::duration_cast<std::chrono::microseconds>(
-                gungnir::ge::FrameQueue::Clock::now() - present_started);
-            present_total += present_time;
-            ++present_count;
+            // Exact identity only: holding a byte-identical frame cannot change
+            // the picture, and the device proved the compositor keeps the last
+            // image. Never hold past the safety interval so an un-compared
+            // state change or a lost layer is shown again promptly.
+            const bool hold = g_held_image.has_last &&
+                g_held_image.consecutive_holds < kHoldRePresentFrames &&
+                gungnir::ge::frames_identical(*to_present, g_held_image.last_presented);
+            if (hold) {
+                ++g_held_image.consecutive_holds;
+                ++g_held_image.presents_skipped;
+                rendered = true;  // the swapchain still shows the last image
+            } else {
+                const auto present_started = gungnir::ge::FrameQueue::Clock::now();
+                dump_present_frame(*to_present);
+                rendered = present_guest_frame(backend, *to_present, error);
+                present_time = std::chrono::duration_cast<std::chrono::microseconds>(
+                    gungnir::ge::FrameQueue::Clock::now() - present_started);
+                present_total += present_time;
+                ++present_count;
+                if (rendered) {
+                    g_held_image.last_presented = *to_present;
+                    g_held_image.has_last = true;
+                    g_held_image.consecutive_holds = 0u;
+                }
+            }
         }
         if (!rendered) {
             GUNGNIR_LOGE("render_failed: %s\n", error.c_str());
@@ -1427,21 +1740,25 @@ int main(int, char **) {
             continue;
         }
         render_failures = 0;
-        if (have_guest_frame && !guest_draws.empty()) {
+        // Read the frame the interpolation state stored: `guest_draws` was moved
+        // into it above, so testing or counting it here made this whole block
+        // dead and the guest-frame counters silently never advanced.
+        if (have_guest_frame && !g_interpolation.current.empty()) {
+            const std::vector<gungnir::ge::Draw> &frame_draws = g_interpolation.current;
             ++guest_frames;
             std::size_t vertices = 0u;
-            for (const gungnir::ge::Draw &draw : guest_draws) vertices += draw.vertices.size();
+            for (const gungnir::ge::Draw &draw : frame_draws) vertices += draw.vertices.size();
             if (guest_frames == 1u || guest_frames % 60u == 0u)
                 GUNGNIR_LOGI("guest_frame=%llu draws=%zu vertices=%zu ge_gaps=%llu\n",
-                             static_cast<unsigned long long>(guest_frames), guest_draws.size(), vertices,
+                             static_cast<unsigned long long>(guest_frames), frame_draws.size(), vertices,
                              static_cast<unsigned long long>(gungnir::hle::ge_gap_count()));
             if (guest_frames == 1u || guest_frames == 60u) {
                 const auto &display = gungnir::hle::display_state();
                 GUNGNIR_LOGI("guest_display=%ux%u fb=%08X width=%u format=%u\n", display.width,
                              display.height, display.framebuffer, display.buffer_width, display.pixel_format);
-                const std::size_t shown = std::min<std::size_t>(guest_draws.size(), 12u);
+                const std::size_t shown = std::min<std::size_t>(frame_draws.size(), 12u);
                 for (std::size_t i = 0; i < shown; ++i) {
-                    const gungnir::ge::Draw &draw = guest_draws[i];
+                    const gungnir::ge::Draw &draw = frame_draws[i];
                     const gungnir::ge::ScreenVertex *v =
                         draw.vertices.empty() ? nullptr : &draw.vertices.front();
                     GUNGNIR_LOGI("guest_draw=%zu verts=%zu indices=%zu scissor=%d,%d-%d,%d texture=%dx%d "
@@ -1482,11 +1799,58 @@ int main(int, char **) {
                          static_cast<long long>(g_due_delta_min_us.load()),
                          static_cast<long long>(g_due_delta_max_us.load()),
                          static_cast<long long>(frame_queue.last_late_us()));
-            GUNGNIR_LOGI("interpolation active=%d interpolated=%llu held=%llu skipped_ticks=%llu\n",
+            GUNGNIR_LOGI("interpolation active=%d interpolated=%llu held=%llu skipped_ticks=%llu static_frames=%llu presents_skipped=%llu\n",
                          g_interpolation_enabled.load() ? 1 : 0,
                          static_cast<unsigned long long>(schedule.interpolated()),
                          static_cast<unsigned long long>(schedule.held()),
-                         static_cast<unsigned long long>(schedule.skipped()));
+                         static_cast<unsigned long long>(schedule.skipped()),
+                         static_cast<unsigned long long>(g_interpolation.static_frames),
+                         static_cast<unsigned long long>(g_held_image.presents_skipped));
+            if (g_interpolation.stat_passes != 0u) {
+                // Averages over the passes in this tick. reassigned is how many
+                // partners came from position rather than arrival order -- the
+                // draws arrival-order matching would have blended toward the
+                // wrong object; oversize is the bucket scan limit firing.
+                const auto passes = static_cast<unsigned long long>(g_interpolation.stat_passes);
+                const auto &total = g_interpolation.stat_total;
+                GUNGNIR_LOGI("interpolation_pairs passes=%llu candidates=%llu matched=%llu "
+                             "cut=%llu unmatched=%llu reassigned=%llu displaced=%llu motion=%.1f "
+                             "oversize=%llu oversize_draws=%llu translated=%llu largest_bucket=%llu\n",
+                             passes,
+                             static_cast<unsigned long long>(total.candidates) / passes,
+                             static_cast<unsigned long long>(total.matched) / passes,
+                             static_cast<unsigned long long>(total.cut) / passes,
+                             static_cast<unsigned long long>(total.unmatched) / passes,
+                             static_cast<unsigned long long>(total.reassigned) / passes,
+                             static_cast<unsigned long long>(total.displaced) / passes,
+                             static_cast<double>(total.frame_motion) / static_cast<double>(passes),
+                             static_cast<unsigned long long>(total.oversize) / passes,
+                             static_cast<unsigned long long>(total.oversize_draws) / passes,
+                             static_cast<unsigned long long>(total.translated) / passes,
+                             static_cast<unsigned long long>(total.largest_bucket));
+                g_interpolation.stat_passes = 0u;
+                g_interpolation.stat_total = {};
+            }
+            if (g_coverage_enabled && g_coverage.has_value && g_coverage.samples != 0u) {
+                const auto samples = static_cast<unsigned long long>(g_coverage.samples);
+                GUNGNIR_LOGI("widescreen coverage=%llu%% backdrop_only_columns=%llu hook=%s "
+                             "samples=%llu scale=%.4f columns=%d\n",
+                             static_cast<unsigned long long>(g_coverage.percent_sum / samples),
+                             static_cast<unsigned long long>(g_coverage.backdrop_sum / samples),
+                             "absent", samples, g_widescreen_scale,
+                             g_coverage.last.total_columns);
+                g_coverage.samples = 0u;
+                g_coverage.percent_sum = 0u;
+                g_coverage.backdrop_sum = 0u;
+            }
+            GUNGNIR_LOGI("timeline presents=%llu regressions=%llu frames=%llu per_frame=%llu..%llu "
+                         "last_content=%.2f\n",
+                         static_cast<unsigned long long>(g_interpolation.timeline_presents),
+                         static_cast<unsigned long long>(g_interpolation.timeline_regressions),
+                         static_cast<unsigned long long>(g_interpolation.frames_shown),
+                         static_cast<unsigned long long>(g_interpolation.presents_min),
+                         static_cast<unsigned long long>(g_interpolation.presents_max),
+                         g_interpolation.last_content);
             GUNGNIR_LOGI("presents published=%llu presented=%llu dropped=%llu late=%llu\n",
                          static_cast<unsigned long long>(frame_queue.published()),
                          static_cast<unsigned long long>(frame_queue.presented()),
@@ -1500,7 +1864,7 @@ int main(int, char **) {
         if (debug_quad)
             SDL_Delay(16);
         else
-            sleep_for_next_frame(frame_queue);
+            sleep_for_next_frame(frame_queue, frame_queue.pending_deadline());
     }
 
     SDL_RemoveEventWatch(lifecycle_watch, &lifecycle);

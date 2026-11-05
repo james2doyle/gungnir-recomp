@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -117,6 +118,41 @@ void pending_deadline_tracks_the_publish() {
 
 } // namespace
 
+// PPSSPP's WaitUntil()/DoFrameIdleTiming() waits to the ACTUAL next deadline
+// instead of spinning at a fixed short slice. Our loop clamped every idle wait
+// to 8 ms, so a 16 ms tick woke the loop twice. idle_wait_slice computes the
+// precise wait, bounded by a named responsiveness ceiling (T: battery drain).
+void idle_wait_uses_the_real_deadline() {
+    const auto ceiling = std::chrono::milliseconds(16);
+    const auto now = at_ms(100);
+    check(gungnir::ge::idle_wait_slice(now, at_ms(116), ceiling) ==
+              std::chrono::milliseconds(16),
+        "a deadline exactly one ceiling away waits the full ceiling");
+    check(gungnir::ge::idle_wait_slice(now, at_ms(110), ceiling) ==
+              std::chrono::milliseconds(10),
+        "a nearer deadline waits exactly that long");
+    check(gungnir::ge::idle_wait_slice(now, at_ms(103), ceiling) ==
+              std::chrono::milliseconds(3),
+        "a deadline 3 ms away waits 3 ms, not a fixed 8 ms slice");
+}
+
+void idle_wait_never_exceeds_the_responsiveness_ceiling() {
+    const auto ceiling = std::chrono::milliseconds(16);
+    const auto now = at_ms(100);
+    check(gungnir::ge::idle_wait_slice(now, at_ms(500), ceiling) == ceiling,
+        "a far deadline is capped by the responsiveness ceiling");
+    check(gungnir::ge::idle_wait_slice(now, std::nullopt, ceiling) == ceiling,
+        "with no deadline at all the wait is the ceiling");
+}
+
+void idle_wait_never_goes_negative_on_an_overdue_deadline() {
+    const auto ceiling = std::chrono::milliseconds(16);
+    const auto now = at_ms(100);
+    check(gungnir::ge::idle_wait_slice(now, at_ms(80), ceiling) ==
+              Clock::duration::zero(),
+        "a deadline already past yields no wait");
+}
+
 int main() {
     try {
         one_present_per_produced_frame_in_order();
@@ -125,6 +161,9 @@ int main() {
         waiting_returns_as_soon_as_a_frame_is_due();
         waiting_without_a_frame_is_bounded();
         pending_deadline_tracks_the_publish();
+        idle_wait_uses_the_real_deadline();
+        idle_wait_never_exceeds_the_responsiveness_ceiling();
+        idle_wait_never_goes_negative_on_an_overdue_deadline();
         std::cout << "frame_pacing_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

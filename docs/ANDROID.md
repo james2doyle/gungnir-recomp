@@ -125,6 +125,26 @@ adb shell am start -n com.gungnir.recomp/.GungnirActivity \
 | `debug_quad` | false | draw the synthetic test quad instead of the guest |
 | `audio_smoke` | false | run the AAudio/SAS smoke instead of a game session |
 | `audio_smoke_ms` | 500 | smoke duration |
+| `dump_draws` | (none) | bounded guest-frame dump path; off unless named |
+| `dump_presents` | (none) | bounded **presented**-frame dump path; off unless named |
+| `dump_after_ms` | 0 | delay before either dump starts writing |
+| `dump_frames` | 8 (max 32) | frame bound for either dump |
+| `coverage` | 0 (off) | opt-in widescreen coverage measurement on every present; `--el coverage 1` enables it |
+
+`coverage` is QA instrumentation, not a render requirement: it scans every draw
+and fills a column bitmap on each present. It is off by default because running
+it continuously in the production render loop is an avoidable load. Enable it
+with `--el coverage 1` for a bounded coverage check; the periodic
+`widescreen coverage=...` line appears only while it is enabled.
+
+`dump_draws` writes the guest's own GE frames; `dump_presents` writes the
+frames the presenter actually shows, including interpolated in-betweens. Both
+share one verbatim format (draw key, through flag, vertex x/y/z and texture
+coordinates), so an artifact that exists only between two guest frames can be
+inspected offline instead of inferred from a video. Both are host-side, bounded
+and opt-in: nothing is written unless the path extra is named, and neither
+affects what is presented. The dumps live under the app's own files dir and are
+never committed.
 
 The bounded run logs, in order:
 
@@ -158,6 +178,37 @@ both a handler blocked in a host wait and a guest loop that keeps dispatching
 while polling a flag (the dispatch and wall-clock bounds never see either).
 `inflight` names the handler running at that moment, `last_import` the most
 recently completed one — a watch loop names itself there between calls.
+
+## Per-title host patches (profile)
+
+Per-title host patches are explicit, named, opt-in values the renderer/HLE may
+use for a specific title (camera hook sites, transform inputs). They are **host
+state**: never guest state, never part of snapshot identity, never written into
+a snapshot. A profile change does not invalidate or alter an existing snapshot.
+
+Values live in the gitignored, app-private path
+`getFilesDir()/profiles/gungnir/local/host_patches.toml` — this is the same
+policy as the dump-specific pins under `profiles/gungnir/local/`. No game data,
+dump hashes or addresses are ever tracked. The file is optional: an absent
+profile changes nothing and logs `profile absent` at boot.
+
+The format is one `key = value` per line, `#` comments and blank lines allowed.
+Every recognised key has a fixed type; adding one is a reviewed change to
+`runtime/host/profile.cpp`. Recognised keys today:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `cam_projection` | u32 (dec or `0x` hex) | guest address of the projection-matrix builder |
+| `cam_setup` | u32 (dec or `0x` hex) | guest address of the camera setup routine |
+| `widescreen_fov_scale` | float | widescreen FOV scale for the camera hook |
+
+Unvalidated values are **refused, never best-efforted**: an unknown key
+(`profile_invalid: unknown profile key '…'`), a malformed value, a type
+mismatch (e.g. a float in an address slot), a duplicate key, or an empty value
+produce a named `profile_invalid` error and **no entry is applied**. Nothing is
+silently defaulted into existence. Every applied entry is logged at boot as
+`profile key=value` followed by `profile applied=<n>`, so a device boot shows
+exactly which host patches are active.
 
 ## Game data
 
@@ -277,7 +328,9 @@ is logged as `surface_recreate_failed` and retried after 500 ms.
 
 ## Frame interpolation
 
-The Settings overlay offers `Frame interpolation: On/Off` (off by default,
+The Settings overlay offers `Experimental frame interpolation: On/Off` (off by
+default, labelled experimental while the shape and depth rules are still under
+device review,
 persisted in the `gungnir` preferences and pushed to native through
 `HostBridge.setFrameInterpolation`). A `frame_interpolation=1` intent extra
 selects it for a bounded QA run without touching the UI.

@@ -1,14 +1,21 @@
 #include "ge/present_schedule.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace gungnir::ge {
+
+double cap_refresh_hz(double hz) noexcept {
+    if (!std::isfinite(hz) || hz <= 0.0) return kMaxPresentHz;
+    return std::min(hz, kMaxPresentHz);
+}
 
 void PresentSchedule::set_refresh_interval(Clock::duration interval) noexcept {
     refresh_ = interval > Clock::duration::zero() ? interval : std::chrono::microseconds(1);
 }
 
-bool PresentSchedule::on_guest_frame(Clock::time_point now, bool has_previous) noexcept {
+bool PresentSchedule::on_guest_frame(Clock::time_point now, bool has_previous,
+    bool static_scene) noexcept {
     if (!enabled_) {
         // Nothing to interpolate from: the frame goes out as it is.
         active_ = false;
@@ -17,6 +24,17 @@ bool PresentSchedule::on_guest_frame(Clock::time_point now, bool has_previous) n
     if (!has_previous) {
         // Nothing to interpolate from, but this arrival still dates the
         // interval the next window will use.
+        window_start_ = now;
+        has_window_ = true;
+        active_ = false;
+        return true;
+    }
+    if (static_scene) {
+        // A frame identical to its predecessor has no motion to blend. Show the
+        // real frame once and close any window: no in-between presents, no
+        // interpolate_frame passes, no driving the 120 Hz display for a still
+        // picture. The window_start_ still dates the next interval so a later
+        // moving frame opens a correctly-sized window.
         window_start_ = now;
         has_window_ = true;
         active_ = false;

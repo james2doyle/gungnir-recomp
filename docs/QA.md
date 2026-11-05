@@ -37,14 +37,23 @@ recorded. PPSSPP is an oracle only.
    growth (mixer `underrun` and `muted` grow, which is the expected mute
    shape), and a latched state survives background/foreground. A held R2 must
    not survive the pause.
-10. Frame interpolation: settings row off then on at a battle scene. Off
+10. Experimental frame interpolation: settings row off then on at a battle scene. Off
     presents at the guest rate with `interpolated=0`; on shows in-betweens
     (`interpolated` climbing), the real frames still look correct with no
     smearing, `overruns` and `xruns` stay flat, and the presented rate rises.
     `skipped_ticks` records the refreshes the presenter could not hold.
-11. Soak: 30 minutes of attended play on at least one physical device;
+11. Widescreen coverage: at a battle scene with `widescreen adaptive` active,
+    read the periodic `widescreen coverage=NN% backdrop_only_columns=N
+    hook=absent` line from logcat and record it in the session report. Confirm
+    the number is stable across a 5 s tick and matches the screenshots (side
+    columns show only the stretched backdrop), and that `present_time avg_us`
+    is unchanged within noise — the measure is bounds-only and must not add a
+    render pass. Record the same line **before** a per-title camera hook lands
+    and **after**, so the hook's effect on guest-submitted geometry is
+    measured rather than described. `hook=absent` is the honest current state.
+12. Soak: 30 minutes of attended play on at least one physical device;
    record crash/thermal/audio counters, not frames.
-11. Findings: fix red-first where host-testable (reproducing test before
+13. Findings: fix red-first where host-testable (reproducing test before
     the fix); file device-only defects as tracked dex tasks and link them
     from the session report.
 

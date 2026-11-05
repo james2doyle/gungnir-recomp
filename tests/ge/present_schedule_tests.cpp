@@ -10,6 +10,7 @@
 #include "ge/present_schedule.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -114,6 +115,69 @@ void a_guest_frame_cuts_the_window_short() {
         "the new window is as long as the interval it came from");
 }
 
+// A scene that did not move between two guest frames has nothing to
+// interpolate. Generating in-between presents for it only burns CPU/GPU, so the
+// real frame is shown once and no display window opens (T: power drain).
+void a_static_scene_presents_only_the_real_frame() {
+    PresentSchedule s = schedule();
+    (void)s.on_guest_frame(at_ms(0), false);
+    check(s.on_guest_frame(at_ms(50), true, true),
+        "a static frame is presented immediately, not interpolated");
+    check(!s.active(), "a static frame opens no in-between window");
+    check(s.due(at_ms(60)).kind == Kind::None, "a static frame yields no interpolated present");
+    check(s.due(at_ms(70)).kind == Kind::None, "and none later in the window either");
+    check(s.interpolated() == 0u, "no in-betweens were counted for a static scene");
+}
+
+// PPSSPP's FramerateTarget() clamps the pacing target to 60 Hz on high-refresh
+// displays rather than chasing them. A 120 Hz phone must not drive 120 presents
+// per second of recomputed in-betweens; that is the remaining battery load on a
+// moving scene. The cap is a pure, named host policy (T: battery drain).
+void high_refresh_rates_are_capped() {
+    check(std::fabs(gungnir::ge::cap_refresh_hz(120.0) - 60.0) < 1e-6,
+        "a 120 Hz display is capped to 60 Hz");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(144.0) - 60.0) < 1e-6,
+        "a 144 Hz display is capped to 60 Hz");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(90.0) - 60.0) < 1e-6,
+        "a 90 Hz display is capped to 60 Hz");
+}
+
+void ordinary_and_low_refresh_rates_are_unchanged() {
+    check(std::fabs(gungnir::ge::cap_refresh_hz(60.0) - 60.0) < 1e-6,
+        "a 60 Hz display stays at 60 Hz");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(30.0) - 30.0) < 1e-6,
+        "a 30 Hz display is not sped up");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(59.94) - 59.94) < 1e-6,
+        "a 59.94 Hz display is preserved");
+}
+
+void invalid_refresh_rates_fall_back_to_the_cap() {
+    check(std::fabs(gungnir::ge::cap_refresh_hz(0.0) - 60.0) < 1e-6,
+        "a zero refresh falls back to 60 Hz");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(-1.0) - 60.0) < 1e-6,
+        "a negative refresh falls back to 60 Hz");
+    check(std::fabs(gungnir::ge::cap_refresh_hz(std::nan("")) - 60.0) < 1e-6,
+        "a NaN refresh falls back to 60 Hz");
+}
+
+void the_cap_interval_is_never_shorter_than_a_sixtieth() {
+    const auto interval = std::chrono::duration<double>(1.0 / gungnir::ge::cap_refresh_hz(120.0));
+    check(interval >= std::chrono::duration<double>(1.0 / 60.0),
+        "the tick interval is never shorter than 1/60 s");
+}
+
+// Motion returns the next frame to the normal interpolation path: the caller
+// must be able to re-enable presents without resetting the schedule.
+void a_moving_frame_after_a_static_one_still_interpolates() {
+    PresentSchedule s = schedule();
+    (void)s.on_guest_frame(at_ms(0), false);
+    (void)s.on_guest_frame(at_ms(50), true, true);
+    check(!s.on_guest_frame(at_ms(100), true, false),
+        "a moving frame opens a window again");
+    check(s.active(), "the window is live after a static frame");
+    check(s.due(at_ms(110)).kind == Kind::Interpolated, "and produces an in-between");
+}
+
 } // namespace
 
 int main() {
@@ -125,6 +189,12 @@ int main() {
         the_window_ends_with_the_real_frame();
         a_skipped_tick_never_bursts();
         a_guest_frame_cuts_the_window_short();
+        a_static_scene_presents_only_the_real_frame();
+        a_moving_frame_after_a_static_one_still_interpolates();
+        high_refresh_rates_are_capped();
+        ordinary_and_low_refresh_rates_are_unchanged();
+        invalid_refresh_rates_fall_back_to_the_cap();
+        the_cap_interval_is_never_shorter_than_a_sixtieth();
         std::cout << "present_schedule_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

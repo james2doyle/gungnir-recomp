@@ -63,4 +63,13 @@ private:
     std::int64_t last_late_us_{};
 };
 
+// Host idle-wait policy (behavioural reference: PPSSPP's WaitUntil()). How long
+// the main loop may sleep before its next deadline: exactly the time to that
+// deadline, but never more than `ceiling`, so SDL_PollEvent keeps touch and the
+// overlay responsive when no input event can wake the wait. A missing or
+// already-past deadline yields `ceiling` or zero respectively.
+[[nodiscard]] FrameQueue::Clock::duration idle_wait_slice(FrameQueue::Clock::time_point now,
+    std::optional<FrameQueue::Clock::time_point> deadline,
+    FrameQueue::Clock::duration ceiling) noexcept;
+
 } // namespace gungnir::ge

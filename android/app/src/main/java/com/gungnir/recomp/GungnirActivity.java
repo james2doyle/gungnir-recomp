@@ -143,7 +143,8 @@ public final class GungnirActivity extends SDLActivity {
                 HostBridge.nativeSetFrameInterpolation(frameInterpolation);
                 settingsOverlay.setFrameInterpolation(frameInterpolation);
                 Toast.makeText(GungnirActivity.this, frameInterpolation
-                        ? "Frame interpolation on" : "Frame interpolation off",
+                        ? "Experimental frame interpolation on"
+                        : "Experimental frame interpolation off",
                         Toast.LENGTH_SHORT).show();
             }
 

@@ -86,6 +86,86 @@ bool trace_media() {
     return enabled;
 }
 
+// c64gg6n7 camera-path trace. The guest uploads its projection matrix as GE
+// display-list commands 0x3E (matrix index) and 0x3F (matrix upload). Log each
+// one with the enqueued list PC, the command's own PC and the raw word, so a
+// bounded run shows which list carries the matrix and what f24 values it uses.
+// Opt-in and bounded: an absent env var changes nothing, and the default line
+// cap prevents a long run from producing an unbounded log.
+bool trace_camera() {
+    static const bool enabled = std::getenv("GUNGNIR_TRACE_CAMERA") != nullptr;
+    return enabled;
+}
+
+std::uint64_t camera_trace_limit() {
+    static const std::uint64_t limit = [] {
+        const char *value = std::getenv("GUNGNIR_TRACE_CAMERA_LIMIT");
+        if (value == nullptr) return std::uint64_t{4096};
+        char *end = nullptr;
+        const unsigned long long parsed = std::strtoull(value, &end, 10);
+        return (end != value && parsed > 0) ? static_cast<std::uint64_t>(parsed)
+                                            : std::uint64_t{4096};
+    }();
+    return limit;
+}
+
+// Vertex-source trace (per-draw identity hunt). GE transform matrices are
+// constant in this title, so a stable object identity must come from the CPU-
+// side vertex buffers the guest writes. Log each resolved vertex/index address
+// plus the raw argument, opt-in and bounded, so a bounded run shows whether the
+// same object keeps the same source address across frames.
+bool trace_vertex_source() {
+    static const bool enabled = std::getenv("GUNGNIR_TRACE_VERTEX_SOURCE") != nullptr;
+    return enabled;
+}
+
+std::uint64_t vertex_source_limit() {
+    static const std::uint64_t limit = [] {
+        const char *value = std::getenv("GUNGNIR_TRACE_VERTEX_SOURCE_LIMIT");
+        if (value == nullptr) return std::uint64_t{4096};
+        char *end = nullptr;
+        const unsigned long long parsed = std::strtoull(value, &end, 10);
+        return (end != value && parsed > 0) ? static_cast<std::uint64_t>(parsed)
+                                            : std::uint64_t{4096};
+    }();
+    return limit;
+}
+
+void trace_vertex_source_command(const GeList &list, const gungnir::ge::Command &command) {
+    static std::uint64_t lines = 0;
+    if (!trace_vertex_source() || lines >= vertex_source_limit()) return;
+    const bool address = command.kind == gungnir::ge::CommandKind::VertexAddress ||
+                         command.kind == gungnir::ge::CommandKind::IndexAddress;
+    const bool primitive = command.kind == gungnir::ge::CommandKind::Primitive;
+    if (!address && !primitive) return;
+    ++lines;
+    std::cerr << "[vertex_source] list=" << psprecomp::hex32(list.pc)
+              << " command_pc=" << psprecomp::hex32(command.pc)
+              << " opcode=" << psprecomp::hex32(command.opcode)
+              << " argument=" << psprecomp::hex32(command.argument)
+              << " address=" << psprecomp::hex32(command.address)
+              << " count=" << command.count << "\n";
+}
+
+void trace_camera_command(const GeList &list, const gungnir::ge::Command &command) {
+    static std::uint64_t lines = 0;
+    if (!trace_camera() || lines >= camera_trace_limit()) return;
+    // Projection (0x3E/0x3F), world (0x3A/0x3B), view (0x3C/0x3D) and bone
+    // (0x2A/0x2B) matrix commands. The per-draw transform stream is what a
+    // matrix-based interpolator needs; the camera trace now records all of it.
+    const bool projection = command.opcode == 0x3Eu || command.opcode == 0x3Fu;
+    const bool transform = command.opcode == 0x3Au || command.opcode == 0x3Bu ||
+                           command.opcode == 0x3Cu || command.opcode == 0x3Du ||
+                           command.opcode == 0x2Au || command.opcode == 0x2Bu;
+    if (!projection && !transform) return;
+    ++lines;
+    std::cerr << (transform ? "[camera_transform] " : "[camera_projection] ")
+              << "list=" << psprecomp::hex32(list.pc)
+              << " command_pc=" << psprecomp::hex32(command.pc)
+              << " opcode=" << psprecomp::hex32(command.opcode)
+              << " word=" << psprecomp::hex32(command.word) << "\n";
+}
+
 void deliver_ge_callbacks(GeList &list) {
     if (list.callbacks_delivered) return;
     list.callbacks_delivered = true;
@@ -110,6 +190,8 @@ void make_ge_runner(Runtime &rt, GeList &list) {
     config.max_commands = 1'000'000u;
     config.on_command = [&list, &rt](const gungnir::ge::Command &command) {
         ++list.commands;
+        trace_camera_command(list, command);
+        trace_vertex_source_command(list, command);
         if (command.kind == gungnir::ge::CommandKind::Primitive) ++list.draws;
         if (command.kind == gungnir::ge::CommandKind::Signal) {
             list.signal = command.argument;

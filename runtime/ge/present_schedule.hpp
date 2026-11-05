@@ -16,6 +16,16 @@
 
 namespace gungnir::ge {
 
+// Host pacing policy (behavioural reference: PPSSPP's FramerateTarget()): on a
+// high-refresh display (90/120/144 Hz) the interpolation schedule must NOT
+// chase the host refresh rate, or a 20 Hz game is presented up to 120 times a
+// second with full per-present vertex work. Cap the effective refresh at 60 Hz;
+// lower rates are preserved, and invalid rates fall back to the cap. This is
+// host presentation policy only: it never enters guest RAM, a snapshot or a
+// save.
+inline constexpr double kMaxPresentHz = 60.0;
+[[nodiscard]] double cap_refresh_hz(double hz) noexcept;
+
 class PresentSchedule {
 public:
     using Clock = std::chrono::steady_clock;
@@ -26,10 +36,14 @@ public:
     [[nodiscard]] Clock::duration refresh_interval() const noexcept { return refresh_; }
 
     // A guest frame arrived at `now`. Returns true when it must be presented
-    // immediately: interpolation is off, or there is no previous frame to
-    // interpolate from. Otherwise a display window starts and `due` presents
-    // the in-betweens.
-    bool on_guest_frame(Clock::time_point now, bool has_previous) noexcept;
+    // immediately: interpolation is off, there is no previous frame to
+    // interpolate from, or the scene is static (nothing to interpolate, so no
+    // in-between window is opened and the display is not driven at its refresh
+    // rate for an unchanged picture). Otherwise a display window starts and
+    // `due` presents the in-betweens. `static_scene` is a host power policy
+    // decided from the draw stream; the schedule owns only the timing.
+    bool on_guest_frame(Clock::time_point now, bool has_previous,
+        bool static_scene = false) noexcept;
 
     enum class Kind {
         None,
