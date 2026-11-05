@@ -12,7 +12,7 @@ ADB_ARGS=()
 if [ -n "${ADB_SERIAL:-}" ]; then
     ADB_ARGS+=(-s "$ADB_SERIAL")
 fi
-SNAPSHOT_HOST=${SNAPSHOT_HOST:-/tmp/opencode/snap/battle/battleP1.gsnap}
+SNAPSHOT_HOST=${SNAPSHOT_HOST:-${TMPDIR:-/tmp}/gungnir-temp/snap/battle/battleP1.gsnap}
 SNAPSHOT_DEV=/sdcard/Android/data/com.gungnir.recomp/files/snapshots/snapshot.gsnap
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="$ROOT/build/qa/android/t15e-snapshot-$STAMP"

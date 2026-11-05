@@ -59,7 +59,7 @@ ADB_SERIAL=<serial> scripts/android/qa-startup.sh # 10 cold boots, fails on any 
 
 `deploy.sh` chains install, launch, and verification: it fails loudly unless
 guest frames are flowing and leaves a proof screenshot (default under
-`/tmp/opencode/scene/`, override with a second argument). Installs never
+`${TMPDIR:-/tmp}/gungnir-temp/scene/`, override with a second argument). Installs never
 auto-start the app, so a bare `install.sh` always needs a `run.sh` after it;
 `deploy.sh` makes that ordering structural instead of relying on memory.
 

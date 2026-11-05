@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 APK=${1:-"$ROOT/android/app/build/outputs/apk/debug/app-debug.apk"}
-SHOT=${2:-"/tmp/opencode/scene/deploy-$(date +%Y%m%d-%H%M%S).png"}
+SHOT=${2:-"${TMPDIR:-/tmp}/gungnir-temp/scene/deploy-$(date +%Y%m%d-%H%M%S).png"}
 ADB=${ADB:-adb}
 ADB_ARGS=()
 if [ -n "${ADB_SERIAL:-}" ]; then

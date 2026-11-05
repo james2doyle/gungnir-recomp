@@ -27,7 +27,7 @@ never silent success. Game frames and logs land under gitignored paths only.
 - `deploy.sh [APK] [SHOT]`: install + launch + proof. Expects a fresh APK
   (run `build.sh` first after native changes; `deploy.sh` never builds).
   Chains `install.sh` + `run.sh`, waits for flowing `guest_frame` lines, writes a proof screenshot
-  (default `/tmp/opencode/scene/deploy-<stamp>.png`). Prints `DEPLOY_OK
+  (default `${TMPDIR:-/tmp}/gungnir-temp/scene/deploy-<stamp>.png`). Prints `DEPLOY_OK
   pid=… shot=…`; `deploy_failed` means the app is not executing.
   `SNAPSHOT_IN=<device path>` loads a pushed snapshot via the
   automation-only `snapshot_in` intent extra before the session starts
