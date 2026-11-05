@@ -41,6 +41,8 @@ jobs:
           accept-android-sdk-licenses: true
       - name: Dependency ledger
         run: python3 tools/deps.py verify
+      - name: Shader compiler (glslc)
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools
       - name: Repository check
         run: python3 tools/repository_check.py
       - name: APK (empty corpus, no game data)
