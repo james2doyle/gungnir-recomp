@@ -25,6 +25,10 @@ Linux x86_64 is the supported host. A C++20 toolchain, CMake, Ninja, Python
 and the Android SDK/NDK are required:
 
 - Git, Python 3.11+, CMake 3.22+, Ninja, pkg-config, `glslc` (Vulkan shaders).
+- A C++20 compiler (GCC 13+ or Clang 17+). The host build links zlib: most
+  distros provide it as `zlib1g-dev` (apt) or `zlib-devel`/`zlib-ng-compat`
+  (pacman/dnf). Without system zlib, point CMake at a local build with
+  `ZLIB_ROOT=<prefix>` (honored from the environment by `FindZLIB`).
 - A C++20 compiler (GCC 13+ or Clang 17+).
 - JDK 17–23 for Gradle 8.11.1.
 - Android SDK: platform 36, build-tools 36.0.0, NDK 28.2.13676358, CMake

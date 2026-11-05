@@ -82,7 +82,7 @@ supply a field says `unknown`.
 | physical Adreno 30-minute soak | 2026-11-05-m2102k1ac-soak.md | SIGNED |
 | physical Adreno save/load | 2026-11-05-m2102k1ac-saveload-audio.md | SIGNED |
 | physical Adreno audio smoke | 2026-11-05-m2102k1ac-saveload-audio.md | SIGNED |
-| from-scratch pipeline + title/menu (TC-14.1) | 2026-11-05-m2102k1ac-tc14.1.md | SIGNED (scoped: intake re-run excluded, gap G1 in report) |
+| from-scratch pipeline + title/menu (TC-14.1) | 2026-11-05-m2102k1ac-tc14.1.md | SIGNED |
 | non-Adreno/handheld (optional, if available) | TBD | PENDING |
 
 Note 2026-11-03 (fast-forward cell): signed for touch, pacing, audio,
