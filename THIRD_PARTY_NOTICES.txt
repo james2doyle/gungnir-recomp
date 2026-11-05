@@ -62,7 +62,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Component: atrac3p-ffmpeg-n44
 Upstream: https://github.com/Jstar269/nakagawa-recomp
 Commit pinned: 1117d635d0145bbd7b345a28dad79a3d8e184420
-License: LGPL-2.1
+License: LGPL-2.1-or-later
 Vendored at: third_party/atrac3p
 Provenance: third_party/atrac3p/PROVENANCE.md
 ------------------------------------------------------------------------

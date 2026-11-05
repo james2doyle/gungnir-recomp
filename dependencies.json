@@ -30,7 +30,7 @@
       "type": "vendored",
       "upstream": "https://github.com/Jstar269/nakagawa-recomp",
       "commit": "1117d635d0145bbd7b345a28dad79a3d8e184420",
-      "license": "LGPL-2.1",
+      "license": "LGPL-2.1-or-later",
       "license_file": "third_party/atrac3p/LICENSE.LGPLv2.1.txt",
       "path": "third_party/atrac3p",
       "digest": "6f6f21fc1e43ec3f5eded57b42b915403b37d6fd1df862ba1c9a4e18e4cd6379",

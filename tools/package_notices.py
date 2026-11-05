@@ -27,7 +27,8 @@ APPROVED = {
     "MIT", "ISC", "Zlib", "Unlicense", "CC0-1.0",
     "BSD-1-Clause", "BSD-2-Clause", "BSD-3-Clause",
     "Apache-2.0", "Apache-1.1",
-    "LGPL-2.0", "LGPL-2.1", "LGPL-3.0",
+    "LGPL-2.0", "LGPL-2.0-or-later", "LGPL-2.1", "LGPL-2.1-or-later",
+    "LGPL-3.0", "LGPL-3.0-or-later",
     "GPL-2.0", "GPL-2.0-or-later", "GPL-3.0", "GPL-3.0-or-later", "GPL-1.0",
 }
 PROJECT_LICENSE = "GPL-3.0-or-later"

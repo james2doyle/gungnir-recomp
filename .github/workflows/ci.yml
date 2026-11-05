@@ -76,7 +76,9 @@ jobs:
           accept-android-sdk-licenses: true
       - name: Dependency ledger
         run: python3 tools/deps.py verify
-      - name: Shader compiler (glslc)
-        run: sudo apt-get update && sudo apt-get install -y glslang-tools
+      - name: Shader compiler (glslc from the pinned NDK)
+        run: |
+          echo "$ANDROID_HOME/ndk/28.2.13676358/shader-tools/linux-x86_64" >> "$GITHUB_PATH"
+          "$ANDROID_HOME/ndk/28.2.13676358/shader-tools/linux-x86_64/glslc" --version
       - name: APK (empty corpus, no game data)
         run: scripts/android/build.sh
