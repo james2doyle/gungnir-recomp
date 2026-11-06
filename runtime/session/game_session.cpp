@@ -3,6 +3,7 @@
 #include "hle/hle_media.hpp"
 
 #include "session/diagnostics.hpp"
+#include "session/import_stub.hpp"
 #include "session/snapshot.hpp"
 
 #include "hle/hle_atrac.hpp"
@@ -192,8 +193,11 @@ bool GameSession::start(const Config &config, gungnir::audio::AudioSink *sink, s
     impl_->load_error.clear();
 
     if (!generated_corpus_present()) {
-        error = "game_corpus_missing: rebuild with -Pgungnir.gameCorpus=DIR";
-        return false;
+        // Interpreter-only build (release APK): no per-game code is bundled,
+        // so the guest runs on the framework interpreter fallback instead of
+        // refusing. Loudly named, never silent; performance is measured on
+        // device, not assumed.
+        impl_->emit_diagnostic("interpreter_only_build: no generated corpus, guest runs on the interpreter fallback");
     }
     if (!std::filesystem::is_regular_file(config.elf_path)) {
         error = "session_elf_missing: " + config.elf_path.string();
@@ -220,6 +224,9 @@ bool GameSession::start(const Config &config, gungnir::audio::AudioSink *sink, s
 
         const Elf32Image elf = Elf32Image::from_file(config.elf_path);
         impl_->entry = elf.runtime_entry(config.load_base);
+        impl_->emit_diagnostic("session_entry elf=" + config.elf_path.string() +
+            " load_base=" + psprecomp::hex32(config.load_base) +
+            " entry=" + psprecomp::hex32(impl_->entry));
         (void)elf.load_and_relocate(impl_->runtime->memory(), config.load_base);
         const auto module = elf.find_module_info(impl_->runtime->memory(), config.load_base);
         if (!module) throw psprecomp::Error("PSP module info not found in " + config.elf_path.string());
@@ -259,6 +266,13 @@ bool GameSession::start(const Config &config, gungnir::audio::AudioSink *sink, s
             if (!impl_->hle->bound(import.library, import.nid))
                 impl_->unbound.push_back(import.library + ":" + psprecomp::hex32(import.nid));
         }
+
+        // Register an import-stub trampoline for every scanned import with
+        // no AOT thunk. AOT builds register all of them via
+        // register_generated_functions above, so this is a no-op there;
+        // corpus-absent (interpreter-only) builds register all of them, so
+        // the interpreter dispatches imports instead of executing stub code.
+        register_import_stub_trampolines(*impl_->runtime, imports);
 
         for (std::size_t i = 0; i < config.boot_path.size(); ++i)
             impl_->runtime->memory().store8(gungnir::hle::kBootArgumentAddress +

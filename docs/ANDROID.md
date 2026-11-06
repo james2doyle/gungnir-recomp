@@ -221,12 +221,18 @@ Two supported paths converge on `getExternalFilesDir()/game/`:
      /sdcard/Android/data/com.gungnir.recomp/files/game/game.iso
    ```
 
-2. **SAF picker**: when no valid ISO is found, the app overlays a
-   “Select Gungnir ISO” button. The picker copies the chosen file to
-   `.../files/game/imported.iso` and re-verifies it.
+2. **SAF picker**: when no valid ISO is found, the app auto-shows the
+   SAF file picker (Yakumo-style first run). The picker copies the chosen
+   file to `.../files/game/imported.iso`, the native side verifies it and
+   prepares `files/game/game.elf` on-device from the ISO's
+   `PSP_GAME/SYSDIR/EBOOT.BIN` (DISC_ID + `~PSP` tag check, AES-128-CBC
+   with the public PSP key tables), then starts the session. Picking the
+   ISO is enough to start the game; no separate `game.elf` push is needed.
+   A manually pushed `game.elf` (from the host intake) is still honoured
+   when present, and is skipped when the installer already prepared one.
 
-The bounded game session also needs the decrypted main module produced by the
-user's own intake run. Push it as `game.elf`:
+ADB parity (no picker): push the ISO and the app prepares `game.elf` on
+the next start. The old manual module push remains supported:
 
 ```sh
 adb push build/game/modules/SYSDIR__EBOOT.BIN.decrypted.elf \
@@ -368,8 +374,10 @@ closes only after manual QA on the physical arm64 phone (see `AGENTS.md` and
 | `game_data_unavailable: <reason>` | no/invalid ISO; reason is the identity error |
 | `affinity_unavailable`, `priority_unavailable` | tuning denied; boot continues |
 | `audio_output_unavailable` | AAudio could not open; the game session uses a named silent sink |
-| `game_corpus_missing` | APK built without `-Pgungnir.gameCorpus`; rebuild with the user's generated corpus |
-| `game_elf_missing` | `game.elf` is not in `files/game/`; push the user-generated decrypted module |
+| `game_corpus_missing` | user-supplied corpus dir malformed (missing registry); leftover from strict-corpus builds — current builds log `interpreter_only_build` and run the interpreter fallback |
+| `interpreter_only_build` | APK built without `-Pgungnir.gameCorpus`; guest runs on the interpreter fallback (release configuration), never refuses |
+| `game_elf_missing` | `game.elf` is not in `files/game/` and the installer could not prepare it from the ISO; see `installer_failed` |
+| `installer_failed: <reason>` | the on-device installer rejected the ISO (DISC_ID, tag or EBOOT header); the reason is player-actionable |
 | `game_elf_invalid_magic` | `game.elf` is not an ELF file; intake output was not copied |
 | `session_elf_missing`, `session_nids_missing` | the session inputs are absent |
 | `session_audio_sink_missing` | no host audio sink was installed; programming error |

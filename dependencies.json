@@ -117,6 +117,18 @@
       "path": "third_party/liblinkernsbypass",
       "provenance": "third_party/liblinkernsbypass/PROVENANCE.md",
       "note": "fetch-only transitive dependency of libadrenotools (git submodule at lib/linkernsbypass); never vendored or bundled"
+    },
+    {
+      "name": "tiny-aes-c",
+      "type": "vendored",
+      "upstream": "https://github.com/kokke/tiny-AES-c",
+      "commit": "23856752fbd139da0b8ca6e471a13d5bcc99a08d",
+      "license": "Unlicense",
+      "license_file": "third_party/tiny-aes-c/UNLICENSE",
+      "path": "third_party/tiny-aes-c",
+      "digest": "fb7a42adc0db1c06ad18adbda38ac52fd8202ede6e70dbbcb603f74a1ed3e3da",
+      "provenance": "third_party/tiny-aes-c/PROVENANCE.md",
+      "note": "AES-128-CBC for on-device ~PSP EBOOT preparation; vendored byte-identical"
     }
   ]
 }

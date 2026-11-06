@@ -47,6 +47,7 @@ class TestAndroidRuntimeWiring(unittest.TestCase):
         for source in (
             "runtime/session/game_session.cpp",
             "runtime/session/diagnostics.cpp",
+            "runtime/session/import_stub.cpp",
             "runtime/session/session_report.cpp",
             "runtime/session/snapshot.cpp",
             "runtime/hle/hle_common.cpp",
@@ -82,6 +83,16 @@ class TestAndroidRuntimeWiring(unittest.TestCase):
         for needle in ("session::GameSession", "session_stop", "memory_stick",
                        "nids.csv", "game.elf", "set_audio_sink"):
             self.assertIn(needle, text, f"Android entry point does not wire {needle}")
+
+    def test_corpus_absence_is_a_named_interpreter_mode(self):
+        # k9ll558m: a corpus-absent build must boot on the interpreter
+        # fallback, never refuse and never run silent. The session entry
+        # names the mode; the old game_corpus_missing refusal must be gone.
+        text = (REPO / "runtime" / "session" / "game_session.cpp").read_text()
+        self.assertIn("interpreter_only_build", text,
+                      "corpus-absent start must log its named mode")
+        self.assertNotIn("game_corpus_missing: rebuild with",
+                         text, "the corpus-absent refusal is retired")
 
     def test_run_script_waits_for_the_session_line(self):
         text = RUN_SH.read_text()

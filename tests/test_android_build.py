@@ -138,6 +138,8 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
                             root / "third_party" / "yakumo" / "include")
             shutil.copytree(REPO / "third_party" / "yakumo" / "src",
                             root / "third_party" / "yakumo" / "src")
+            shutil.copytree(REPO / "third_party" / "tiny-aes-c",
+                            root / "third_party" / "tiny-aes-c")
             (root / "third_party" / "volk").mkdir(parents=True)
             shutil.copy2(REPO / "third_party" / "volk" / "volk.c",
                          root / "third_party" / "volk" / "volk.c")

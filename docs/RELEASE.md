@@ -43,8 +43,10 @@ are repository-relative; no machine-local paths, no `local.properties`
 
 - [ ] Release notes point at `docs/BUILDING.md` §3 (disc intake) and §4
       (analysis/codegen) as the only supported corpus path.
-- [ ] Decryption stays out of process (`pspdecrypt` on `PATH` or
-      `--decrypt-tool`); the repo ships no decryption code or keys.
+- [ ] Host intake decryption stays out of process (`pspdecrypt` on `PATH`
+      or `--decrypt-tool`) for codegen; the runtime installer decrypts
+      on-device from the user's own ISO with the public PSP key tables
+      (see `docs/LEGAL.md`). No game-derived bytes are shipped either way.
 - [ ] Identity gate (recorded size/CRC32) refuses a wrong image with a
       named failure before anything else runs.
 - [ ] Game data travels via the documented push path only

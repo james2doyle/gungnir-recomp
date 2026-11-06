@@ -2249,3 +2249,58 @@ plus T14c sign-off.
 - HLE binds 7 sceCtrl entries (`hle_media.cpp`: SetSamplingCycle/Mode, SetIdleCancelThreshold, Read/PeekBufferPositive, Read/PeekLatch) — reads and latch only, no actuator path exists to wire.
 - Device evidence: 32-min session (battle + story) shows `missing_import=0`, `silent_nids=0` — the game never reaches for a rumble entry point.
 - M5 decision: no game/battle rumble to implement. Touch-control haptics already landed (T11c); gamepad rumble fires only if a title calls an actuator API, and this title has none. If a future title in this engine family shows otherwise, reopen with a red-first HLE contract.
+
+## 2026-11-06 — k9ll558m: interpreter-only build ran import stub code instead of dispatching imports
+
+**Symptom.** A corpus-absent (interpreter-only) build started the guest at
+`0x08972544` and stalled after 66 interpreted instructions
+(`dispatches=1 interp_entries=1`, worker thread parked, no frames). Host
+`boot_runner` in a corpus-absent build gave `stop_cause=scheduler_deadlock`,
+`stop_pc=0x08800008` — the guest had returned from module_start having done
+no work.
+
+**Falsification.** GDB trace of the first 51 guest PCs showed sequential
+execution from the entry through nested calls to `0x089a248c`,
+`0x089a2484`, `0x089a23b4`, `0x089a2354` (all import stubs), then
+continuation to `0x08972650` (`jr ra`) — the guest returned via the stub
+code itself, never via an import.
+
+**Root cause.** Import stubs are two words (`jr $ra` tail stubs by default;
+with inlined target stubs they are `lui/addiu $t1` + `jr $t1`). AOT builds
+register a generated thunk at every stub address, so a jal to a stub
+dispatches to HLE. Corpus-absent builds registered nothing, so the
+interpreter executed the stub code and returned silently — the same
+hidden-failure class as the T5 finding above.
+
+**Fix.** `runtime/session/import_stub.{hpp,cpp}`: at session start, every
+scanned import stub with no registered function gets a shared trampoline
+that dispatches by stub address into `invoke_import_cached` (slot = import
+index, same as generated thunks) and returns to `$ra`. AOT builds are
+unaffected (all stubs already registered; the guard skips them).
+`GameSession::start` calls it unconditionally after the import scan.
+
+**Regression.** `tests/session/import_stub_tests.cpp` + `tests/test_import_stub.py`:
+guest code calling a tail-stub import — red control (no trampoline: HLE
+never called, guest continues), green (trampoline: HLE called once, guest
+continues), pre-registered function survives registration. Mutation check:
+removing the `invoke_import_cached` line fails the green case for the right
+reason. Host corpus-absent e2e VERIFIED: `functions=219`, 205/215 imports
+bound, `module_init_complete=true`, `stop_cause=first_flip` (TEMP diagnostic
+build, reverted after the run).
+
+**State.** Host suite green (`ctest` 2/2), `repository_check` PASS. Device
+validation of the interpreter APK pending (no adb device attached).
+
+## 2026-11-06 — ISO-pick → start (Yakumo-style on-device installer)
+
+**Symptom.** After picking an ISO, the app showed "session failed to start"
+even though the ISO verified (`game_data_ok`). **Falsification.** Logcat showed
+`installer_prepared` followed by `session_start_failed: startup_not_ready` on
+the JNI late-import thread. **Root cause.** `SessionStartup` was a block-local
+inside `SDL_main`'s `else { }`; `g_startup_context` dangled after that block
+exited, so the seconds-later SAF pick read freed memory and every startup
+field check failed. **Fix.** Hoist `SessionStartup` to `SDL_main` lifetime.
+**Regression.** Manual QA: `docs/qa/2026-11-06-installer-flow.md` (SAF pick →
+`installer_prepared` → `session_start` → `guest_frame=480`, VERIFIED).
+Interpreter-only boot itself was VERIFIED by the import-stub fix (see 2026-11-06
+k9ll558m entry above).

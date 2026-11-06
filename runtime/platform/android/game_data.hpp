@@ -29,6 +29,17 @@ struct GameDataResult {
     bool ok{false};
 };
 
+// Post-import decision (yt4rpgt2): verifying the ISO is only half the job.
+// A verified import with a game ELF present means the session can start;
+// verified without one (empty release build) needs explicit guidance,
+// never silence; anything else is rejected.
+enum class ImportOutcome { Rejected, ReadyToPlay, VerifiedButNoGameCode };
+
+inline ImportOutcome resolve_import_outcome(bool data_ok, bool elf_present) {
+    if (!data_ok) return ImportOutcome::Rejected;
+    return elf_present ? ImportOutcome::ReadyToPlay : ImportOutcome::VerifiedButNoGameCode;
+}
+
 std::vector<GameDataSource> find_game_data(
     const std::vector<std::filesystem::path> &directories);
 GameDataResult verify_game_data(const std::filesystem::path &path, GameIdentity expected);

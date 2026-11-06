@@ -194,6 +194,17 @@ void identity_fits_a_small_stack() {
           "identity gate completes within a 512 KiB stack");
 }
 
+void import_outcome_needs_no_game_to_decide() {
+    check(resolve_import_outcome(false, false) == ImportOutcome::Rejected,
+          "invalid data is rejected with or without an ELF");
+    check(resolve_import_outcome(false, true) == ImportOutcome::Rejected,
+          "invalid data is rejected even when an ELF is present");
+    check(resolve_import_outcome(true, true) == ImportOutcome::ReadyToPlay,
+          "verified data plus an ELF means the session can start");
+    check(resolve_import_outcome(true, false) == ImportOutcome::VerifiedButNoGameCode,
+          "verified data without an ELF needs the no-game-code guidance, not silence");
+}
+
 } // namespace
 
 int main() {
@@ -202,6 +213,7 @@ int main() {
         discovery_and_selection();
         asset_stamp();
         identity_fits_a_small_stack();
+        import_outcome_needs_no_game_to_decide();
         std::cout << "game_data_tests: OK\n";
         return 0;
     } catch (const std::exception &error) {

@@ -27,6 +27,12 @@ target_include_directories(yakumo PUBLIC
     third_party/yakumo/include
     third_party/yakumo/src)
 
+# tiny-AES-c (Unlicense) for on-device ~PSP EBOOT preparation. Compiled as C++
+# like Yakumo does; the header lives at tiny-aes-c/aes.h (see include dir).
+add_library(tiny_aes_c STATIC third_party/tiny-aes-c/aes.c)
+target_include_directories(tiny_aes_c PUBLIC third_party)
+set_source_files_properties(third_party/tiny-aes-c/aes.c PROPERTIES LANGUAGE CXX)
+
 # --- Input core (T11) ------------------------------------------------------
 # Source-neutral button/analog state and the PSP pad mapping. No SDL, JNI or
 # guest-memory dependency, so the merge and edge contracts run on the host.
@@ -97,6 +103,7 @@ add_library(gungnir_hle STATIC
     runtime/savedata/save_store.cpp
     runtime/session/game_session.cpp
     runtime/session/diagnostics.cpp
+    runtime/session/import_stub.cpp
     runtime/session/session_lifecycle.cpp
     runtime/session/session_report.cpp
     runtime/session/snapshot.cpp
@@ -137,6 +144,11 @@ set_target_properties(session_report_tests PROPERTIES
 add_executable(session_lifecycle_tests tests/session/session_lifecycle_tests.cpp)
 target_link_libraries(session_lifecycle_tests PRIVATE gungnir_hle)
 set_target_properties(session_lifecycle_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
+
+add_executable(import_stub_tests tests/session/import_stub_tests.cpp)
+target_link_libraries(import_stub_tests PRIVATE gungnir_hle)
+set_target_properties(import_stub_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/session)
 
 add_executable(snapshot_tests tests/session/snapshot_tests.cpp)
@@ -281,9 +293,11 @@ add_library(gungnir_platform STATIC
     runtime/platform/android/game_data.cpp
     runtime/platform/android/assets.cpp
     runtime/platform/android/affinity.cpp
-    runtime/platform/android/stack_space.cpp)
+    runtime/platform/android/stack_space.cpp
+    runtime/platform/android/eboot_prepare.cpp
+    runtime/platform/android/game_installer.cpp)
 target_include_directories(gungnir_platform PUBLIC runtime)
-target_link_libraries(gungnir_platform PUBLIC ZLIB::ZLIB)
+target_link_libraries(gungnir_platform PUBLIC ZLIB::ZLIB yakumo tiny_aes_c)
 
 add_executable(game_data_tests tests/platform/game_data_tests.cpp)
 target_link_libraries(game_data_tests PRIVATE gungnir_platform)
@@ -293,6 +307,12 @@ set_target_properties(game_data_tests PROPERTIES
 add_executable(stack_space_tests tests/platform/stack_space_tests.cpp)
 target_link_libraries(stack_space_tests PRIVATE gungnir_platform)
 set_target_properties(stack_space_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
+
+add_executable(eboot_prepare_tests tests/platform/eboot_prepare_tests.cpp)
+target_link_libraries(eboot_prepare_tests PRIVATE gungnir_platform yakumo tiny_aes_c)
+target_include_directories(eboot_prepare_tests PRIVATE third_party)
+set_target_properties(eboot_prepare_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/platform)
 
 add_executable(affinity_tests tests/platform/affinity_tests.cpp)

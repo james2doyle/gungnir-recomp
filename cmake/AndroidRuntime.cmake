@@ -136,6 +136,7 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/savedata/save_store.cpp"
         "${ARG_ROOT}/runtime/session/game_session.cpp"
         "${ARG_ROOT}/runtime/session/diagnostics.cpp"
+        "${ARG_ROOT}/runtime/session/import_stub.cpp"
         "${ARG_ROOT}/runtime/session/session_lifecycle.cpp"
         "${ARG_ROOT}/runtime/session/session_report.cpp"
         "${ARG_ROOT}/runtime/session/snapshot.cpp"
@@ -167,10 +168,13 @@ function(gungnir_add_runtime_library target)
         "${ARG_ROOT}/runtime/platform/android/assets.cpp"
         "${ARG_ROOT}/runtime/platform/android/affinity.cpp"
         "${ARG_ROOT}/runtime/platform/android/stack_space.cpp"
+        "${ARG_ROOT}/runtime/platform/android/eboot_prepare.cpp"
+        "${ARG_ROOT}/runtime/platform/android/game_installer.cpp"
         "${ARG_ROOT}/runtime/platform/sdl_gamepad.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/loader.cpp"
         "${ARG_ROOT}/runtime/platform/adreno/package.cpp"
         "${ARG_ROOT}/third_party/miniz/miniz.c"
+        "${ARG_ROOT}/third_party/tiny-aes-c/aes.c"
         "${ARG_ROOT}/third_party/yakumo/src/decoder.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/deflate.cpp"
         "${ARG_ROOT}/third_party/yakumo/src/elf32.cpp"
@@ -187,9 +191,12 @@ function(gungnir_add_runtime_library target)
         ${corpus_sources}
         "${gen_dir}/vulkan_shaders.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/main.cpp")
+    set_source_files_properties(
+        "${ARG_ROOT}/third_party/tiny-aes-c/aes.c" PROPERTIES LANGUAGE CXX)
     target_include_directories(${target} PRIVATE
         "${ARG_ROOT}/runtime"
         "${CMAKE_BINARY_DIR}/generated"
+        "${ARG_ROOT}/third_party"
         "${ARG_ROOT}/third_party/miniz"
         "${ARG_ROOT}/third_party/nlohmann-json"
         "${ARG_ROOT}/third_party/yakumo/include"

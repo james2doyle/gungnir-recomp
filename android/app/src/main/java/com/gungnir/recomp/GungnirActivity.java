@@ -47,7 +47,7 @@ public final class GungnirActivity extends SDLActivity {
     private boolean fastForwardShown;
     private boolean frameInterpolation;
 
-    private static native boolean nativeGameDataImported(String path);
+    private static native int nativeGameDataImported(String path);
 
     private static native String nativeImportDriver(String zipPath, String driversRoot);
 
@@ -429,10 +429,10 @@ public final class GungnirActivity extends SDLActivity {
     }
 
     public void showGameDataPicker() {
-        runOnUiThread(() -> {
-            showSettings();
-            Toast.makeText(this, "Choose Game data in Settings", Toast.LENGTH_LONG).show();
-        });
+        // First-run auto-show (Yakumo-style): a cold start with no valid
+        // game data opens the SAF ISO picker directly, so picking the ISO
+        // is the whole flow (verify -> prepare -> start on the native side).
+        runOnUiThread(this::openGameDataPicker);
     }
 
     private void openGameDataPicker() {
@@ -650,11 +650,22 @@ public final class GungnirActivity extends SDLActivity {
                     throw new IOException("cannot replace imported ISO");
                 if (!temporary.renameTo(target))
                     throw new IOException("cannot rename imported ISO");
-                final boolean valid = nativeGameDataImported(target.getAbsolutePath());
+                // 0 rejected, 1 verified + prepared (session running or starting),
+                // 2 verified but the on-device installer could not prepare game.elf,
+                // 3 verified + prepared but the session failed to start (see logcat).
+                final int imported = nativeGameDataImported(target.getAbsolutePath());
                 runOnUiThread(() -> {
-                    if (valid) {
+                    if (imported == 1) {
                         if (settingsOverlay != null) settingsOverlay.setStatus("Game data verified");
                         Toast.makeText(this, "Gungnir ISO verified", Toast.LENGTH_LONG).show();
+                    } else if (imported == 2) {
+                        if (settingsOverlay != null) settingsOverlay.setStatus("Installer failed");
+                        Toast.makeText(this, "ISO verified, but the executable could not be prepared (see logcat)",
+                                Toast.LENGTH_LONG).show();
+                    } else if (imported == 3) {
+                        if (settingsOverlay != null) settingsOverlay.setStatus("Verified: session failed to start");
+                        Toast.makeText(this, "Verified, but the session failed to start (see logcat)",
+                                Toast.LENGTH_LONG).show();
                     } else {
                         Toast.makeText(this, "ISO rejected: identity mismatch",
                                 Toast.LENGTH_LONG).show();

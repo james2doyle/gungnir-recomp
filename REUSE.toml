@@ -54,3 +54,8 @@ SPDX-License-Identifier = "BSD-2-Clause"
 path = ["third_party/liblinkernsbypass/**"]
 SPDX-FileCopyrightText = "2021 Billy Laws"
 SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = ["third_party/tiny-aes-c/**"]
+SPDX-FileCopyrightText = "2013 kokke"
+SPDX-License-Identifier = "Unlicense"

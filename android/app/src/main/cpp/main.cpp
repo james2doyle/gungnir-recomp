@@ -29,6 +29,7 @@
 #include "platform/android/audio_smoke.hpp"
 #include "platform/android/aaudio_out.hpp"
 #include "platform/android/game_data.hpp"
+#include "platform/android/game_installer.hpp"
 #include "platform/android/stack_space.hpp"
 #include "platform/sdl_gamepad.hpp"
 #include "session/game_session.hpp"
@@ -771,24 +772,163 @@ bool lifecycle_watch(void *userdata, SDL_Event *event) {
 } // namespace
 
 #if defined(__ANDROID__)
-extern "C" JNIEXPORT jboolean JNICALL
+struct SessionStartup {
+    std::string internal; // empty when SDL reported no internal path
+    gungnir::audio::AudioSink *audio_sink = nullptr;
+    gungnir::ge::FrameQueue *frame_queue = nullptr;
+    gungnir::session::GameSession *session = nullptr;
+    std::thread *session_thread = nullptr;
+    std::atomic<bool> *session_finished = nullptr;
+    bool *session_launched = nullptr;
+};
+
+SessionStartup *g_startup_context = nullptr;
+
+// On-device installer (Yakumo-style): if the verified ISO is present but no
+// decrypted game.elf is on disk yet, prepare it from the ISO's EBOOT.BIN.
+// This is what makes "pick an ISO and the game should start" true for the
+// empty-corpus build; the old two-step flow returned VerifiedButNoGameCode
+// and never started.
+std::filesystem::path ensure_runtime_elf(const gungnir::platform::GameDataResult &game_data,
+    const std::vector<std::filesystem::path> &game_directories) {
+    std::filesystem::path elf = find_runtime_elf(game_directories);
+    if (!elf.empty()) return elf;
+    const std::filesystem::path data_dir = game_data.path.parent_path();
+    GUNGNIR_LOGI("installer_prepare iso=%s\n", game_data.path.string().c_str());
+    try {
+        elf = gungnir::platform::install_from_iso(game_data.path, data_dir);
+    } catch (const gungnir::platform::InstallError &error) {
+        GUNGNIR_LOGE("installer_failed: %s\n", error.what());
+        return {};
+    }
+    GUNGNIR_LOGI("installer_prepared elf=%s\n", elf.string().c_str());
+    return elf;
+}
+
+bool try_start_session(SessionStartup &ctx) {
+    if (ctx.session_launched != nullptr && *ctx.session_launched) return true;
+    if (ctx.internal.empty() || ctx.audio_sink == nullptr || ctx.frame_queue == nullptr ||
+        ctx.session == nullptr || ctx.session_thread == nullptr ||
+        ctx.session_finished == nullptr || ctx.session_launched == nullptr) {
+        GUNGNIR_LOGE("session_start_failed: startup_not_ready\n");
+        return false;
+    }
+    gungnir::platform::GameDataResult game_data = check_game_data();
+    if (!game_data.ok) {
+        GUNGNIR_LOGE("session_start_failed: game_data_unavailable\n");
+        return false;
+    }
+    std::vector<std::filesystem::path> game_directories;
+    game_directories.emplace_back(ctx.internal);
+    if (const char *external = SDL_GetAndroidExternalStoragePath(); external != nullptr)
+        game_directories.emplace_back(external);
+    const std::filesystem::path elf = ensure_runtime_elf(game_data, game_directories);
+    if (elf.empty()) {
+        GUNGNIR_LOGE("session_start_failed: game_elf_missing (installer could not prepare game.elf from the ISO; see installer_failed)\n");
+        return false;
+    }
+    gungnir::session::Config session_config;
+    session_config.elf_path = elf;
+    session_config.nids_path = std::filesystem::path(ctx.internal) / "runtime" / "nids.csv";
+    session_config.disc_path = game_data.path;
+    session_config.memory_stick = std::filesystem::path(ctx.internal) / "psp";
+    session_config.max_dispatches = static_cast<std::uint64_t>(
+        intent_long("dispatch_limit", 5'000'000'000LL));
+    session_config.wall_seconds = static_cast<double>(
+        intent_long("wall_seconds", 0));
+    session_config.stall_seconds = static_cast<double>(
+        intent_long("stall_seconds", 30));
+    session_config.stop_at_flip = intent_long("stop_at_flip", 0) != 0;
+    session_config.pacing = intent_long("pacing", 1) != 0;
+    std::error_code directory_error;
+    std::filesystem::create_directories(session_config.memory_stick, directory_error);
+    ctx.session->set_diagnostic_sink([](std::string_view line) {
+        GUNGNIR_LOGE("%.*s\n", static_cast<int>(line.size()), line.data());
+    });
+    std::string start_error;
+    if (!ctx.session->start(session_config, ctx.audio_sink, start_error)) {
+        GUNGNIR_LOGE("session_start_failed: %s\n", start_error.c_str());
+        return false;
+    }
+    GUNGNIR_LOGI("session_start elf=%s\n", elf.string().c_str());
+    gungnir::ge::FrameQueue *queue = ctx.frame_queue;
+    gungnir::hle::set_ge_frame_sink([queue](const std::vector<gungnir::ge::Draw> &draws) {
+        publish_guest_frame(*queue, draws);
+    });
+    {
+        g_snapshot_session = ctx.session;
+        g_snapshot_thread = ctx.session_thread;
+        g_snapshot_finished = ctx.session_finished;
+        g_session_rearm = [queue] {
+            gungnir::hle::set_ge_frame_sink(
+                [queue](const std::vector<gungnir::ge::Draw> &draws) {
+                    publish_guest_frame(*queue, draws);
+                });
+        };
+    }
+    const std::string snapshot_in = intent_string("snapshot_in");
+    if (!snapshot_in.empty()) {
+        std::string snapshot_error;
+        if (!ctx.session->load_snapshot(snapshot_in, snapshot_error)) {
+            GUNGNIR_LOGE("session_snapshot_in_failed: %s\n", snapshot_error.c_str());
+        } else {
+            GUNGNIR_LOGI("session_snapshot_in=%s\n", snapshot_in.c_str());
+        }
+    }
+    launch_session_thread(*ctx.session, *ctx.session_finished, *ctx.session_thread);
+    *ctx.session_launched = true;
+    return true;
+}
+
+// Import result codes for Java: 0 rejected, 1 verified + prepared
+// (session running or starting), 2 verified but the on-device installer
+// could not prepare game.elf, 3 verified + prepared but the session
+// failed to start (see logcat).
+extern "C" JNIEXPORT jint JNICALL
 Java_com_gungnir_recomp_GungnirActivity_nativeGameDataImported(JNIEnv *env, jobject, jstring path) {
-    if (path == nullptr) return JNI_FALSE;
+    if (path == nullptr) return 0;
     const char *utf = env->GetStringUTFChars(path, nullptr);
-    if (utf == nullptr) return JNI_FALSE;
+    if (utf == nullptr) return 0;
     const std::string selected(utf);
     env->ReleaseStringUTFChars(path, utf);
     gungnir::platform::GameDataResult result =
         gungnir::platform::verify_game_data(selected, gungnir::platform::kGungnirUsaIdentity);
     result.origin = "saf";
-    if (result.ok) {
-        GUNGNIR_LOGI("game_data_ok origin=saf size=%llu crc=%08X\n",
-                     static_cast<unsigned long long>(result.size),
-                     static_cast<unsigned>(result.crc32));
-    } else {
+    if (!result.ok) {
         GUNGNIR_LOGE("game_data_invalid: %s\n", result.error.c_str());
+        return 0;
     }
-    return result.ok ? JNI_TRUE : JNI_FALSE;
+    GUNGNIR_LOGI("game_data_ok origin=saf size=%llu crc=%08X\n",
+                 static_cast<unsigned long long>(result.size),
+                 static_cast<unsigned>(result.crc32));
+    if (g_startup_context == nullptr) {
+        // The picker needs a running activity, so this is unreachable in
+        // practice; the verified ISO stays on disk and the next launch
+        // boots it. Named, never silent.
+        GUNGNIR_LOGE("game_data_import_deferred: startup_not_ready\n");
+        return 1;
+    }
+    std::vector<std::filesystem::path> game_directories;
+    if (!g_startup_context->internal.empty())
+        game_directories.emplace_back(g_startup_context->internal);
+    if (const char *external = SDL_GetAndroidExternalStoragePath(); external != nullptr)
+        game_directories.emplace_back(external);
+    // Yakumo-style: the SAF copy already landed as imported.iso; prepare
+    // game.elf from it on-device, then start. An installer failure is a
+    // distinct named outcome (code 2), never the old "add game.elf" dead end.
+    try {
+        const std::filesystem::path data_dir = std::filesystem::path(selected).parent_path();
+        (void)gungnir::platform::install_from_iso(selected, data_dir);
+        GUNGNIR_LOGI("installer_prepared elf=%s\n", (data_dir / "game.elf").string().c_str());
+    } catch (const gungnir::platform::InstallError &error) {
+        GUNGNIR_LOGE("installer_failed: %s\n", error.what());
+        return 2;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+        if (try_start_session(*g_startup_context)) return 1;
+    }
+    return 3;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1175,6 +1315,13 @@ Java_com_gungnir_recomp_input_GamepadBridge_resetProfile(JNIEnv *env, jclass) {
 }
 #endif
 
+// Late session start (yt4rpgt2): a verified SAF import can land after
+// startup already passed its launch branch, so the launch sequence must be
+// callable again. The caller holds g_snapshot_mutex: the same mutex the
+// menu ops join the worker under, so a concurrent save/load/reset can
+// never meet a half-started session. Returns true when the session thread
+// is running afterwards; a second call with a live session is a no-op
+// true; without game data or an ELF it logs the named reason.
 int main(int, char **) {
     log_stack_space("main");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
@@ -1393,70 +1540,26 @@ int main(int, char **) {
     std::thread session_thread;
     std::atomic<bool> session_finished{false};
     bool session_launched = false;
+    // The startup context outlives the if block: JNI late imports (SAF pick
+    // after launch) dereference g_startup_context seconds later, so it must
+    // not be a block-local that dangles (startup_not_ready on first pick).
+    SessionStartup startup;
     if (debug_quad) {
         GUNGNIR_LOGI("debug_quad enabled\n");
-    } else if (game_data.ok && internal != nullptr) {
-        std::vector<std::filesystem::path> game_directories;
-        game_directories.emplace_back(internal);
-        if (const char *external = SDL_GetAndroidExternalStoragePath(); external != nullptr)
-            game_directories.emplace_back(external);
-        const std::filesystem::path elf = find_runtime_elf(game_directories);
-        if (elf.empty()) {
-            GUNGNIR_LOGE("session_start_failed: game_elf_missing (push game.elf to files/game/)\n");
-        } else {
-            gungnir::session::Config session_config;
-            session_config.elf_path = elf;
-            session_config.nids_path = std::filesystem::path(internal) / "runtime" / "nids.csv";
-            session_config.disc_path = game_data.path;
-            session_config.memory_stick = std::filesystem::path(internal) / "psp";
-            session_config.max_dispatches = static_cast<std::uint64_t>(
-                intent_long("dispatch_limit", 5'000'000'000LL));
-            session_config.wall_seconds = static_cast<double>(
-                intent_long("wall_seconds", 0));
-            session_config.stall_seconds = static_cast<double>(
-                intent_long("stall_seconds", 30));
-            session_config.stop_at_flip = intent_long("stop_at_flip", 0) != 0;
-            session_config.pacing = intent_long("pacing", 1) != 0;
-            std::error_code directory_error;
-            std::filesystem::create_directories(session_config.memory_stick, directory_error);
-            session.set_diagnostic_sink([](std::string_view line) {
-                GUNGNIR_LOGE("%.*s\n", static_cast<int>(line.size()), line.data());
-            });
-            std::string start_error;
-            if (!session.start(session_config, audio_sink, start_error)) {
-                GUNGNIR_LOGE("session_start_failed: %s\n", start_error.c_str());
-            } else {
-                GUNGNIR_LOGI("session_start elf=%s\n", elf.string().c_str());
-                gungnir::hle::set_ge_frame_sink([&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
-                    publish_guest_frame(frame_queue, draws);
-                });
-                {
-                    std::lock_guard<std::mutex> lock(g_snapshot_mutex);
-                    g_snapshot_session = &session;
-                    g_snapshot_thread = &session_thread;
-                    g_snapshot_finished = &session_finished;
-                    g_session_rearm = [&frame_queue] {
-                        gungnir::hle::set_ge_frame_sink(
-                            [&frame_queue](const std::vector<gungnir::ge::Draw> &draws) {
-                                publish_guest_frame(frame_queue, draws);
-                            });
-                    };
-                }
-                const std::string snapshot_in = intent_string("snapshot_in");
-                if (!snapshot_in.empty()) {
-                    std::string snapshot_error;
-                    if (!session.load_snapshot(snapshot_in, snapshot_error)) {
-                        GUNGNIR_LOGE("session_snapshot_in_failed: %s\n", snapshot_error.c_str());
-                    } else {
-                        GUNGNIR_LOGI("session_snapshot_in=%s\n", snapshot_in.c_str());
-                    }
-                }
-                launch_session_thread(session, session_finished, session_thread);
-                session_launched = true;
-            }
-        }
-    } else if (!game_data.ok) {
-        GUNGNIR_LOGE("session_start_failed: game_data_unavailable\n");
+    } else {
+        startup.internal = internal != nullptr ? internal : "";
+        startup.audio_sink = audio_sink;
+        startup.frame_queue = &frame_queue;
+        startup.session = &session;
+        startup.session_thread = &session_thread;
+        startup.session_finished = &session_finished;
+        startup.session_launched = &session_launched;
+        g_startup_context = &startup;
+        // try_start_session re-checks game data and the ELF itself and
+        // logs the named reason, so the dead-end branch it replaces
+        // (silent when data was ok but internal was null) is covered.
+        std::lock_guard<std::mutex> lock(g_snapshot_mutex);
+        try_start_session(startup);
     }
 
     LifecycleState lifecycle;

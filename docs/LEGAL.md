@@ -46,7 +46,13 @@ embedded in docs, or included in releases:
 8. **Keys and credentials**: KIRK key vaults, DNAS keys, `~PSP`/PGD key sets,
    key-tag tables that enable decryption, `.pem`/keystores, and vendor
    secrets. Not in code, not in tests, not in docs (format placeholders that
-   are clearly fake text are permitted in docs only).
+   are clearly fake text are permitted in docs only). **Sole exception:**
+   the long-published public PSP key material needed for the single-title
+   on-device installer (KIRK slot `0x5D`, KIRK1, and the one tag key for
+   `0xD91613F0`, all from the public tables pspdecrypt and Yakumo ship).
+   These are not vendor secrets; they are the same public constants the
+   open PSP toolchain uses, and the exception exists only so "pick an ISO
+   and the game starts" works without an out-of-process decryptor.
 9. **Third-party proprietary binaries**: GPU driver packages (Qualcomm
    drivers, Mesa Turnip zips are *user-supplied* at runtime), prebuilt SDK
    blobs, `.so`/`.dll`/`.exe`/`.jar`/`.zip` of any kind. Dependencies are
@@ -76,10 +82,16 @@ The user provides, locally and privately:
 - Their own legally obtained disc image (`game.chd`/ISO). Identity is
   verified (size + CRC32) and everything derived from it stays under
   gitignored `build/` and `profiles/*/local/`.
-- **Decryption is performed out-of-process** by tools the user supplies or
-  installs themselves (e.g. `pspdecrypt`, PPSSPP devtools). This project
-  ships no decryption implementation and no keys. Our pipeline consumes the
-  user's decrypted ELF and validates its shape; it never redistributes it.
+- **Decryption is performed on-device** by the in-app installer
+  (`runtime/platform/android/eboot_prepare.cpp` + `game_installer.cpp`,
+  Yakumo-style): the user picks their own ISO via SAF, the app verifies the
+  disc (size+CRC, DISC_ID `ULUS10592`, `~PSP` tag `0xD91613F0`) and
+  prepares `game.elf` from `PSP_GAME/SYSDIR/EBOOT.BIN` with the public
+  PSP key tables above. The host intake pipeline still consumes an
+  out-of-process decrypted ELF (`pspdecrypt`) for codegen; the runtime no
+  longer requires one. The prepared ELF is only ever written into the
+  user's app-private `files/game/` on their own device; it is never
+  committed or redistributed.
 - Optional: GPU driver `.zip` packages (Adreno) extracted by the app into
   app-private storage on the user's device. Never bundled, never committed.
 - Optional: fonts supplied by the user for replacement rendering.
