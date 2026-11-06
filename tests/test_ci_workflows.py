@@ -51,7 +51,18 @@ class TestCiWorkflows(unittest.TestCase):
     def test_no_secret_bearing_triggers(self):
         blob = "\n".join(self.flows.values())
         check("pull_request_target" not in blob, "pull_request_target must not appear")
-        check("secrets." not in blob, "workflows must not consume secrets")
+        # The stable release cert lives in secrets, consumed ONLY by the
+        # tag-push release workflow (never by PR-reachable CI). ci.yml stays
+        # secret-free so fork PRs cannot exfiltrate; release.yml may use
+        # exactly the four ANDROID_* signing secrets.
+        ci = self.flows.get("ci.yml", "")
+        check("secrets." not in ci, "ci.yml must not consume secrets")
+        release = self.flows.get("release.yml", "")
+        for ref in sorted(set(re.findall(r"secrets\.([A-Za-z0-9_]+)", release))):
+            check(ref in {"ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD",
+                          "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"},
+                  f"release.yml consumes unexpected secret: {ref}")
+        check("pull_request" not in release, "release.yml must not run on pull requests")
 
     def test_least_privilege_and_concurrency(self):
         blob = "\n".join(self.flows.values())
