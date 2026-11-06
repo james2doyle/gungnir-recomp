@@ -88,6 +88,20 @@ public final class GungnirActivity extends SDLActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, () -> {
+                        if (settingsOverlay != null && settingsOverlay.isOpen()) {
+                            closeSettings();
+                        } else if (touchOverlay != null && touchOverlay.isEditing()) {
+                            touchOverlay.setEditing(false);
+                            Toast.makeText(GungnirActivity.this, "Touch layout saved",
+                                    Toast.LENGTH_SHORT).show();
+                        } else {
+                            finish();
+                        }
+                    });
+        }
 
         if (getIntent().getBooleanExtra("audio_smoke", false)) {
             new Thread(() -> {
