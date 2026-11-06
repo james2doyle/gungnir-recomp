@@ -1324,6 +1324,12 @@ Java_com_gungnir_recomp_input_GamepadBridge_resetProfile(JNIEnv *env, jclass) {
 // true; without game data or an ELF it logs the named reason.
 int main(int, char **) {
     log_stack_space("main");
+    // Touch input belongs to the TouchOverlayView (JNI); synthetic mouse
+    // events from touches would reach SdlInput and map to Cross/Circle/
+    // Square through the desktop mouse bindings — a phantom press on every
+    // tap that falls through to the SDL surface (e.g. overlay hidden by a
+    // gamepad). Real mouse input still works; only the synthesis is off.
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         GUNGNIR_LOGE("sdl_init_failed: %s\n", SDL_GetError());
         return 1;

@@ -396,6 +396,15 @@ if(PkgConfig_FOUND)
 endif()
 
 if(SDL3_FOUND)
+    add_executable(sdl_input_tests
+        tests/input/sdl_input_tests.cpp
+        runtime/input/sdl_input.cpp)
+    target_compile_definitions(sdl_input_tests PRIVATE GUNGNIR_HAVE_SDL3=1)
+    target_include_directories(sdl_input_tests PRIVATE runtime)
+    target_link_libraries(sdl_input_tests PRIVATE gungnir_input PkgConfig::SDL3)
+    set_target_properties(sdl_input_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests/input)
+
     add_executable(sdl_gamepad_tests
         tests/input/sdl_gamepad_tests.cpp
         runtime/platform/sdl_gamepad.cpp)

@@ -3,6 +3,7 @@
 #if defined(GUNGNIR_HAVE_SDL3)
 
 #include "input/input_state.hpp"
+#include "input/menu_navigation.hpp"
 
 #include <utility>
 
@@ -36,6 +37,16 @@ bool SdlInput::handle(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
+        // System back never reaches the activity's back dispatcher: SDL
+        // consumes KEYCODE_BACK and delivers it here as AC_BACK, where the
+        // guest map drops it. Route a fresh press to the menu toggle so back
+        // opens/closes Settings like a gamepad Guide button; the gamepad
+        // BACK button itself stays the guest's Select (T11g).
+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+            event.key.scancode == SDL_SCANCODE_AC_BACK) {
+            menu_navigation().press(MenuButton::Guide);
+            return true;
+        }
         if (event.key.repeat) return true;
         const ButtonMask mask = map_.key_mask(static_cast<int>(event.key.scancode));
         if (mask != 0u) {
@@ -49,6 +60,11 @@ bool SdlInput::handle(const SDL_Event &event) {
     }
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP: {
+        // Synthetic mouse events from touches (SDL_TOUCH_MOUSEID) belong to
+        // the touch overlay, never to the desktop mouse bindings: without
+        // this filter a tap that reaches the SDL surface maps to Cross.
+        // Belt and braces with SDL_HINT_TOUCH_MOUSE_EVENTS=0 on Android.
+        if (event.button.which == SDL_TOUCH_MOUSEID) return true;
         const int button = static_cast<int>(event.button.button);
         const ButtonMask mask = map_.mouse_mask(button);
         if (mask != 0u) {

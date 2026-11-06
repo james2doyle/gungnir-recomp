@@ -185,6 +185,11 @@ layout:
 
 `SdlInput` feeds key/mouse events into `InputState`; repeats are ignored and
 focus loss releases held keys. Touch and gamepad are the device paths.
+Synthetic mouse events from touches (`SDL_TOUCH_MOUSEID`) are dropped — the
+touch overlay owns touch input, and without the filter a tap that falls
+through to the SDL surface maps to Cross (Android additionally disables the
+synthesis with `SDL_HINT_TOUCH_MOUSE_EVENTS=0`). A fresh `AC_BACK` key press
+toggles the settings overlay instead of reaching the guest.
 
 ## Touch haptics
 
@@ -204,11 +209,16 @@ remain T13/M5.
 
 ## Menu navigation
 
-The settings overlay is operable from a paired pad (T11f). Back or Guide
-toggles it; d-pad up/down moves the highlighted row and South/Cross activates
-it through the same Listener path as a tap. The selection clamps at the first
-and last row (it does not wrap), so "Reset to title" and "Close" cannot be
-reached by overshooting.
+The settings overlay is operable from a paired pad (T11f) and from the
+system back key. Guide or system back toggles it; d-pad up/down moves the
+highlighted row and South/Cross activates it through the same Listener path
+as a tap. The selection clamps at the first and last row (it does not wrap),
+so "Reset to title" and "Close" cannot be reached by overshooting. The
+system-back path exists because SDL consumes `KEYCODE_BACK` and delivers it
+as an `AC_BACK` key (the activity back dispatcher never fires); `SdlInput`
+routes a fresh `AC_BACK` press to the menu toggle and the guest map drops it.
+On Android 15 the `OnBackInvokedDispatcher` callback remains as the gesture
+path.
 
 `runtime/input/menu_navigation.{hpp,cpp}` owns the state machine and is
 SDL/Java-free: SDL button-down edges in `sdl_gamepad.cpp` call `press()`, and
@@ -235,6 +245,7 @@ python3 -m unittest tests.test_touch_overlay -v
 python3 -m unittest tests.test_touch_haptics -v
 python3 -m unittest tests.test_gamepad -v
 python3 -m unittest tests.test_sdl_gamepad -v
+python3 -m unittest tests.test_sdl_input -v
 python3 -m unittest tests.test_host_controls -v
 python3 -m unittest tests.test_menu_navigation -v
 python3 -m unittest tests.test_input_suite -v

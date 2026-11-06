@@ -22,6 +22,7 @@ MODULES = (
     "tests.test_gamepad",
     "tests.test_host_controls",
     "tests.test_sdl_gamepad",
+    "tests.test_sdl_input",
     "tests.test_menu_navigation",
 )
 
