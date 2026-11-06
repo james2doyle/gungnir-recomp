@@ -159,6 +159,13 @@ std::uint32_t Texture::packed_texel(int x, int y) const {
     } else {
         offset = static_cast<std::size_t>(y) * static_cast<std::size_t>(row_bytes) + static_cast<std::size_t>(byte_x);
     }
+    // The descriptor's stride/extent may claim more than the copied bytes
+    // hold (malformed guest state, or buffer_width < width). Reading past
+    // the span is an OOB read: silent garbage on hosts without MTE, a
+    // SIGSEGV (SEGV_ACCERR on the tagged heap) on MTE devices like the
+    // Odin3. Clamp to zero instead of reading past the allocation.
+    const int need = bits / 8;
+    if (offset + static_cast<std::size_t>(std::max(need, 1)) > data_.size()) return 0u;
     const std::uint8_t *data = data_.data() + offset;
     switch (state_.format) {
     case TextureFormat::Rgb565:

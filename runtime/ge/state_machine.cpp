@@ -390,6 +390,9 @@ const TextureImage *StateMachine::resolve_texture(const MemoryView &memory, Draw
         gap("texture_extent_zero");
         return nullptr;
     }
+    // Note: buffer_width < width occurs in practice (title textures claim a
+    // larger extent than their stride). Rejecting them whited the screen;
+    // the crash fix is the bounds clamp in Texture::packed_texel instead.
     const std::uint32_t address = ((reg_param(0xA8u) & 0x0F0000u) << 8u) |
         (reg_param(0xA0u) & 0xFFFFF0u);
     static constexpr std::uint32_t kBits[8] = {16u, 16u, 16u, 32u, 4u, 8u, 16u, 32u};
