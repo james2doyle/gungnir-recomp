@@ -2,8 +2,10 @@
 #
 # Policy: the APK contains no game code or data (the build runs with no
 # corpus properties, exactly like the CI Android job). Uploads are the APK,
-# THIRD_PARTY_NOTICES.txt and SHA256SUMS. No secrets are consumed; auth uses
-# the automatic github.token only. Tag pushes also trigger ci.yml.
+# THIRD_PARTY_NOTICES.txt and SHA256SUMS. Signing uses a stable maintainer
+# cert from secrets (ANDROID_KEYSTORE_BASE64 + passwords); versionCode is
+# derived from the tag so updates install over each other. The automatic
+# github.token only creates the release; secrets are never echoed.
 name: release
 
 on:
@@ -47,12 +49,46 @@ jobs:
           "$ANDROID_HOME/ndk/28.2.13676358/shader-tools/linux-x86_64/glslc" --version
       - name: Repository check
         run: python3 tools/repository_check.py
-      - name: APK (empty corpus, no game data)
-        run: scripts/android/build.sh
+      - name: Derive version from tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "bad_tag: release tags must look like v1.2.3 (got $TAG)" >&2
+            exit 1
+          fi
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+          echo "GUNGNIR_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          echo "GUNGNIR_VERSION_CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))" >> "$GITHUB_ENV"
+          echo "version=$VERSION code=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))"
+      - name: APK (empty corpus, release-signed, no game data)
+        env:
+          GUNGNIR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          GUNGNIR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          GUNGNIR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "missing_signing_secret: set ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD repository secrets" >&2
+            exit 1
+          fi
+          if [ -z "$GUNGNIR_KEYSTORE_PASSWORD" ] || [ -z "$GUNGNIR_KEY_ALIAS" ] || [ -z "$GUNGNIR_KEY_PASSWORD" ]; then
+            echo "missing_signing_secret: keystore passwords/alias secrets are empty" >&2
+            exit 1
+          fi
+          KEYSTORE=/tmp/gungnir-release.jks
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          scripts/android/build.sh --release \
+            "-Pgungnir.keystorePath=$KEYSTORE" \
+            "-Pgungnir.versionCode=$GUNGNIR_VERSION_CODE" \
+            "-Pgungnir.versionName=$GUNGNIR_VERSION_NAME"
       - name: Release files
         run: |
           python3 tools/package_notices.py generate
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          APK=android/app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           OUT=release-files
           mkdir -p "$OUT"

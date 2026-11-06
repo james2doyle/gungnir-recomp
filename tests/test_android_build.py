@@ -103,6 +103,22 @@ class TestAndroidBuildSkeleton(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("missing_sdk", proc.stderr)
 
+    def test_release_signing_and_versioning_are_property_driven(self):
+        # Release assets must update over each other: stable cert + derived
+        # versionCode/versionName, never a committed keystore or frozen
+        # versionCode=1. Red-first for the v1.x update-incompatible releases.
+        app = (ANDROID / "app" / "build.gradle.kts").read_text()
+        for pin in ("gungnir.versionCode", "gungnir.versionName",
+                    "gungnir.keystorePath", "GUNGNIR_KEYSTORE_PATH",
+                    "GUNGNIR_KEYSTORE_PASSWORD", "GUNGNIR_KEY_ALIAS",
+                    "GUNGNIR_KEY_PASSWORD"):
+            self.assertIn(pin, app, f"release signing/versioning must read {pin}")
+        self.assertIn('create("release")', app, "release signingConfig exists")
+        self.assertIn("missing_signing", BUILD_SH.read_text(),
+                      "release without a keystore fails closed")
+        self.assertNotIn("storePassword = \"", app, "no hardcoded secret")
+        self.assertNotIn("keyPassword = \"", app, "no hardcoded secret")
+
     def test_clean_checkout_builds_apk(self):
         if not SDK.is_dir():
             self.skipTest("android SDK not installed")

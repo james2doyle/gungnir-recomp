@@ -8,6 +8,23 @@ val sdlSource = file((project.findProperty("sdlSource") as String?) ?: "${depsDi
 val adrenotoolsSource = file((project.findProperty("adrenotoolsSource") as String?) ?: "${depsDir}/libadrenotools-src")
 val o1Sources = (project.findProperty("gungnir.o1Sources") as String?) ?: ""
 val gameCorpus = (project.findProperty("gungnir.gameCorpus") as String?) ?: ""
+// Release identity: versionCode/versionName are tag-derived in CI
+// (-Pgungnir.versionCode/-Pgungnir.versionName); local/debug builds keep
+// the 1/0.1.0 defaults. The cert never lives in the repo: the release
+// signingConfig reads only properties or env (GUNGNIR_KEYSTORE_*).
+val versionCodeProp =
+    ((project.findProperty("gungnir.versionCode") as String?)
+        ?: System.getenv("GUNGNIR_VERSION_CODE") ?: "1").toIntOrNull() ?: 1
+val versionNameProp = (project.findProperty("gungnir.versionName") as String?)
+    ?: System.getenv("GUNGNIR_VERSION_NAME") ?: "0.1.0"
+val keystorePathProp = (project.findProperty("gungnir.keystorePath") as String?)
+    ?: System.getenv("GUNGNIR_KEYSTORE_PATH") ?: ""
+val keystorePasswordProp = (project.findProperty("gungnir.keystorePassword") as String?)
+    ?: System.getenv("GUNGNIR_KEYSTORE_PASSWORD") ?: ""
+val keyAliasProp = (project.findProperty("gungnir.keyAlias") as String?)
+    ?: System.getenv("GUNGNIR_KEY_ALIAS") ?: ""
+val keyPasswordProp = (project.findProperty("gungnir.keyPassword") as String?)
+    ?: System.getenv("GUNGNIR_KEY_PASSWORD") ?: ""
 val defaultAbis = listOf("arm64-v8a", "x86_64")
 val abis = ((project.findProperty("gungnir.abis") as String?) ?: defaultAbis.joinToString(","))
     .split(',').map { it.trim() }.filter { it.isNotEmpty() }
@@ -29,8 +46,8 @@ android {
         applicationId = "com.gungnir.recomp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = versionCodeProp
+        versionName = versionNameProp
         ndk {
             abiFilters += abis
         }
@@ -62,9 +79,25 @@ android {
         }
     }
 
+    signingConfigs {
+        // Stable release cert, fed only by properties/env so the keystore
+        // itself is never committed. Absent for debug/local builds.
+        if (keystorePathProp.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystorePathProp)
+                storePassword = keystorePasswordProp
+                keyAlias = keyAliasProp
+                keyPassword = keyPasswordProp
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (keystorePathProp.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

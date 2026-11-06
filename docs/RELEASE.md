@@ -33,8 +33,15 @@ are repository-relative; no machine-local paths, no `local.properties`
       launch on the adb device; `scripts/android/screenshot.sh` captures
       to gitignored `build/qa/` (hashes recorded, images never committed).
 - [ ] Emulator smoke via `scripts/android/emulator.sh` before device runs.
-- [ ] Debug builds are unsigned; release signing uses the maintainer's
-      signing config, never a committed keystore.
+- [ ] Release APKs are `assembleRelease` signed with the stable maintainer
+      cert: repository secrets `ANDROID_KEYSTORE_BASE64` (+
+      `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` /
+      `ANDROID_KEY_PASSWORD`) decoded to a temp `.jks` in
+      `.github/workflows/release.yml`; `build.sh --release` fails
+      `missing_signing` without it, never falls back to an ephemeral
+      debug key. Debug builds keep the default debug signature. No
+      keystore, password, or base64 blob is ever committed (see
+      `.gitignore` + `tools/repository_check.py`).
 - [ ] No generated recomp output and no game content in the APK sources
       or the release artifacts (derivative of the copyrighted executable;
       built locally from the user's own disc).
@@ -55,6 +62,10 @@ are repository-relative; no machine-local paths, no `local.properties`
 
 ## 6. Versioning and contents
 
+- [ ] `versionName` is the tag without `v` (`v1.3.0` → `1.3.0`);
+      `versionCode` is `MAJOR*1000000 + MINOR*1000 + PATCH` derived from
+      the tag in `release.yml`, strictly increasing so each release
+      installs over the previous one. Local/debug builds keep `1`/`0.1.0`.
 - [ ] Version and git SHA recorded in the release notes and the milestone
       ledger (`data/milestones.json` M4 evidence pointers).
 - [ ] Artifact list: APK, `THIRD_PARTY_NOTICES.txt`, SHA-256SUMS of the

@@ -20,7 +20,10 @@ ANDROID_HOME/JAVA_HOME); no local.properties is written.
 
 options:
   --help                  show this help
-  --release               assembleRelease instead of assembleDebug
+  --release               assembleRelease instead of assembleDebug (requires
+                          a stable keystore: -Pgungnir.keystorePath plus
+                          passwords/alias via -P or GUNGNIR_KEYSTORE_* env;
+                          fails missing_signing otherwise)
   --clean                 run :app:clean first
   --offline               require pinned dependency archives to be present
   -Pgungnir.sdkDir=DIR    Android SDK root (default: ANDROID_HOME)
@@ -29,6 +32,12 @@ options:
   -Pgungnir.o1Sources=LIST semicolon-separated sources compiled at -O1
   -Pgungnir.gameCorpus=DIR  generated AOT corpus (build output, never committed)
   -Pgungnir.abis=LIST      ABIs to build (default arm64-v8a,x86_64)
+  -Pgungnir.versionCode=N  Android versionCode (default 1; CI derives from tag)
+  -Pgungnir.versionName=S  Android versionName (default 0.1.0; CI derives from tag)
+  -Pgungnir.keystorePath=F  release keystore (or GUNGNIR_KEYSTORE_PATH)
+  -Pgungnir.keystorePassword=S (or GUNGNIR_KEYSTORE_PASSWORD)
+  -Pgungnir.keyAlias=S      (or GUNGNIR_KEY_ALIAS)
+  -Pgungnir.keyPassword=S   (or GUNGNIR_KEY_PASSWORD)
   -P<name>=<value>        any other Gradle project property
 EOF
 }
@@ -96,6 +105,34 @@ if [ "$CLEAN" -eq 1 ]; then
     TASKS+=(:app:clean)
 fi
 TASKS+=("$BUILD_TASK")
+
+# Fail closed: a release APK without the stable cert would be
+# update-incompatible (ephemeral debug key), so refuse to build one.
+if [ "$BUILD_TYPE" = "release" ]; then
+    KEYSTORE_CANDIDATE="${GUNGNIR_KEYSTORE_PATH:-}"
+    for prop in "${GRADLE_PROPS[@]}"; do
+        case "$prop" in
+            -Pgungnir.keystorePath=*) KEYSTORE_CANDIDATE=${prop#-Pgungnir.keystorePath=} ;;
+        esac
+    done
+    ALIAS_CANDIDATE="${GUNGNIR_KEY_ALIAS:-}"
+    STORE_PW_CANDIDATE="${GUNGNIR_KEYSTORE_PASSWORD:-}"
+    KEY_PW_CANDIDATE="${GUNGNIR_KEY_PASSWORD:-}"
+    for prop in "${GRADLE_PROPS[@]}"; do
+        case "$prop" in
+            -Pgungnir.keyAlias=*) ALIAS_CANDIDATE=${prop#-Pgungnir.keyAlias=} ;;
+            -Pgungnir.keystorePassword=*) STORE_PW_CANDIDATE=${prop#-Pgungnir.keystorePassword=} ;;
+            -Pgungnir.keyPassword=*) KEY_PW_CANDIDATE=${prop#-Pgungnir.keyPassword=} ;;
+        esac
+    done
+    if [ -z "$KEYSTORE_CANDIDATE" ] || [ ! -f "$KEYSTORE_CANDIDATE" ] || \
+       [ -z "$ALIAS_CANDIDATE" ] || [ -z "$STORE_PW_CANDIDATE" ] || [ -z "$KEY_PW_CANDIDATE" ]; then
+        echo "missing_signing: --release needs a stable keystore: " >&2
+        echo "  -Pgungnir.keystorePath=<file> (or GUNGNIR_KEYSTORE_PATH) plus " >&2
+        echo "  keystorePassword/keyAlias/keyPassword via -P or GUNGNIR_KEYSTORE_PASSWORD / GUNGNIR_KEY_ALIAS / GUNGNIR_KEY_PASSWORD" >&2
+        exit 2
+    fi
+fi
 
 if [ -z "$SDK_DIR" ] || [ ! -d "$SDK_DIR" ]; then
     echo "missing_sdk: pass -Pgungnir.sdkDir=DIR or set ANDROID_HOME" >&2
